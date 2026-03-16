@@ -2,28 +2,35 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { FiAlertCircle } from "react-icons/fi";
-import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, SubmitHandler } from "react-hook-form";
 import { registerTeamUser } from "@/app/home/team-dashboard/actions";
 import { sendRegEmail } from "@/util/sendRegEmail";
 
-export default function NewMemberModal() {
-  const [isOpen, setIsOpen] = useState(false);
+/* =========================================================
+   TYPES
+========================================================= */
 
-  return (
-    <div className="place-content-center">
-      <button
-        onClick={() => setIsOpen(true)}
-        className=" bg-blue-600 m-10 absolute right-0 top-[85vh] text-white text-sm px-4 py-3 rounded hover:opacity-90 transition-opacity"
-      >
-        Add New Member
-      </button>
-      <SpringModal isOpen={isOpen} setIsOpen={setIsOpen} />
-    </div>
-  );
+interface NewMemberModalProps {
+  isOpen: boolean;
+  setIsOpen: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
-const SpringModal = ({ isOpen, setIsOpen }) => {
+interface RegisterFormData {
+  name: string;
+  email: string;
+  role: "employee" | "seniorManagement" | "administrator";
+  password: string;
+  confirmPassword: string;
+}
+
+/* =========================================================
+   MODAL COMPONENT
+========================================================= */
+
+export default function NewMemberModal({
+  isOpen,
+  setIsOpen,
+}: NewMemberModalProps) {
   return (
     <AnimatePresence>
       {isOpen && (
@@ -42,17 +49,22 @@ const SpringModal = ({ isOpen, setIsOpen }) => {
             className="bg-gradient-to-br from-violet-600 to-indigo-600 text-white p-6 rounded-lg w-full max-w-lg shadow-xl cursor-default relative overflow-hidden"
           >
             <FiAlertCircle className="text-white/10 rotate-12 text-[250px] absolute z-0 -top-24 -left-24" />
+
             <div className="relative z-10">
               <div className="bg-white w-16 h-16 mb-2 rounded-full text-3xl text-indigo-600 grid place-items-center mx-auto">
                 <FiAlertCircle />
               </div>
+
               <h3 className="text-3xl font-bold text-center mb-2">
                 Add a New Team Member
               </h3>
+
               <p className="text-center mb-6 text-sm text-white/80">
                 Fill out the form below to register a new team member.
               </p>
+
               <RegisterForm />
+
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={() => setIsOpen(false)}
@@ -67,21 +79,24 @@ const SpringModal = ({ isOpen, setIsOpen }) => {
       )}
     </AnimatePresence>
   );
-};
+}
+
+/* =========================================================
+   REGISTER FORM
+========================================================= */
 
 const RegisterForm = () => {
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm();
+  const { register, handleSubmit, reset } = useForm<RegisterFormData>();
 
-  const onSubmit = async (data) => {
+  const onSubmit: SubmitHandler<RegisterFormData> = async (data) => {
+    if (data.password !== data.confirmPassword) {
+      alert("Passwords do not match.");
+      return;
+    }
+
     const response = await registerTeamUser(data);
 
     if (response.success) {
-      // ✅ Send email only on client-side
       await sendRegEmail({
         name: data.name,
         email: data.email,
@@ -89,7 +104,7 @@ const RegisterForm = () => {
       });
 
       alert("User registered and email sent!");
-      reset(); // clear the form
+      reset();
     } else {
       alert(`Error: ${response.message}`);
     }

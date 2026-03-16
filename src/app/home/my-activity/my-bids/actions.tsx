@@ -7,29 +7,17 @@ import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 // Delete a bid by ID
-export async function deleteBidAction(formData: FormData) {
+export async function deleteBidAction(bidId: number) {
   const session = await auth();
 
   if (!session || !session.user) {
     throw new Error("Unauthorized");
   }
 
-  // Get the bidId from the form data
-  const bidId = formData.get("bidId");
-
-  // Ensure bidId is a string (from FormData) and convert it to an integer
-  if (typeof bidId !== "string" || isNaN(parseInt(bidId))) {
-    throw new Error("Invalid bid ID");
-  }
-
-  // Delete the bid only if it belongs to the authenticated user
   await database
     .delete(bids)
-    .where(
-      and(eq(bids.id, parseInt(bidId)), eq(bids.userId, session.user.id!))
-    );
+    .where(and(eq(bids.id, bidId), eq(bids.userId, session.user.id!)));
 
-  // Optionally, revalidate the path to reflect changes immediately
   revalidatePath("/home/my-activity/my-bids");
 }
 

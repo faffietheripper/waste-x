@@ -9,34 +9,73 @@ import {
 } from "@/app/home/team-dashboard/team-profile/actions";
 import { getImageUrl } from "@/util/files";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
+interface ProfileData {
+  profilePicture?: string | null;
+  chainOfCustody?: string | null;
+  teamName?: string | null;
+  industry?: string | null;
+  telephone?: string | null;
+  emailAddress?: string | null;
+  streetAddress?: string | null;
+  postCode?: string | null;
+  city?: string | null;
+  region?: string | null;
+  country?: string | null;
+}
+
+/* =========================================================
+   COMPONENT
+========================================================= */
+
 export default function TeamProfileForm() {
-  const [profileData, setProfileData] = useState({});
+  const [profileData, setProfileData] = useState<ProfileData>({});
   const [newProfilePicture, setNewProfilePicture] = useState<File | null>(null);
   const [chainOfCustody, setChainOfCustody] = useState("wasteGenerator");
+
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // ✅ Get the redirect reason from query
   const reason = searchParams.get("reason");
 
-  // Fetch existing profile
+  /* =========================================================
+     LOAD PROFILE
+  ========================================================= */
+
   useEffect(() => {
     async function loadProfile() {
       const profile = await fetchProfileAction();
-      setProfileData(profile || {});
-      if (profile?.chainOfCustody) {
-        setChainOfCustody(profile.chainOfCustody);
+
+      if (profile) {
+        setProfileData(profile);
+
+        if (profile.chainOfCustody) {
+          setChainOfCustody(profile.chainOfCustody);
+        }
       }
     }
+
     loadProfile();
   }, []);
 
+  /* =========================================================
+     FILE CHANGE
+  ========================================================= */
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const { files } = event.target;
-    if (files?.length > 0) {
-      setNewProfilePicture(files[0]);
-    }
+    const files = event.target.files;
+
+    if (!files || files.length === 0) return;
+
+    setNewProfilePicture(files[0]);
   };
+
+  /* =========================================================
+     SUBMIT
+  ========================================================= */
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -44,10 +83,11 @@ export default function TeamProfileForm() {
     const form = e.currentTarget;
     const formData = new FormData(form);
 
-    // Upload file to storage
+    /* Upload file */
+
     const uploadUrls = await createUploadUrlAction(
-      [newProfilePicture?.name || profileData?.profilePicture || ""],
-      [newProfilePicture?.type || ""]
+      [newProfilePicture?.name || profileData.profilePicture || ""],
+      [newProfilePicture?.type || ""],
     );
 
     if (newProfilePicture) {
@@ -57,16 +97,21 @@ export default function TeamProfileForm() {
       });
     }
 
-    // Save profile using formData
+    /* Save profile */
+
     await saveProfileAction(formData);
 
     alert("Profile saved successfully!");
+
     router.push("/home/my-activity");
   };
 
+  /* =========================================================
+     UI
+  ========================================================= */
+
   return (
     <main className="p-6">
-      {/* ✅ Show message if redirected */}
       {reason === "no-organisation" && (
         <div className="mb-6 p-4 bg-yellow-100 border border-yellow-300 text-yellow-800 rounded-md">
           You’ve been redirected because no organisation data was found for your
@@ -78,7 +123,8 @@ export default function TeamProfileForm() {
         className="flex justify-center flex-col rounded-xl space-y-5 pb-10"
         onSubmit={handleSubmit}
       >
-        {/* Profile Picture */}
+        {/* PROFILE IMAGE */}
+
         <div className="grid grid-cols-1 justify-items-center">
           <div className="mb-2 text-sm text-gray-800">
             <h1 className="pb-2 font-semibold">Profile Picture:</h1>
@@ -103,11 +149,13 @@ export default function TeamProfileForm() {
           />
         </div>
 
-        {/* Chain of Custody */}
+        {/* CHAIN OF CUSTODY */}
+
         <section>
           <label className="block text-sm font-medium text-gray-700 mt-4">
             Chain of Custody
           </label>
+
           <select
             name="chainOfCustody"
             value={chainOfCustody}
@@ -120,7 +168,8 @@ export default function TeamProfileForm() {
           </select>
         </section>
 
-        {/* Profile Details */}
+        {/* PROFILE DETAILS */}
+
         <section>
           <div className="mb-2 text-sm text-gray-800">
             <h1 className="pb-2 font-semibold">Profile Details :</h1>
@@ -129,6 +178,7 @@ export default function TeamProfileForm() {
           <label className="block text-sm font-medium text-gray-700 mt-4">
             Team Name
           </label>
+
           <input
             required
             className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -140,6 +190,7 @@ export default function TeamProfileForm() {
           <label className="block text-sm font-medium text-gray-700 mt-4">
             Industry
           </label>
+
           <input
             required
             className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -149,13 +200,15 @@ export default function TeamProfileForm() {
           />
         </section>
 
-        {/* Contact Info */}
+        {/* CONTACT INFO */}
+
         <section>
           <div className="grid grid-cols-3 gap-4 ">
             <div>
               <label className="block text-sm font-medium text-gray-700 mt-4">
                 Telephone
               </label>
+
               <input
                 required
                 className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -164,10 +217,12 @@ export default function TeamProfileForm() {
                 defaultValue={profileData.telephone || ""}
               />
             </div>
+
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-700 mt-4">
                 Email Address
               </label>
+
               <input
                 required
                 className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -178,7 +233,8 @@ export default function TeamProfileForm() {
             </div>
           </div>
 
-          {/* Address */}
+          {/* ADDRESS */}
+
           <section className="my-10">
             <h1 className="pb-2 font-semibold mb-2 text-sm text-gray-800">
               Physical Address:
@@ -187,6 +243,7 @@ export default function TeamProfileForm() {
             <label className="block text-sm font-medium text-gray-700 mt-4">
               Street Address
             </label>
+
             <input
               required
               className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -200,6 +257,7 @@ export default function TeamProfileForm() {
                 <label className="block text-sm font-medium text-gray-700 mt-4">
                   Post Code
                 </label>
+
                 <input
                   required
                   className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -208,10 +266,12 @@ export default function TeamProfileForm() {
                   defaultValue={profileData.postCode || ""}
                 />
               </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mt-4">
                   City
                 </label>
+
                 <input
                   required
                   className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -220,10 +280,12 @@ export default function TeamProfileForm() {
                   defaultValue={profileData.city || ""}
                 />
               </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mt-4">
                   Region
                 </label>
+
                 <input
                   required
                   className="w-full border rounded-md mt-2 px-3 py-2 text-sm"
@@ -237,6 +299,7 @@ export default function TeamProfileForm() {
             <label className="block text-sm font-medium text-gray-700 mt-4">
               Country
             </label>
+
             <input
               required
               className="w-full border rounded-md mt-2 px-3 py-2 text-sm"

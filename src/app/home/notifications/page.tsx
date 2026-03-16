@@ -1,9 +1,10 @@
 import React from "react";
 import { auth } from "@/auth";
-import { getUserNotifications, markAsRead } from "./actions";
+import { getUserNotifications } from "./actions";
 import { database } from "@/db/database";
 import { users, userProfiles } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import NotificationsClient from "@/components/app/NotificationsClient";
 
 export default async function NotificationsPage() {
   const session = await auth();
@@ -65,46 +66,6 @@ export default async function NotificationsPage() {
   });
 
   return (
-    <div className="pt-[18vh] pr-10 pl-[24vw]">
-      <h1 className="text-2xl font-bold mb-8">Your Notifications</h1>
-
-      {sortedNotifications.length === 0 ? (
-        <p>No notifications found.</p>
-      ) : (
-        <div className="space-y-4">
-          {sortedNotifications.map((notification) => (
-            <div
-              key={notification.id}
-              className={`p-6 border rounded-lg shadow-sm ${
-                notification.isRead ? "bg-gray-100" : "bg-white"
-              }`}
-            >
-              <h3 className="font-bold">{notification.title}</h3>
-              <p>{notification.message}</p>
-
-              {!notification.isRead &&
-                typeof notification.id === "string" &&
-                !notification.id.includes("setup") && (
-                  <form action={markAsRead}>
-                    <input
-                      type="hidden"
-                      name="notificationId"
-                      value={notification.id}
-                    />
-                    <input type="hidden" name="userId" value={userId} />
-
-                    <button
-                      type="submit"
-                      className="mt-3 text-white bg-blue-500 px-4 py-2 rounded"
-                    >
-                      Mark as Read
-                    </button>
-                  </form>
-                )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <NotificationsClient notifications={sortedNotifications} userId={userId} />
   );
 }

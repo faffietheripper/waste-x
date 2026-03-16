@@ -53,9 +53,8 @@ export default function JobReview({
     try {
       const result = await createReviewAction({
         listingId,
-        reviewedOrganisationId,
         rating,
-        comment,
+        reviewText: comment,
       });
 
       toast({

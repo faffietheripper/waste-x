@@ -3,6 +3,7 @@
 import { eq, and } from "drizzle-orm";
 import { database } from "@/db/database";
 import { notifications, users, userProfiles } from "@/db/schema";
+import { auth } from "@/auth";
 
 /* =========================================================
    HELPER — Get user's organisation
@@ -73,16 +74,14 @@ export async function getUserNotifications(userId: string) {
 /* =========================================================
    MARK AS READ
 ========================================================= */
+export async function markAsRead(notificationId: string) {
+  const session = await auth();
 
-export async function markAsRead(formData: FormData) {
-  const notificationId = formData.get("notificationId") as string;
-  const userId = formData.get("userId") as string;
-
-  if (!notificationId || !userId) {
-    throw new Error("Missing required fields");
+  if (!session?.user?.id) {
+    throw new Error("Unauthorized");
   }
 
-  const organisationId = await getUserOrganisationId(userId);
+  const organisationId = await getUserOrganisationId(session.user.id);
 
   await database
     .update(notifications)
