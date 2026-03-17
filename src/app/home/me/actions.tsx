@@ -21,10 +21,18 @@ type UserRole =
    CREATE SIGNED UPLOAD URL
 ========================================================= */
 
-export async function createUploadUrlAction(key: string, type: string) {
-  if (!key || !type) return null;
+export async function createUploadUrlAction(keys: string[], types: string[]) {
+  if (!keys.length || !types.length) return [];
 
-  return getSignedUrlForS3Object(key, type);
+  const uploadUrls = await Promise.all(
+    keys.map((key, i) => {
+      const type = types[i];
+      if (!key || !type) return null;
+      return getSignedUrlForS3Object(key, type);
+    }),
+  );
+
+  return uploadUrls;
 }
 
 /* =========================================================

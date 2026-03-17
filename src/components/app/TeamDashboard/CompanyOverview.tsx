@@ -50,7 +50,7 @@ export default async function CompanyOverview() {
           )}
           <p className="text-4xl font-semibold">{organisation.teamName}</p>
         </section>
-        <Link href="/home/me">
+        <Link href="/home/team-dashboard/team-profile">
           <button className="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md">
             Edit Profile
           </button>

@@ -9,28 +9,60 @@ import {
 } from "@/app/home/me/actions";
 import { getImageUrl } from "@/util/files";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
+interface ProfileData {
+  profilePicture?: string | null;
+  fullName?: string | null;
+  telephone?: string | null;
+  emailAddress?: string | null;
+  streetAddress?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postCode?: string | null;
+  country?: string | null;
+}
+
+/* =========================================================
+   COMPONENT
+========================================================= */
+
 export default function ProfileForm() {
-  const [profileData, setProfileData] = useState<any>(null);
+  const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [newProfilePicture, setNewProfilePicture] = useState<File | null>(null);
 
   const router = useRouter();
 
+  /* =========================================================
+     LOAD PROFILE
+  ========================================================= */
+
   useEffect(() => {
     async function loadProfile() {
       const profile = await fetchProfileAction();
-      setProfileData(profile); // can be null
+      setProfileData(profile);
       setIsLoading(false);
     }
 
     loadProfile();
   }, []);
 
+  /* =========================================================
+     FILE HANDLER
+  ========================================================= */
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files?.[0]) {
       setNewProfilePicture(event.target.files[0]);
     }
   };
+
+  /* =========================================================
+     SUBMIT
+  ========================================================= */
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -40,10 +72,14 @@ export default function ProfileForm() {
 
     let uploadedFileName = profileData?.profilePicture || "";
 
+    /* ===============================
+       UPLOAD PROFILE IMAGE
+    ============================== */
+
     if (newProfilePicture) {
-      const signedUrl = await createUploadUrlAction(
-        newProfilePicture.name,
-        newProfilePicture.type,
+      const [signedUrl] = await createUploadUrlAction(
+        [newProfilePicture.name],
+        [newProfilePicture.type],
       );
 
       if (signedUrl) {
@@ -56,24 +92,36 @@ export default function ProfileForm() {
       }
     }
 
+    /* ===============================
+       SAVE PROFILE
+    ============================== */
+
     await saveProfileAction({
       profilePicture: uploadedFileName,
-      fullName: formData.get("fullName") as string,
-      telephone: formData.get("telephone") as string,
-      emailAddress: formData.get("emailAddress") as string,
-      country: formData.get("country") as string,
-      streetAddress: formData.get("streetAddress") as string,
-      city: formData.get("city") as string,
-      region: formData.get("region") as string,
-      postCode: formData.get("postCode") as string,
+      fullName: (formData.get("fullName") as string) || "",
+      telephone: (formData.get("telephone") as string) || "",
+      emailAddress: (formData.get("emailAddress") as string) || "",
+      country: (formData.get("country") as string) || "",
+      streetAddress: (formData.get("streetAddress") as string) || "",
+      city: (formData.get("city") as string) || "",
+      region: (formData.get("region") as string) || "",
+      postCode: (formData.get("postCode") as string) || "",
     });
 
     router.refresh();
   };
 
+  /* =========================================================
+     LOADING STATE
+  ========================================================= */
+
   if (isLoading) {
     return <div className="p-8">Loading profile...</div>;
   }
+
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <main className="max-w-3xl mx-auto p-8">
@@ -81,6 +129,8 @@ export default function ProfileForm() {
         className="flex flex-col space-y-6 bg-white p-8 rounded-xl shadow"
         onSubmit={handleSubmit}
       >
+        {/* PROFILE IMAGE */}
+
         <div className="text-center">
           <h2 className="font-semibold mb-4">Profile Picture</h2>
 
@@ -95,6 +145,8 @@ export default function ProfileForm() {
           <input type="file" onChange={handleFileChange} />
         </div>
 
+        {/* NAME */}
+
         <div>
           <label className="block text-sm font-medium mb-2">Full Name</label>
           <input
@@ -104,6 +156,8 @@ export default function ProfileForm() {
             className="w-full border rounded-md px-3 py-2"
           />
         </div>
+
+        {/* CONTACT */}
 
         <div className="grid grid-cols-2 gap-4">
           <input
@@ -122,6 +176,8 @@ export default function ProfileForm() {
             className="border rounded-md px-3 py-2"
           />
         </div>
+
+        {/* ADDRESS */}
 
         <input
           required
@@ -164,6 +220,8 @@ export default function ProfileForm() {
           defaultValue={profileData?.country || ""}
           className="border rounded-md px-3 py-2"
         />
+
+        {/* SUBMIT */}
 
         <button
           type="submit"
