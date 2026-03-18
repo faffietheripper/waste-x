@@ -6,7 +6,9 @@ export async function sendResetEmail(email: string, resetLink: string) {
   const TEMPLATE_ID = "template_ttdi4gm";
   const PUBLIC_KEY = process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY;
 
-  console.log("temp id", TEMPLATE_ID);
+  if (!SERVICE_ID || !PUBLIC_KEY) {
+    throw new Error("Missing EmailJS environment variables");
+  }
 
   try {
     const templateParams = {
@@ -18,7 +20,7 @@ export async function sendResetEmail(email: string, resetLink: string) {
       SERVICE_ID,
       TEMPLATE_ID,
       templateParams,
-      PUBLIC_KEY
+      PUBLIC_KEY,
     );
 
     if (response.status === 200) {

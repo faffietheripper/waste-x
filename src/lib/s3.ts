@@ -1,11 +1,5 @@
 import { env } from "@/env";
-import {
-  S3Client,
-  ListBucketsCommand,
-  ListObjectsV2Command,
-  GetObjectCommand,
-  PutObjectCommand,
-} from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const s3Client = new S3Client({
@@ -25,6 +19,6 @@ export async function getSignedUrlForS3Object(key: string, type: string) {
       Key: key,
       ContentType: type,
     }),
-    { expiresIn: 3600 }
+    { expiresIn: 3600 },
   );
 }

@@ -1,19 +1,18 @@
-// lib/org-scope.ts
 import { eq, and } from "drizzle-orm";
 import { isPlatformAdmin } from "./auth-utils";
+import { AppUser } from "@/util/types";
 
-export function buildOrgScope<T>(
+export function buildOrgScope(
   table: any,
   idField: any,
   idValue: any,
-  user?: { organisationId: string | null; role: string } | null,
+  user?: AppUser | null,
 ) {
   if (!user) {
     throw new Error("User not authenticated.");
   }
 
   if (isPlatformAdmin(user)) {
-    // Platform admin sees across tenants
     return eq(idField, idValue);
   }
 
@@ -23,6 +22,6 @@ export function buildOrgScope<T>(
 
   return and(
     eq(idField, idValue),
-    eq(table.organisationId, user.organisationId),
+    eq((table as any).organisationId, user.organisationId),
   );
 }

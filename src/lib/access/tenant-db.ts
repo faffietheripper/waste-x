@@ -4,9 +4,11 @@ import { isPlatformAdmin } from "@/lib/auth-utils";
 import { AppUser } from "@/util/types";
 
 export function tenantDB(user: AppUser) {
+  const query = database.query as any; // 🔥 fix here
+
   function scope(table: any) {
     if (isPlatformAdmin(user)) {
-      return undefined; // platform admin bypass
+      return undefined;
     }
 
     if (!user.organisationId) {
@@ -19,7 +21,7 @@ export function tenantDB(user: AppUser) {
   async function findFirst(table: any, config: any) {
     const tenantFilter = scope(table);
 
-    return database.query[table._.name].findFirst({
+    return query[table._.name].findFirst({
       ...config,
       where: tenantFilter
         ? and(config.where ?? undefined, tenantFilter)
@@ -30,7 +32,7 @@ export function tenantDB(user: AppUser) {
   async function findMany(table: any, config: any) {
     const tenantFilter = scope(table);
 
-    return database.query[table._.name].findMany({
+    return query[table._.name].findMany({
       ...config,
       where: tenantFilter
         ? and(config.where ?? undefined, tenantFilter)

@@ -88,10 +88,12 @@ export async function createListingAction(input: {
 
   /* ================= RATE LIMIT ================= */
 
-  const { success } = await ratelimit.limit(userId);
+  if (ratelimit) {
+    const { success } = await ratelimit.limit(userId);
 
-  if (!success) {
-    throw new Error("Too many requests. Please slow down.");
+    if (!success) {
+      throw new Error("Too many requests. Please slow down.");
+    }
   }
 
   /* ================= VALIDATION ================= */

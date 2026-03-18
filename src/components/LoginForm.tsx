@@ -8,7 +8,15 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { LoginSchema } from "@/util/authSchema";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
 type LoginFormInputs = z.infer<typeof LoginSchema>;
+
+/* =========================================================
+   COMPONENT
+========================================================= */
 
 export default function LoginForm() {
   const router = useRouter();
@@ -24,6 +32,10 @@ export default function LoginForm() {
     resolver: zodResolver(LoginSchema),
   });
 
+  /* =========================================================
+     SUBMIT
+  ========================================================= */
+
   const onSubmit = async (data: LoginFormInputs) => {
     setServerError(null);
     setLoading(true);
@@ -31,6 +43,10 @@ export default function LoginForm() {
     const res = await login(data);
 
     setLoading(false);
+
+    /* ===============================
+       ERROR HANDLING
+    ============================== */
 
     if (!res.success) {
       setServerError(res.message || "Invalid email or password.");
@@ -42,20 +58,28 @@ export default function LoginForm() {
       return;
     }
 
-    // 🔐 Role-based routing
-    if (res.role === "platform_admin") {
+    /* ===============================
+       ROLE-BASED ROUTING
+    ============================== */
+
+    if (res.data?.role === "platform_admin") {
       router.push("/admin");
     } else {
       router.push("/home");
     }
   };
 
+  /* =========================================================
+     UI
+  ========================================================= */
+
   return (
     <form
       onSubmit={handleSubmit(onSubmit)}
       className="mt-8 grid grid-cols-6 gap-6"
     >
-      {/* Server Error */}
+      {/* SERVER ERROR */}
+
       {serverError && (
         <div
           ref={errorContainerRef}
@@ -68,7 +92,8 @@ export default function LoginForm() {
         </div>
       )}
 
-      {/* Email */}
+      {/* EMAIL */}
+
       <div className="col-span-6">
         <label
           htmlFor="email"
@@ -76,6 +101,7 @@ export default function LoginForm() {
         >
           Email
         </label>
+
         <input
           type="email"
           id="email"
@@ -84,6 +110,7 @@ export default function LoginForm() {
           aria-invalid={!!errors.email}
           aria-describedby="email-error"
         />
+
         {errors.email && (
           <p
             id="email-error"
@@ -95,7 +122,8 @@ export default function LoginForm() {
         )}
       </div>
 
-      {/* Password */}
+      {/* PASSWORD */}
+
       <div className="col-span-6">
         <label
           htmlFor="password"
@@ -103,6 +131,7 @@ export default function LoginForm() {
         >
           Password
         </label>
+
         <input
           type="password"
           id="password"
@@ -111,6 +140,7 @@ export default function LoginForm() {
           aria-invalid={!!errors.password}
           aria-describedby="password-error"
         />
+
         {errors.password && (
           <p
             id="password-error"
@@ -122,7 +152,8 @@ export default function LoginForm() {
         )}
       </div>
 
-      {/* Submit */}
+      {/* SUBMIT */}
+
       <button
         type="submit"
         disabled={loading}
