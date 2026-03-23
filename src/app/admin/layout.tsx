@@ -4,6 +4,7 @@ import { signOut, auth } from "@/auth";
 import { database } from "@/db/database";
 import { supportTickets, users } from "@/db/schema";
 import { eq, and, or, isNull } from "drizzle-orm";
+import { redirect } from "next/navigation";
 
 async function logoutAction() {
   "use server";
@@ -16,15 +17,20 @@ export default async function AdminLayout({
   children: ReactNode;
 }) {
   const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  if (!session?.user?.id) {
+    redirect("/login");
+  }
 
   const dbUser = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
   });
 
   if (dbUser?.role !== "platform_admin") {
-    throw new Error("Access denied.");
+    redirect("/unauthorized");
   }
+
+  console.log("SESSION:", session);
+  console.log("DB USER:", dbUser);
 
   // 🔴 ADMIN UNREAD COUNT
   const unreadTickets = await database.query.supportTickets.findMany({
