@@ -89,6 +89,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const user = userResponse.data;
 
+        console.log("LOGIN USER ROLE:", user.role);
+
         return {
           id: user.id,
           name: user.name,
@@ -107,6 +109,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     ========================================================= */
 
     async jwt({ token, user }) {
+      console.log("JWT CALLBACK RUNNING", {
+        tokenId: token.id,
+        userId: user?.id,
+      });
+
       // Always ensure we have the user id
       if (user?.id) {
         token.id = user.id;
@@ -117,6 +124,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const dbUser = await database.query.users.findFirst({
           where: eq(users.id, token.id),
         });
+
+        console.log("DB USER IN JWT:", dbUser?.role); // 👈 ADD THIS TOO
 
         if (dbUser) {
           token.organisationId = dbUser.organisationId;
