@@ -10,8 +10,8 @@ export async function middleware(req: NextRequest) {
   });
 
   if (req.nextUrl.pathname.startsWith("/admin")) {
-    if (!token || token.role !== "platform_admin") {
-      return NextResponse.redirect(new URL("/unauthorized", req.url));
+    if (!token) {
+      return NextResponse.redirect(new URL("/login", req.url));
     }
   }
 
