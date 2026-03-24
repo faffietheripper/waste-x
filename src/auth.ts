@@ -107,23 +107,31 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     ========================================================= */
 
     async jwt({ token, user }) {
+      // Always ensure we have the user id
       if (user?.id) {
         token.id = user.id;
-        token.organisationId = user.organisationId;
-        token.role = user.role;
+      }
 
-        /* Fetch profile completion status */
-
-        const profile = await database.query.userProfiles.findFirst({
-          where: eq(userProfiles.userId, user.id),
+      // 🔥 ALWAYS fetch fresh user from DB
+      if (token.id) {
+        const dbUser = await database.query.users.findFirst({
+          where: eq(users.id, token.id),
         });
 
-        token.profileCompleted = !!profile;
+        if (dbUser) {
+          token.organisationId = dbUser.organisationId;
+          token.role = dbUser.role;
+
+          const profile = await database.query.userProfiles.findFirst({
+            where: eq(userProfiles.userId, dbUser.id),
+          });
+
+          token.profileCompleted = !!profile;
+        }
       }
 
       return token;
     },
-
     /* =========================================================
        SESSION CALLBACK
        Controls data sent to client
