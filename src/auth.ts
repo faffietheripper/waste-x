@@ -16,7 +16,7 @@ import { eq } from "drizzle-orm";
 import { getUserFromDb } from "@/app/login/actions";
 
 /* =========================================================
-   EXTEND NEXTAUTH TYPES
+   EXTEND NEXTAUTH TYPES (SAFE)
 ========================================================= */
 
 declare module "next-auth" {
@@ -35,15 +35,6 @@ declare module "next-auth" {
     email: string;
     organisationId: string | null;
     role: string;
-  }
-}
-
-declare module "next-auth/jwt" {
-  interface JWT {
-    id: string;
-    organisationId: string | null;
-    role: string;
-    profileCompleted: boolean;
   }
 }
 
@@ -73,7 +64,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: "Password", type: "password" },
       },
 
-      async authorize(credentials, _request) {
+      async authorize(credentials) {
         if (!credentials?.email || !credentials.password) {
           return null;
         }
@@ -89,8 +80,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const user = userResponse.data;
 
-        console.log("LOGIN USER ROLE:", user.role);
-
         return {
           id: user.id,
           name: user.name,
@@ -104,54 +93,60 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
   callbacks: {
     /* =========================================================
-       JWT CALLBACK
-       Runs at login and session refresh
+       JWT CALLBACK (FIXED – ALWAYS SYNC WITH DB)
     ========================================================= */
 
     async jwt({ token, user }) {
-      console.log("JWT CALLBACK RUNNING", {
-        tokenId: token.id,
-        userId: user?.id,
-      });
+      const t = token as typeof token & {
+        id?: string;
+        organisationId?: string | null;
+        role?: string;
+        profileCompleted?: boolean;
+      };
 
-      // Always ensure we have the user id
+      // Set ID on login
       if (user?.id) {
-        token.id = user.id;
+        t.id = user.id;
       }
 
-      // 🔥 ALWAYS fetch fresh user from DB
-      if (token.id) {
+      // Always fetch fresh user from DB
+      if (t.id) {
         const dbUser = await database.query.users.findFirst({
-          where: eq(users.id, token.id),
+          where: eq(users.id, t.id),
         });
 
-        console.log("DB USER IN JWT:", dbUser?.role); // 👈 ADD THIS TOO
-
         if (dbUser) {
-          token.organisationId = dbUser.organisationId;
-          token.role = dbUser.role;
+          t.organisationId = dbUser.organisationId;
+          t.role = dbUser.role;
 
           const profile = await database.query.userProfiles.findFirst({
             where: eq(userProfiles.userId, dbUser.id),
           });
 
-          token.profileCompleted = !!profile;
+          t.profileCompleted = !!profile;
         }
       }
 
-      return token;
+      return t;
     },
+
     /* =========================================================
        SESSION CALLBACK
-       Controls data sent to client
     ========================================================= */
 
     async session({ session, token }) {
+      const t = token as {
+        id?: string;
+        organisationId?: string | null;
+        role?: string;
+        profileCompleted?: boolean;
+      };
+
       if (session.user) {
-        session.user.id = token.id;
-        session.user.organisationId = token.organisationId;
-        session.user.role = token.role;
-        session.user.profileCompleted = token.profileCompleted;
+        session.user.id = t.id!;
+        session.user.organisationId = t.organisationId ?? null;
+        session.user.role = t.role!;
+        session.user.profileCompleted = t.profileCompleted ?? false;
       }
 
       return session;
