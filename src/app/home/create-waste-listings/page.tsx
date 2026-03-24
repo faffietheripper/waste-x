@@ -28,7 +28,7 @@ export default async function CreateWasteListing() {
           </p>
 
           {/* 👇 Admin CTA */}
-          {session?.user?.role === "platform_admin" && (
+          {session?.user?.role === "administrator" && (
             <div className="mt-4">
               <Link
                 href="/home/team-dashboard/template-library"

@@ -12,8 +12,59 @@ const fontSans = FontSans({
 });
 
 export const metadata: Metadata = {
-  title: "Waste X",
-  description: "Digital Waste Tracking System designed by Tino and Jethro.",
+  metadataBase: new URL("https://www.wastextracking.com"),
+
+  title: {
+    default: "Waste X | Digital Waste Tracking Platform UK",
+    template: "%s | Waste X",
+  },
+
+  description:
+    "Waste X is a digital waste tracking platform for the UK construction and waste industry. Manage waste transfers, verify carriers, and maintain full compliance with emerging regulations.",
+
+  keywords: [
+    "waste tracking UK",
+    "digital waste tracking",
+    "construction waste management",
+    "waste compliance software",
+    "waste transfer notes UK",
+    "licensed waste carriers",
+    "waste audit system",
+  ],
+
+  authors: [{ name: "Waste X" }],
+  creator: "Waste X",
+
+  openGraph: {
+    title: "Waste X | Digital Waste Tracking Platform",
+    description:
+      "Track, manage, and verify waste movement across the UK. Built for construction, waste carriers, and compliance.",
+    url: "https://www.wastextracking.com",
+    siteName: "Waste X",
+    images: [
+      {
+        url: "/og-image.png", // 👈 add this later
+        width: 1200,
+        height: 630,
+        alt: "Waste X Platform",
+      },
+    ],
+    locale: "en_GB",
+    type: "website",
+  },
+
+  twitter: {
+    card: "summary_large_image",
+    title: "Waste X | Digital Waste Tracking",
+    description:
+      "Digital infrastructure for waste tracking and compliance in the UK.",
+    images: ["/og-image.png"],
+  },
+
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({
