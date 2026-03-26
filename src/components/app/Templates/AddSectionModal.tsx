@@ -24,7 +24,7 @@ export default function AddSectionModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+    <div className="fixed inset-0 bg-black/40 text-black flex items-center justify-center">
       <div className="bg-white p-8 w-96">
         <h2 className="text-lg font-semibold mb-4">Add Section</h2>
 
@@ -32,7 +32,7 @@ export default function AddSectionModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Section title"
-          className="w-full border p-3 mb-4"
+          className="w-full text-black border p-3 mb-4"
         />
 
         <div className="flex justify-end gap-3">

@@ -15,12 +15,10 @@ interface NewMemberModalProps {
   setIsOpen: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
-interface RegisterFormData {
+interface InviteFormData {
   name: string;
   email: string;
   role: "employee" | "seniorManagement" | "administrator";
-  password: string;
-  confirmPassword: string;
 }
 
 /* =========================================================
@@ -55,12 +53,13 @@ export default function NewMemberModal({
                 <FiAlertCircle />
               </div>
 
-              <h3 className="text-3xl font-bold text-center mb-2">
-                Add a New Team Member
+              <h3 className="text-2xl font-semibold text-center mb-2">
+                Invite Team Member
               </h3>
 
-              <p className="text-center mb-6 text-sm text-white/80">
-                Fill out the form below to register a new team member.
+              <p className="text-center mb-6 text-sm text-neutral-400">
+                An invitation link will be sent to the user to complete their
+                account setup.
               </p>
 
               <RegisterForm />
@@ -86,24 +85,19 @@ export default function NewMemberModal({
 ========================================================= */
 
 const RegisterForm = () => {
-  const { register, handleSubmit, reset } = useForm<RegisterFormData>();
+  const { register, handleSubmit, reset } = useForm<InviteFormData>();
 
-  const onSubmit: SubmitHandler<RegisterFormData> = async (data) => {
-    if (data.password !== data.confirmPassword) {
-      alert("Passwords do not match.");
-      return;
-    }
-
-    const response = await registerTeamUser(data);
+  const onSubmit = async (data: InviteFormData) => {
+    const response = await registerTeamUser(data); // now creates invite
 
     if (response.success) {
       await sendRegEmail({
         name: data.name,
         email: data.email,
-        password: data.password,
+        token: response.token, // IMPORTANT
       });
 
-      alert("User registered and email sent!");
+      alert("Invitation sent successfully.");
       reset();
     } else {
       alert(`Error: ${response.message}`);
@@ -111,16 +105,13 @@ const RegisterForm = () => {
   };
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="grid grid-cols-6 gap-4 text-black"
-    >
+    <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-6 gap-4">
       <div className="col-span-6">
         <label className="text-white text-sm">Full Name</label>
         <input
           required
           {...register("name")}
-          className="mt-1 w-full h-10 p-2 rounded-md border border-gray-300 text-sm"
+          className="mt-1 w-full bg-black border border-neutral-700 p-2 text-sm text-white"
         />
       </div>
 
@@ -130,7 +121,7 @@ const RegisterForm = () => {
           required
           type="email"
           {...register("email")}
-          className="mt-1 w-full h-10 p-2 rounded-md border border-gray-300 text-sm"
+          className="mt-1 w-full bg-black border border-neutral-700 p-2 text-sm text-white"
         />
       </div>
 
@@ -138,7 +129,7 @@ const RegisterForm = () => {
         <label className="text-white text-sm">Role</label>
         <select
           {...register("role", { required: true })}
-          className="mt-1 w-full h-10 p-2 rounded-md border border-gray-300 text-sm"
+          className="mt-1 w-full bg-black border border-neutral-700 p-2 text-sm text-white"
         >
           <option value="employee">Employee</option>
           <option value="seniorManagement">Senior Management</option>
@@ -147,31 +138,11 @@ const RegisterForm = () => {
       </div>
 
       <div className="col-span-6">
-        <label className="text-white text-sm">Password</label>
-        <input
-          required
-          type="password"
-          {...register("password")}
-          className="mt-1 w-full h-10 p-2 rounded-md border border-gray-300 text-sm"
-        />
-      </div>
-
-      <div className="col-span-6">
-        <label className="text-white text-sm">Confirm Password</label>
-        <input
-          required
-          type="password"
-          {...register("confirmPassword")}
-          className="mt-1 w-full h-10 p-2 rounded-md border border-gray-300 text-sm"
-        />
-      </div>
-
-      <div className="col-span-6">
         <button
           type="submit"
-          className="w-full rounded-md border border-white bg-white text-indigo-600 px-4 py-2 text-sm font-medium hover:bg-transparent hover:text-white transition"
+          className="w-full bg-orange-500 text-black py-2 text-sm font-medium hover:bg-orange-600 transition"
         >
-          Create Account
+          Send Invitation
         </button>
       </div>
     </form>

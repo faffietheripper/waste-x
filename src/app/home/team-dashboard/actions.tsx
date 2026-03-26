@@ -1,13 +1,41 @@
 "use server";
 
+import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { RegisterSchema } from "@/util/authSchema";
-import bcryptjs from "bcryptjs";
-import { auth } from "@/auth";
+import crypto from "crypto";
+import { z } from "zod";
 
-type UserRole = "administrator" | "employee" | "seniorManagement";
+/* =========================================================
+   TYPES
+========================================================= */
+
+export type UserRole = "administrator" | "employee" | "seniorManagement";
+
+export type InviteFormData = {
+  name: string;
+  email: string;
+  role: UserRole;
+};
+
+type RegisterTeamUserResponse =
+  | { success: true; token: string }
+  | { success: false; message: string };
+
+/* =========================================================
+   VALIDATION
+========================================================= */
+
+const InviteSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  role: z.enum(["employee", "seniorManagement", "administrator"]),
+});
+
+/* =========================================================
+   GET USER
+========================================================= */
 
 export async function getUserFromDb(email: string) {
   try {
@@ -21,52 +49,49 @@ export async function getUserFromDb(email: string) {
     });
 
     if (!existedUser) {
-      return {
-        success: false,
-        message: "User not found.",
-      };
+      return { success: false, message: "User not found." };
     }
 
-    return {
-      success: true,
-      data: existedUser,
-    };
+    return { success: true, data: existedUser };
   } catch (error: any) {
-    return {
-      success: false,
-      message: error.message,
-    };
+    return { success: false, message: error.message };
   }
 }
 
-export async function registerTeamUser({
-  name,
-  email,
-  password,
-  confirmPassword,
-  role,
-}: {
-  name: string;
-  email: string;
-  password: string;
-  confirmPassword: string;
-  role: UserRole;
-}) {
+/* =========================================================
+   INVITE TEAM USER
+========================================================= */
+
+export async function registerTeamUser(
+  data: InviteFormData,
+): Promise<RegisterTeamUserResponse> {
   try {
+    const { name, email, role } = data;
+
+    /* ---------------- AUTH ---------------- */
     const session = await auth();
     if (!session?.user) throw new Error("Unauthorized");
 
-    RegisterSchema.parse({ name, email, password, confirmPassword });
+    /* ---------------- VALIDATION ---------------- */
+    InviteSchema.parse({ name, email, role });
 
-    const existing = await database.query.users.findFirst({
+    /* ---------------- EXISTING USER ---------------- */
+    const existingUser = await database.query.users.findFirst({
       where: eq(users.email, email),
-      columns: { id: true },
     });
 
-    if (existing) {
-      return { success: false, message: "User already exists." };
+    if (session.user.role !== "administrator") {
+      throw new Error("Unauthorized");
+    }
+    // If user exists AND is already active → block
+    if (existingUser?.passwordHash) {
+      return {
+        success: false,
+        message: "User already exists and is active.",
+      };
     }
 
+    /* ---------------- ADMIN ORG ---------------- */
     const adminUser = await database.query.users.findFirst({
       where: eq(users.id, session.user.id),
       columns: { organisationId: true },
@@ -79,25 +104,65 @@ export async function registerTeamUser({
       };
     }
 
-    const hash = await bcryptjs.hash(password, 10);
+    /* ---------------- TOKEN ---------------- */
+    const rawToken = crypto.randomBytes(32).toString("hex");
 
-    const [newUser] = await database
-      .insert(users)
-      .values({
-        name,
-        email,
-        passwordHash: hash, // ✅ correct column
-        role,
-        organisationId: adminUser.organisationId,
-      })
-      .returning({
-        id: users.id,
-        email: users.email,
-        name: users.name,
-      });
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
 
-    return { success: true, data: newUser };
+    const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
+
+    /* ---------------- UPSERT ---------------- */
+    let userRecord;
+
+    if (existingUser) {
+      // Re-invite existing pending user
+      const [updated] = await database
+        .update(users)
+        .set({
+          name,
+          role,
+          organisationId: adminUser.organisationId,
+          inviteToken: hashedToken,
+          inviteExpiry: expiry,
+          status: "INVITED",
+        })
+        .where(eq(users.id, existingUser.id))
+        .returning();
+
+      userRecord = updated;
+    } else {
+      // Create new invited user
+      const [created] = await database
+        .insert(users)
+        .values({
+          name,
+          email,
+          role,
+          organisationId: adminUser.organisationId,
+
+          passwordHash: null,
+
+          inviteToken: hashedToken,
+          inviteExpiry: expiry,
+          status: "INVITED",
+        })
+        .returning();
+
+      userRecord = created;
+    }
+
+    /* ---------------- RETURN ---------------- */
+    return {
+      success: true,
+      token: rawToken, // raw token ONLY returned here
+    };
   } catch (error: any) {
-    return { success: false, message: error.message };
+    return {
+      success: false,
+      message: error.message || "Failed to invite user",
+    };
   }
 }

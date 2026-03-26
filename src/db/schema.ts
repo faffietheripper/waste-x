@@ -173,6 +173,12 @@ export const users = pgTable(
 
     lastLoginAt: timestamp("lastLoginAt", { mode: "date" }),
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    inviteToken: text("inviteToken"),
+    inviteExpiry: timestamp("inviteExpiry", { mode: "date" }),
+    status: text("status")
+      .$type<"INVITED" | "ACTIVE">()
+      .notNull()
+      .default("INVITED"),
   },
   (table) => ({
     emailIdx: uniqueIndex("user_email_unique").on(table.email),

@@ -1,13 +1,8 @@
-import { signIn } from "@/auth";
+import { signInWithGoogle } from "@/lib/authActions";
 
 export default function GoogleLogin() {
   return (
-    <form
-      action={async () => {
-        "use server";
-        await signIn("google", { redirectTo: "/home" });
-      }}
-    >
+    <form action={signInWithGoogle}>
       <button
         aria-label="Continue with google"
         type="submit"

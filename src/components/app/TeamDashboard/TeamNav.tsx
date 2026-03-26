@@ -4,7 +4,7 @@ import React, { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { FiEdit, FiChevronDown, FiShare, FiPlusSquare } from "react-icons/fi";
-import NewMemberModal from "./TeamDashboard/NewMemberModal";
+import NewMemberModal from "./NewMemberModal";
 
 /* =========================================================
    TYPES
@@ -16,6 +16,10 @@ type ChainOfCustodyType =
   | "wasteCarrier"
   | null;
 
+/* =========================================================
+   MAIN NAV
+========================================================= */
+
 export default function TeamNav({
   chainOfCustody,
   userRole,
@@ -25,18 +29,16 @@ export default function TeamNav({
 }) {
   const [showModal, setShowModal] = useState(false);
 
-  // If no chain provided, render nothing (prevents breaking layout)
-  if (!chainOfCustody) {
-    return null;
-  }
+  if (!chainOfCustody) return null;
 
   return (
-    <div className="pl-72 pt-[13vh] fixed w-full">
+    <div className="pl-72 pt-[13vh] fixed w-full z-40">
       <SlideTabs
         chainOfCustody={chainOfCustody}
         userRole={userRole}
         setShowModal={setShowModal}
       />
+
       <NewMemberModal isOpen={showModal} setIsOpen={setShowModal} />
     </div>
   );
@@ -64,28 +66,18 @@ const SlideTabs = ({
   return (
     <ul
       onMouseLeave={() => setPosition((pv) => ({ ...pv, opacity: 0 }))}
-      className="relative flex justify-between w-[80vw] bg-gray-200 h-[13vh] pt-4 text-sm px-10"
+      className="relative flex justify-between w-[80vw] bg-gray-200 pt-4 py-4 text-sm px-10"
     >
       <Tab setPosition={setPosition}>
         <Link href="/home/team-dashboard">Home</Link>
       </Tab>
 
-      <Tab setPosition={setPosition}>
-        <Link href="/home/team-dashboard/template-library">
-          Template Library
-        </Link>
-      </Tab>
-
-      <Tab setPosition={setPosition}>
-        <ListingsDropdown
-          chainOfCustody={chainOfCustody}
-          setShowModal={setShowModal}
-        />
-      </Tab>
-
       {/* ================= WASTE MANAGER ================= */}
       {chainOfCustody === "wasteManager" && (
         <>
+          <Tab setPosition={setPosition}>
+            <ListingsDropdown chainOfCustody={chainOfCustody} />
+          </Tab>
           <Tab setPosition={setPosition}>
             <Link href="/home/team-dashboard/team-withdrawals">
               Withdrawals
@@ -100,22 +92,32 @@ const SlideTabs = ({
 
       {/* ================= WASTE GENERATOR ================= */}
       {chainOfCustody === "wasteGenerator" && (
-        <Tab setPosition={setPosition}>
-          <Link href="/home/team-dashboard/team-reviews">Reviews</Link>
-        </Tab>
+        <>
+          <Tab setPosition={setPosition}>
+            <ListingsDropdown chainOfCustody={chainOfCustody} />
+          </Tab>
+          <Tab setPosition={setPosition}>
+            <Link href="/home/team-dashboard/template-library">
+              Template Library
+            </Link>
+          </Tab>
+          <Tab setPosition={setPosition}>
+            <Link href="/home/team-dashboard/team-reviews">Reviews</Link>
+          </Tab>
+        </>
       )}
 
       {/* ================= WASTE CARRIER ================= */}
       {chainOfCustody === "wasteCarrier" && (
         <Tab setPosition={setPosition}>
-          <Link href="/home/team-dashboard/carrier-jobs">My Jobs</Link>
+          <Link href="/home/carrier-hub/waste-carriers/analytics">My Jobs</Link>
         </Tab>
       )}
 
       {/* ================= ADMIN SETTINGS ================= */}
       {userRole === "administrator" && (
         <Tab setPosition={setPosition}>
-          <SettingsDropdown setShowModal={setShowModal} />
+          <SettingsDropdown />
         </Tab>
       )}
 
@@ -157,7 +159,7 @@ const Tab = ({
           opacity: 1,
         });
       }}
-      className="relative z-10 block cursor-pointer px-3 py-1.5 text-xs font-bold text-black hover:text-white md:px-8 md:py-3 md:text-base"
+      className="relative z-10 cursor-pointer px-3 py-1.5 text-xs font-bold text-black hover:text-white md:px-8 md:py-3 md:text-base"
     >
       {children}
     </li>
@@ -189,11 +191,7 @@ const Cursor = ({
    SETTINGS DROPDOWN
 ========================================================= */
 
-const SettingsDropdown = ({
-  setShowModal,
-}: {
-  setShowModal: React.Dispatch<React.SetStateAction<boolean>>;
-}) => {
+const SettingsDropdown = () => {
   const [open, setOpen] = useState(false);
 
   return (
@@ -208,27 +206,19 @@ const SettingsDropdown = ({
         </motion.span>
       </button>
 
-      <motion.ul
-        initial="closed"
-        variants={wrapperVariants}
-        style={{
-          originY: "top",
-          translateX: "-50%",
-        }}
-        className="flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl absolute top-[120%] left-[50%] w-48 overflow-hidden"
-      >
-        <Link href="/home/team-dashboard/team-profile">
-          <Option setOpen={setOpen} Icon={FiEdit} text="Team Profile" />
-        </Link>
-
-        <Link href="/home/team-dashboard/new-template">
-          <Option
-            setOpen={setOpen}
-            Icon={FiPlusSquare}
-            text="Create Template"
-          />
-        </Link>
-      </motion.ul>
+      {open && (
+        <motion.ul
+          initial="closed"
+          animate="open"
+          exit="closed"
+          variants={wrapperVariants}
+          className="absolute top-[120%] left-1/2 -translate-x-1/2 w-48 flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl z-50"
+        >
+          <Link href="/home/team-dashboard/team-profile">
+            <Option Icon={FiEdit} text="Team Profile" setOpen={setOpen} />
+          </Link>
+        </motion.ul>
+      )}
     </motion.div>
   );
 };
@@ -239,10 +229,8 @@ const SettingsDropdown = ({
 
 const ListingsDropdown = ({
   chainOfCustody,
-  setShowModal,
 }: {
   chainOfCustody: ChainOfCustodyType;
-  setShowModal: React.Dispatch<React.SetStateAction<boolean>>;
 }) => {
   const [open, setOpen] = useState(false);
 
@@ -258,43 +246,47 @@ const ListingsDropdown = ({
         </motion.span>
       </button>
 
-      <motion.ul
-        initial="closed"
-        variants={wrapperVariants}
-        style={{
-          originY: "top",
-          translateX: "-50%",
-        }}
-        className="flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl absolute top-[120%] left-[50%] w-48 overflow-hidden"
-      >
-        {chainOfCustody === "wasteManager" && (
-          <>
-            <Link href="/home/team-dashboard/team-assigned-jobs">
-              <Option setOpen={setOpen} Icon={FiEdit} text="Assigned Jobs" />
-            </Link>
+      {open && (
+        <motion.ul
+          initial="closed"
+          animate="open"
+          exit="closed"
+          variants={wrapperVariants}
+          className="absolute top-[120%] left-1/2 -translate-x-1/2 w-48 flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl z-50"
+        >
+          {chainOfCustody === "wasteManager" && (
+            <>
+              <Link href="/home/team-dashboard/team-assigned-jobs">
+                <Option Icon={FiEdit} text="Assigned Jobs" setOpen={setOpen} />
+              </Link>
 
-            <Link href="/home/team-dashboard/team-bids">
-              <Option setOpen={setOpen} Icon={FiShare} text="Team Bids" />
-            </Link>
-          </>
-        )}
+              <Link href="/home/team-dashboard/team-bids">
+                <Option Icon={FiShare} text="Team Bids" setOpen={setOpen} />
+              </Link>
+            </>
+          )}
 
-        {chainOfCustody === "wasteGenerator" && (
-          <>
-            <Link href="/home/team-dashboard/team-listings">
-              <Option setOpen={setOpen} Icon={FiEdit} text="Active Listings" />
-            </Link>
+          {chainOfCustody === "wasteGenerator" && (
+            <>
+              <Link href="/home/team-dashboard/team-listings">
+                <Option
+                  Icon={FiEdit}
+                  text="Active Listings"
+                  setOpen={setOpen}
+                />
+              </Link>
 
-            <Link href="/home/team-dashboard/team-archived-listings">
-              <Option
-                setOpen={setOpen}
-                Icon={FiEdit}
-                text="Archived Listings"
-              />
-            </Link>
-          </>
-        )}
-      </motion.ul>
+              <Link href="/home/team-dashboard/team-archived-listings">
+                <Option
+                  Icon={FiEdit}
+                  text="Archived Listings"
+                  setOpen={setOpen}
+                />
+              </Link>
+            </>
+          )}
+        </motion.ul>
+      )}
     </motion.div>
   );
 };
@@ -316,7 +308,7 @@ const Option = ({
     <motion.li
       variants={itemVariants}
       onClick={() => setOpen(false)}
-      className="flex items-center gap-2 w-full p-2 text-xs font-medium rounded-md hover:bg-indigo-100 text-slate-700 hover:text-indigo-500 cursor-pointer"
+      className="flex items-center gap-2 p-2 text-xs font-medium rounded-md hover:bg-indigo-100 text-slate-700 hover:text-indigo-500 cursor-pointer"
     >
       <motion.span variants={actionIconVariants}>
         <Icon />
@@ -327,7 +319,7 @@ const Option = ({
 };
 
 /* =========================================================
-   ANIMATION VARIANTS
+   ANIMATIONS
 ========================================================= */
 
 const wrapperVariants = {

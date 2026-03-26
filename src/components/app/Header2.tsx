@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { getProfileByUserId } from "@/data-access/profiles"; // or server-actions if you've combined
-import { auth } from "@/auth"; // your own auth helper from next-auth
-import SignOutButton from "./SignOutButton"; // 👈 client component
+import { getProfileByUserId } from "@/data-access/profiles";
+import { auth } from "@/auth";
+import SignOutButton from "./SignOutButton";
 import { database } from "@/db/database";
 import { supportTickets, users } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -33,7 +33,7 @@ export default async function Header2() {
   }
 
   return (
-    <div className="bg-black fixed text-white pb-8 pr-8 flex items-center justify-end z-10 w-full h-[13vh]">
+    <div className="bg-black fixed text-white pb-8 pr-8 flex items-center justify-end z-50 w-full h-[13vh]">
       <div className="flex items-center gap-6">
         {/* PROFILE */}
         <Link

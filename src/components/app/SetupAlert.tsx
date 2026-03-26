@@ -46,13 +46,11 @@ export default function SetupAlert({
           ✕
         </button>
 
-        <h2 className="font-bold text-lg mb-2">⚠️ Action Required</h2>
+        <h2 className="font-bold text-lg mb-2">System Notice</h2>
         <p className="text-sm mb-4">
-          Your account isn’t fully set up yet. You’ll have limited access until
-          your <strong>role</strong> is updated by a company administrator and
-          your <strong>profile</strong> is completed. If you are the company
-          admin please setup your profile first and then setup your
-          organisation.
+          Your profile has not been completed. You will have limited access to
+          the system until your setup is finished. If you are the company admin,
+          please complete your profile first and then set up your organisation.
         </p>
 
         <button

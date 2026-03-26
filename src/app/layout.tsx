@@ -43,7 +43,7 @@ export const metadata: Metadata = {
     siteName: "Waste X",
     images: [
       {
-        url: "/og-image.png", // 👈 add this later
+        url: "/wastex.png",
         width: 1200,
         height: 630,
         alt: "Waste X Platform",

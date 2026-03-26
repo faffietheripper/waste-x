@@ -38,7 +38,7 @@ export default function AddFieldModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+    <div className="fixed inset-0 bg-black/40 text-black flex items-center justify-center">
       <div className="bg-white p-8 w-96">
         <h2 className="text-lg font-semibold mb-4">Add Field</h2>
 
@@ -46,7 +46,7 @@ export default function AddFieldModal({
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="Field label"
-          className="w-full border p-3 mb-4"
+          className="w-full border text-black p-3 mb-4"
         />
 
         <select
