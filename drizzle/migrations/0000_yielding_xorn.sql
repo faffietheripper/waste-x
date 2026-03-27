@@ -1,3 +1,18 @@
+CREATE TABLE IF NOT EXISTS "bb_account" (
+	"userId" text NOT NULL,
+	"type" text NOT NULL,
+	"provider" text NOT NULL,
+	"providerAccountId" text NOT NULL,
+	"refresh_token" text,
+	"access_token" text,
+	"expires_at" integer,
+	"token_type" text,
+	"scope" text,
+	"id_token" text,
+	"session_state" text,
+	CONSTRAINT "bb_account_provider_providerAccountId_pk" PRIMARY KEY("provider","providerAccountId")
+);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "bb_audit_event" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organisationId" text NOT NULL,
@@ -9,6 +24,34 @@ CREATE TABLE IF NOT EXISTS "bb_audit_event" (
 	"newState" text,
 	"ipAddress" text,
 	"createdAt" timestamp DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_bids" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"amount" integer NOT NULL,
+	"listingId" integer NOT NULL,
+	"userId" text NOT NULL,
+	"organisationId" text NOT NULL,
+	"timestamp" timestamp DEFAULT now() NOT NULL,
+	"declinedOffer" boolean DEFAULT false NOT NULL,
+	"cancelledJob" boolean DEFAULT false NOT NULL,
+	"cancellationReason" text
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_carrier_assignment" (
+	"id" text PRIMARY KEY NOT NULL,
+	"organisationId" text NOT NULL,
+	"listingId" integer NOT NULL,
+	"carrierOrganisationId" text NOT NULL,
+	"assignedByOrganisationId" text NOT NULL,
+	"status" text DEFAULT 'pending' NOT NULL,
+	"verificationCode" text,
+	"codeGeneratedAt" timestamp,
+	"codeUsedAt" timestamp,
+	"assignedAt" timestamp DEFAULT now(),
+	"respondedAt" timestamp,
+	"collectedAt" timestamp,
+	"completedAt" timestamp
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "bb_incident" (
@@ -112,6 +155,36 @@ CREATE TABLE IF NOT EXISTS "bb_organisation_subscription" (
 	"createdAt" timestamp DEFAULT now()
 );
 --> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_organisation" (
+	"id" text PRIMARY KEY NOT NULL,
+	"teamName" text NOT NULL,
+	"profilePicture" text,
+	"chainOfCustody" text NOT NULL,
+	"industry" text,
+	"telephone" text NOT NULL,
+	"emailAddress" text NOT NULL,
+	"country" text NOT NULL,
+	"streetAddress" text NOT NULL,
+	"city" text NOT NULL,
+	"region" text NOT NULL,
+	"postCode" text NOT NULL,
+	"isSuspended" boolean DEFAULT false NOT NULL,
+	"createdAt" timestamp DEFAULT now(),
+	"billingCustomerId" text,
+	"subscriptionStatus" text DEFAULT 'trial',
+	"subscriptionPlan" text DEFAULT 'starter',
+	"trialEndsAt" timestamp,
+	"billingEmail" text
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_passwordResetToken" (
+	"id" text PRIMARY KEY NOT NULL,
+	"token" text NOT NULL,
+	"email" text NOT NULL,
+	"expires" timestamp NOT NULL,
+	"used" boolean DEFAULT false NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "bb_payment" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organisationId" text NOT NULL,
@@ -120,6 +193,22 @@ CREATE TABLE IF NOT EXISTS "bb_payment" (
 	"amount" integer NOT NULL,
 	"status" text NOT NULL,
 	"createdAt" timestamp DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_review" (
+	"id" text PRIMARY KEY NOT NULL,
+	"reviewerId" text NOT NULL,
+	"reviewedOrganisationId" text NOT NULL,
+	"listingId" integer,
+	"rating" integer NOT NULL,
+	"comment" text,
+	"createdAt" timestamp DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_session" (
+	"sessionToken" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"expires" timestamp NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "bb_support_ticket_message" (
@@ -160,6 +249,31 @@ CREATE TABLE IF NOT EXISTS "bb_user_profile" (
 	"updatedAt" timestamp DEFAULT now()
 );
 --> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_user" (
+	"id" text PRIMARY KEY NOT NULL,
+	"name" text NOT NULL,
+	"email" text NOT NULL,
+	"emailVerified" timestamp,
+	"image" text,
+	"passwordHash" text,
+	"organisationId" text,
+	"role" text DEFAULT 'employee' NOT NULL,
+	"isActive" boolean DEFAULT true NOT NULL,
+	"isSuspended" boolean DEFAULT false NOT NULL,
+	"lastLoginAt" timestamp,
+	"createdAt" timestamp DEFAULT now(),
+	"inviteToken" text,
+	"inviteExpiry" timestamp,
+	"status" text DEFAULT 'INVITED' NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "bb_verificationToken" (
+	"identifier" text NOT NULL,
+	"token" text NOT NULL,
+	"expires" timestamp NOT NULL,
+	CONSTRAINT "bb_verificationToken_identifier_token_pk" PRIMARY KEY("identifier","token")
+);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "bb_waste_listing" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -185,47 +299,12 @@ CREATE TABLE IF NOT EXISTS "bb_waste_listing" (
 	"createdAt" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-ALTER TABLE "bb_item" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "bb_notifications" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "bb_profile" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
-DROP TABLE "bb_item" CASCADE;--> statement-breakpoint
-DROP TABLE "bb_notifications" CASCADE;--> statement-breakpoint
-DROP TABLE "bb_profile" CASCADE;--> statement-breakpoint
-ALTER TABLE "bb_user" DROP CONSTRAINT "bb_user_email_unique";--> statement-breakpoint
-ALTER TABLE "bb_bids" DROP CONSTRAINT "bb_bids_itemId_bb_item_id_fk";
+DO $$ BEGIN
+ ALTER TABLE "bb_account" ADD CONSTRAINT "bb_account_userId_bb_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."bb_user"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" DROP CONSTRAINT "bb_carrier_assignment_itemId_bb_item_id_fk";
---> statement-breakpoint
-ALTER TABLE "bb_review" DROP CONSTRAINT "bb_review_organisationId_bb_organisation_id_fk";
---> statement-breakpoint
-ALTER TABLE "bb_bids" ALTER COLUMN "id" SET DATA TYPE serial;--> statement-breakpoint
-ALTER TABLE "bb_bids" ALTER COLUMN "timestamp" SET DEFAULT now();--> statement-breakpoint
-ALTER TABLE "bb_review" ALTER COLUMN "id" SET DATA TYPE text;--> statement-breakpoint
-ALTER TABLE "bb_user" ALTER COLUMN "role" SET DEFAULT 'employee';--> statement-breakpoint
-ALTER TABLE "bb_user" ALTER COLUMN "role" SET NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_bids" ADD COLUMN "listingId" integer NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "organisationId" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "listingId" integer NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "verificationCode" text;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "codeGeneratedAt" timestamp;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "codeUsedAt" timestamp;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "collectedAt" timestamp;--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" ADD COLUMN "completedAt" timestamp;--> statement-breakpoint
-ALTER TABLE "bb_organisation" ADD COLUMN "isSuspended" boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_organisation" ADD COLUMN "billingCustomerId" text;--> statement-breakpoint
-ALTER TABLE "bb_organisation" ADD COLUMN "subscriptionStatus" text DEFAULT 'trial';--> statement-breakpoint
-ALTER TABLE "bb_organisation" ADD COLUMN "subscriptionPlan" text DEFAULT 'starter';--> statement-breakpoint
-ALTER TABLE "bb_organisation" ADD COLUMN "trialEndsAt" timestamp;--> statement-breakpoint
-ALTER TABLE "bb_organisation" ADD COLUMN "billingEmail" text;--> statement-breakpoint
-ALTER TABLE "bb_review" ADD COLUMN "reviewedOrganisationId" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_review" ADD COLUMN "listingId" integer;--> statement-breakpoint
-ALTER TABLE "bb_review" ADD COLUMN "comment" text;--> statement-breakpoint
-ALTER TABLE "bb_review" ADD COLUMN "createdAt" timestamp DEFAULT now();--> statement-breakpoint
-ALTER TABLE "bb_user" ADD COLUMN "passwordHash" text;--> statement-breakpoint
-ALTER TABLE "bb_user" ADD COLUMN "isActive" boolean DEFAULT true NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_user" ADD COLUMN "isSuspended" boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE "bb_user" ADD COLUMN "lastLoginAt" timestamp;--> statement-breakpoint
-ALTER TABLE "bb_user" ADD COLUMN "createdAt" timestamp DEFAULT now();--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "bb_audit_event" ADD CONSTRAINT "bb_audit_event_organisationId_bb_organisation_id_fk" FOREIGN KEY ("organisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
@@ -234,6 +313,48 @@ END $$;
 --> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "bb_audit_event" ADD CONSTRAINT "bb_audit_event_userId_bb_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."bb_user"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_bids" ADD CONSTRAINT "bb_bids_listingId_bb_waste_listing_id_fk" FOREIGN KEY ("listingId") REFERENCES "public"."bb_waste_listing"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_bids" ADD CONSTRAINT "bb_bids_userId_bb_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."bb_user"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_bids" ADD CONSTRAINT "bb_bids_organisationId_bb_organisation_id_fk" FOREIGN KEY ("organisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_carrier_assignment" ADD CONSTRAINT "bb_carrier_assignment_organisationId_bb_organisation_id_fk" FOREIGN KEY ("organisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_carrier_assignment" ADD CONSTRAINT "bb_carrier_assignment_listingId_bb_waste_listing_id_fk" FOREIGN KEY ("listingId") REFERENCES "public"."bb_waste_listing"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_carrier_assignment" ADD CONSTRAINT "bb_carrier_assignment_carrierOrganisationId_bb_organisation_id_fk" FOREIGN KEY ("carrierOrganisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_carrier_assignment" ADD CONSTRAINT "bb_carrier_assignment_assignedByOrganisationId_bb_organisation_id_fk" FOREIGN KEY ("assignedByOrganisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -371,6 +492,30 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
+ ALTER TABLE "bb_review" ADD CONSTRAINT "bb_review_reviewerId_bb_user_id_fk" FOREIGN KEY ("reviewerId") REFERENCES "public"."bb_user"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_review" ADD CONSTRAINT "bb_review_reviewedOrganisationId_bb_organisation_id_fk" FOREIGN KEY ("reviewedOrganisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_review" ADD CONSTRAINT "bb_review_listingId_bb_waste_listing_id_fk" FOREIGN KEY ("listingId") REFERENCES "public"."bb_waste_listing"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "bb_session" ADD CONSTRAINT "bb_session_userId_bb_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."bb_user"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
  ALTER TABLE "bb_support_ticket_message" ADD CONSTRAINT "bb_support_ticket_message_organisationId_bb_organisation_id_fk" FOREIGN KEY ("organisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
@@ -413,6 +558,12 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
+ ALTER TABLE "bb_user" ADD CONSTRAINT "bb_user_organisationId_bb_organisation_id_fk" FOREIGN KEY ("organisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
  ALTER TABLE "bb_waste_listing" ADD CONSTRAINT "bb_waste_listing_userId_bb_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."bb_user"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
@@ -449,6 +600,11 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "audit_event_org_idx" ON "bb_audit_event" USING btree ("organisationId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "bid_listing_idx" ON "bb_bids" USING btree ("listingId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "bid_org_idx" ON "bb_bids" USING btree ("organisationId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "carrier_listing_idx" ON "bb_carrier_assignment" USING btree ("listingId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "carrier_org_idx" ON "bb_carrier_assignment" USING btree ("carrierOrganisationId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "carrier_assignment_org_idx" ON "bb_carrier_assignment" USING btree ("organisationId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "incident_status_idx" ON "bb_incident" USING btree ("status");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "incident_assignment_idx" ON "bb_incident" USING btree ("assignmentId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "incident_listing_idx" ON "bb_incident" USING btree ("listingId");--> statement-breakpoint
@@ -463,59 +619,14 @@ CREATE INDEX IF NOT EXISTS "template_section_idx" ON "bb_listing_template_sectio
 CREATE INDEX IF NOT EXISTS "template_org_idx" ON "bb_listing_template" USING btree ("organisationId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "notification_org_idx" ON "bb_notification" USING btree ("organisationId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "subscription_org_idx" ON "bb_organisation_subscription" USING btree ("organisationId");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "password_token_unique" ON "bb_passwordResetToken" USING btree ("token");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "payment_invoice_idx" ON "bb_payment" USING btree ("invoiceId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "support_ticket_message_org_idx" ON "bb_support_ticket_message" USING btree ("organisationId");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "user_profile_unique" ON "bb_user_profile" USING btree ("userId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "listing_org_idx" ON "bb_waste_listing" USING btree ("organisationId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "listing_user_idx" ON "bb_waste_listing" USING btree ("userId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "listing_archived_idx" ON "bb_waste_listing" USING btree ("archived");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "listing_status_idx" ON "bb_waste_listing" USING btree ("status");--> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "bb_bids" ADD CONSTRAINT "bb_bids_listingId_bb_waste_listing_id_fk" FOREIGN KEY ("listingId") REFERENCES "public"."bb_waste_listing"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "bb_carrier_assignment" ADD CONSTRAINT "bb_carrier_assignment_organisationId_bb_organisation_id_fk" FOREIGN KEY ("organisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "bb_carrier_assignment" ADD CONSTRAINT "bb_carrier_assignment_listingId_bb_waste_listing_id_fk" FOREIGN KEY ("listingId") REFERENCES "public"."bb_waste_listing"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "bb_review" ADD CONSTRAINT "bb_review_reviewedOrganisationId_bb_organisation_id_fk" FOREIGN KEY ("reviewedOrganisationId") REFERENCES "public"."bb_organisation"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "bb_review" ADD CONSTRAINT "bb_review_listingId_bb_waste_listing_id_fk" FOREIGN KEY ("listingId") REFERENCES "public"."bb_waste_listing"("id") ON DELETE set null ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "bid_listing_idx" ON "bb_bids" USING btree ("listingId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "bid_org_idx" ON "bb_bids" USING btree ("organisationId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "carrier_listing_idx" ON "bb_carrier_assignment" USING btree ("listingId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "carrier_org_idx" ON "bb_carrier_assignment" USING btree ("carrierOrganisationId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "carrier_assignment_org_idx" ON "bb_carrier_assignment" USING btree ("organisationId");--> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "password_token_unique" ON "bb_passwordResetToken" USING btree ("token");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "user_email_unique" ON "bb_user" USING btree ("email");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "user_org_idx" ON "bb_user" USING btree ("organisationId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "user_role_idx" ON "bb_user" USING btree ("role");--> statement-breakpoint
-ALTER TABLE "bb_bids" DROP COLUMN IF EXISTS "itemId";--> statement-breakpoint
-ALTER TABLE "bb_bids" DROP COLUMN IF EXISTS "companyName";--> statement-breakpoint
-ALTER TABLE "bb_bids" DROP COLUMN IF EXISTS "emailAddress";--> statement-breakpoint
-ALTER TABLE "bb_bids" DROP COLUMN IF EXISTS "itemName";--> statement-breakpoint
-ALTER TABLE "bb_carrier_assignment" DROP COLUMN IF EXISTS "itemId";--> statement-breakpoint
-ALTER TABLE "bb_review" DROP COLUMN IF EXISTS "organisationId";--> statement-breakpoint
-ALTER TABLE "bb_review" DROP COLUMN IF EXISTS "reviewText";--> statement-breakpoint
-ALTER TABLE "bb_review" DROP COLUMN IF EXISTS "timestamp";--> statement-breakpoint
-ALTER TABLE "bb_user" DROP COLUMN IF EXISTS "password";--> statement-breakpoint
-ALTER TABLE "bb_user" DROP COLUMN IF EXISTS "confirmPassword";
+CREATE INDEX IF NOT EXISTS "listing_org_idx" ON "bb_waste_listing" USING btree ("organisationId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "listing_user_idx" ON "bb_waste_listing" USING btree ("userId");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "listing_archived_idx" ON "bb_waste_listing" USING btree ("archived");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "listing_status_idx" ON "bb_waste_listing" USING btree ("status");

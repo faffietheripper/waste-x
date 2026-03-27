@@ -13,11 +13,17 @@ export async function submitForgotPassword(formData: FormData) {
   }
 
   const resetToken = randomUUID();
-  const resetLink = `http://localhost:3000/reset-password?token=${resetToken}`;
+
+  const baseUrl =
+    process.env.APP_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "http://localhost:3000";
+
+  const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+
   const tokenExpiration = add(new Date(), { hours: 1 });
 
   try {
-    // Store the reset token in the database
     await database.insert(passwordResetTokens).values({
       email,
       token: resetToken,
@@ -25,10 +31,9 @@ export async function submitForgotPassword(formData: FormData) {
       used: false,
     });
 
-    console.log("Token successfully stored in the database.");
     return {
       success: true,
-      resetLink, // Pass the reset link back to the client
+      resetLink,
       message: "If the email exists, a reset link has been generated.",
     };
   } catch (error) {

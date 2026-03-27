@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1731909870337,
-      "tag": "0000_hot_talos",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1770069561363,
-      "tag": "0001_nervous_magus",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1773178482322,
-      "tag": "0002_slow_moon_knight",
+      "when": 1774629925471,
+      "tag": "0000_yielding_xorn",
       "breakpoints": true
     }
   ]
