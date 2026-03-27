@@ -6,12 +6,14 @@ import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import crypto from "crypto";
 import { z } from "zod";
+import { sendRegEmail } from "@/util/sendRegEmail";
 
 /* =========================================================
    TYPES
 ========================================================= */
 
 export type UserRole = "administrator" | "employee" | "seniorManagement";
+type ActionResponse = { success: true } | { success: false; message: string };
 
 export type InviteFormData = {
   name: string;
@@ -163,6 +165,92 @@ export async function registerTeamUser(
     return {
       success: false,
       message: error.message || "Failed to invite user",
+    };
+  }
+}
+
+export async function revokeInvite(userId: string) {
+  try {
+    await database
+      .update(users)
+      .set({
+        inviteToken: null,
+        inviteExpiry: null,
+        status: "SUSPENDED", // or keep INVITED but revoked
+      })
+      .where(eq(users.id, userId));
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, message: err.message };
+  }
+}
+
+/* =========================================================
+   RESEND INVITE
+========================================================= */
+
+export async function resendInvite(userId: string): Promise<ActionResponse> {
+  try {
+    /* ---------------- FIND USER ---------------- */
+    const user = await database.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!user) {
+      return { success: false, message: "User not found." };
+    }
+
+    if (user.status === "ACTIVE") {
+      return {
+        success: false,
+        message: "User already active.",
+      };
+    }
+
+    /* ---------------- GENERATE TOKEN ---------------- */
+    const rawToken = crypto.randomBytes(32).toString("hex");
+
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+    const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
+
+    console.log("📨 RESEND TOKEN:", rawToken);
+
+    /* ---------------- UPDATE USER ---------------- */
+    await database
+      .update(users)
+      .set({
+        inviteToken: hashedToken,
+        inviteExpiry: expiry,
+      })
+      .where(eq(users.id, userId));
+
+    /* ---------------- SEND EMAIL ---------------- */
+    const emailRes = await sendRegEmail({
+      name: user.name,
+      email: user.email,
+      token: rawToken,
+    });
+
+    if (!emailRes.success) {
+      return {
+        success: false,
+        message: "Invite created but email failed to send.",
+      };
+    }
+
+    console.log("✅ INVITE RESENT:", user.email);
+
+    return { success: true };
+  } catch (err: any) {
+    console.error("❌ resendInvite error:", err);
+    return {
+      success: false,
+      message: err.message || "Failed to resend invite.",
     };
   }
 }

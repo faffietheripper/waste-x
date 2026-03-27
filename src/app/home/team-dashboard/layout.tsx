@@ -5,7 +5,6 @@ import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import TeamNav from "@/components/app/TeamDashboard/TeamNav";
 import { redirect } from "next/navigation";
-import TeamDashboardClient from "@/components/app/TeamDashboard/TeamDashboardClient";
 
 export default async function Layout({
   children,
@@ -37,9 +36,7 @@ export default async function Layout({
     <div className="relative">
       <TeamNav userRole={userRole} chainOfCustody={chainOfCustody} />
 
-      <TeamDashboardClient userRole={userRole}>
-        <div className="pl-[24vw] p-10 pt-56">{children}</div>
-      </TeamDashboardClient>
+      <div className="pl-[24vw] p-10 pt-56">{children}</div>
     </div>
   );
 }

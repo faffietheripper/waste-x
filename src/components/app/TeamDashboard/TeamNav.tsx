@@ -217,6 +217,9 @@ const SettingsDropdown = () => {
           <Link href="/home/team-dashboard/team-profile">
             <Option Icon={FiEdit} text="Team Profile" setOpen={setOpen} />
           </Link>
+          <Link href="/home/team-dashboard/team-management">
+            <Option Icon={FiEdit} text="Team Management" setOpen={setOpen} />
+          </Link>
         </motion.ul>
       )}
     </motion.div>

@@ -4,11 +4,11 @@ import { database } from "@/db/database";
 import {
   users,
   organisations,
-  wasteListings, // ✅ renamed
+  wasteListings,
   carrierAssignments,
   notifications,
 } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import Link from "next/link";
 
 export default async function AppHome() {
@@ -40,10 +40,11 @@ export default async function AppHome() {
     where: eq(organisations.id, dbUser.organisationId),
   });
 
-  // ===== METRICS =====
+  /* ===============================
+     DATA
+  ============================== */
 
   const orgListings = await database.query.wasteListings.findMany({
-    // ✅ renamed
     where: eq(wasteListings.organisationId, dbUser.organisationId),
   });
 
@@ -54,16 +55,44 @@ export default async function AppHome() {
     ),
   });
 
-  const unreadNotifications = await database.query.notifications.findMany({
-    where: and(
-      eq(notifications.recipientId, session.user.id), // ✅ renamed
-      eq(notifications.isRead, false),
-    ),
+  const orgUsers = await database.query.users.findMany({
+    where: eq(users.organisationId, dbUser.organisationId),
   });
 
-  const activeJobs = orgListings.filter((i) => !i.archived); // ✅ renamed variable
+  const orgNotifications = await database.query.notifications.findMany({
+    where: eq(notifications.recipientId, session.user.id),
+  });
+
+  /* ===============================
+     SNAPSHOT METRICS
+  ============================== */
+
+  const activeListings = orgListings.filter((l) => !l.archived);
+  const assignedJobs = orgAssignments.filter(
+    (a) => a.status === "pending" || a.status === "accepted",
+  );
   const collectedJobs = orgAssignments.filter((a) => a.status === "collected");
   const completedJobs = orgAssignments.filter((a) => a.status === "completed");
+
+  /* ===============================
+     RECENT DATA
+  ============================== */
+
+  const recentAssignments = orgAssignments
+    .sort(
+      (a, b) =>
+        new Date(b.assignedAt ?? 0).getTime() -
+        new Date(a.assignedAt ?? 0).getTime(),
+    )
+    .slice(0, 5);
+
+  const recentNotifications = orgNotifications
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt ?? 0).getTime() -
+        new Date(a.createdAt ?? 0).getTime(),
+    )
+    .slice(0, 5);
 
   return (
     <div className="p-8 space-y-10 pl-[24vw] pt-32">
@@ -76,134 +105,91 @@ export default async function AppHome() {
         </p>
       </div>
 
-      {/* KPI GRID */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <DashboardCard
-          title="Active Jobs"
-          value={activeJobs.length}
-          href="/home/items"
-        />
-        <DashboardCard
-          title="Collected (Awaiting Completion)"
-          value={collectedJobs.length}
-          href="/home/carrier-hub/job-assignments"
-        />
+      {/* KPI SNAPSHOT */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+        <DashboardCard title="Active Listings" value={activeListings.length} />
+        <DashboardCard title="Assigned Jobs" value={assignedJobs.length} />
+        <DashboardCard title="Collected Jobs" value={collectedJobs.length} />
         <DashboardCard
           title="Completed Transfers"
           value={completedJobs.length}
-          href="/home/carrier-hub/job-assignments"
         />
-        <DashboardCard
-          title="Unread Notifications"
-          value={unreadNotifications.length}
-          href="/home/notifications"
-        />
+        <DashboardCard title="Team Members" value={orgUsers.length} />
       </div>
 
       {/* MAIN GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* LEFT */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* ASSIGNMENTS */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border">
           <h2 className="text-lg font-semibold mb-6">
             Recent Assignment Activity
           </h2>
 
-          {orgAssignments.length === 0 && (
+          {recentAssignments.length === 0 && (
             <p className="text-gray-500 text-sm">No assignment activity yet.</p>
           )}
 
           <div className="space-y-4">
-            {orgAssignments
-              .sort(
-                (a, b) =>
-                  new Date(b.assignedAt ?? 0).getTime() -
-                  new Date(a.assignedAt ?? 0).getTime(),
-              )
-              .slice(0, 5)
-              .map((assignment) => (
-                <div
-                  key={assignment.id}
-                  className="flex justify-between items-center border-b pb-3"
-                >
-                  <div>
-                    <div className="font-medium text-sm">
-                      Job #{assignment.listingId} {/* ✅ renamed */}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      Assigned {assignment.assignedAt?.toLocaleDateString()}
-                    </div>
+            {recentAssignments.map((assignment) => (
+              <div
+                key={assignment.id}
+                className="flex justify-between items-center border-b pb-3"
+              >
+                <div>
+                  <div className="font-medium text-sm">
+                    Job #{assignment.listingId}
                   </div>
-
-                  <StatusBadge status={assignment.status} />
+                  <div className="text-xs text-gray-500">
+                    {assignment.assignedAt?.toLocaleDateString()}
+                  </div>
                 </div>
-              ))}
+
+                <StatusBadge status={assignment.status} />
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* RIGHT */}
-        <div className="space-y-6">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border">
-            <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
+        {/* NOTIFICATIONS */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border">
+          <h2 className="text-lg font-semibold mb-6">Live Notifications</h2>
 
-            <div className="flex flex-col gap-3 text-sm">
-              <Link
-                href="/home/items/new"
-                className="bg-blue-600 text-white px-4 py-2 rounded-md text-center"
+          {recentNotifications.length === 0 && (
+            <p className="text-gray-500 text-sm">No notifications yet.</p>
+          )}
+
+          <div className="space-y-4">
+            {recentNotifications.map((note) => (
+              <div
+                key={note.id}
+                className={`p-3 rounded-md border ${
+                  note.isRead ? "bg-gray-50" : "bg-blue-50 border-blue-200"
+                }`}
               >
-                + Create Waste Listing
-              </Link>
-
-              <Link
-                href="/home/carrier-hub"
-                className="border px-4 py-2 rounded-md text-center"
-              >
-                Manage Carrier Assignments
-              </Link>
-
-              <Link
-                href="/home/notifications"
-                className="border px-4 py-2 rounded-md text-center"
-              >
-                View Notifications
-              </Link>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl shadow-sm border">
-            <h2 className="text-lg font-semibold mb-4">Industry Updates</h2>
-            <ul className="text-sm space-y-3">
-              <li>♻️ UK Digital Waste Tracking rollout expanding</li>
-              <li>🚛 Transport emissions compliance tightening in 2026</li>
-              <li>📦 Circular economy funding increasing across Europe</li>
-            </ul>
+                <p className="text-sm font-medium">{note.title}</p>
+                <p className="text-xs text-gray-500">{note.message}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
+      {/* FOOTER */}
       <div className="bg-gray-50 p-4 rounded-xl border text-xs text-gray-500 text-center">
-        Secure Chain of Custody Active · All Systems Operational
+        Waste X Infrastructure · Operational Overview
       </div>
     </div>
   );
 }
 
-function DashboardCard({
-  title,
-  value,
-  href,
-}: {
-  title: string;
-  value: number;
-  href: string;
-}) {
+/* ================= COMPONENTS ================= */
+
+function DashboardCard({ title, value }: { title: string; value: number }) {
   return (
-    <Link
-      href={href}
-      className="bg-white p-6 rounded-2xl shadow-sm border hover:shadow-md transition"
-    >
+    <div className="bg-white p-6 rounded-2xl shadow-sm border text-center">
       <div className="text-sm text-gray-500">{title}</div>
       <div className="text-3xl font-bold mt-2">{value}</div>
-    </Link>
+    </div>
   );
 }
 
@@ -211,13 +197,14 @@ function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     pending: "bg-yellow-100 text-yellow-700",
     accepted: "bg-blue-100 text-blue-700",
+    collected: "bg-purple-100 text-purple-700",
     completed: "bg-green-100 text-green-700",
     rejected: "bg-red-100 text-red-700",
   };
 
   return (
     <span
-      className={`inline-block px-3 py-1 text-xs font-medium rounded-full ${
+      className={`px-3 py-1 text-xs rounded-full ${
         styles[status] ?? "bg-gray-100 text-gray-700"
       }`}
     >

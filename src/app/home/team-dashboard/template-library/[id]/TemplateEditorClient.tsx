@@ -183,150 +183,175 @@ export default function TemplateEditorClient({ template }: { template: any }) {
   }
 
   return (
-    <div className="h-screen flex bg-gray-900 text-gray-200">
-      {/* LEFT PANEL */}
-      <div className="w-1/4 border-r border-gray-800 p-6">
-        <div className="flex justify-between mb-6">
-          <h2 className="text-sm uppercase text-gray-400">Sections</h2>
+    <>
+      <div className="mb-6 border border-orange-500/30 bg-orange-500/10 p-4 rounded-md">
+        <p className="text-xs text-orange-400 font-semibold mb-2">
+          ⚠️ Waste Listing System Fields
+        </p>
 
-          {!template.isLocked && (
-            <button
-              onClick={() => setShowAddSection(true)}
-              className="text-xs text-orange-400"
+        <p className="text-xs text-black leading-relaxed">
+          Waste X already includes core fields for all listings. You do{" "}
+          <strong>not</strong> need to add these manually in your template:
+        </p>
+
+        <ul className="mt-2 text-xs text-black list-disc list-inside space-y-1">
+          <li>Project Name</li>
+          <li>Location</li>
+          <li>Starting Price</li>
+          <li>End Date</li>
+          <li>File Uploads</li>
+        </ul>
+
+        <p className="mt-3 text-xs text-neutral-500">
+          Use templates only for <strong>waste-specific data</strong>{" "}
+          (materials, contamination, handling requirements, etc).
+        </p>
+      </div>
+      <div className="h-screen flex bg-gray-900 text-gray-200">
+        {/* LEFT PANEL */}
+        <div className="w-1/4 border-r border-gray-800 p-6">
+          <div className="flex justify-between mb-6">
+            <h2 className="text-sm uppercase text-gray-400">Sections</h2>
+
+            {!template.isLocked && (
+              <button
+                onClick={() => setShowAddSection(true)}
+                className="text-xs text-orange-400"
+              >
+                + Add
+              </button>
+            )}
+          </div>
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleSectionDragEnd}
+          >
+            <SortableContext
+              items={orderedSections.map((s) => s.id)}
+              strategy={verticalListSortingStrategy}
             >
-              + Add
-            </button>
-          )}
+              {orderedSections.map((section) => (
+                <SortableSection
+                  key={section.id}
+                  section={section}
+                  template={template}
+                  onAddField={setShowAddFieldForSection}
+                  onDeleteSection={deleteSection}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
         </div>
 
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleSectionDragEnd}
-        >
-          <SortableContext
-            items={orderedSections.map((s) => s.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            {orderedSections.map((section) => (
-              <SortableSection
-                key={section.id}
-                section={section}
-                template={template}
-                onAddField={setShowAddFieldForSection}
-                onDeleteSection={deleteSection}
-              />
-            ))}
-          </SortableContext>
-        </DndContext>
-      </div>
+        {/* CENTER PANEL */}
+        <div className="w-2/4 p-8 overflow-y-auto">
+          <div className="flex justify-between items-center mb-8">
+            <h1 className="text-xl font-semibold">{template.name}</h1>
 
-      {/* CENTER PANEL */}
-      <div className="w-2/4 p-8 overflow-y-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-xl font-semibold">{template.name}</h1>
+            <button
+              onClick={async () => {
+                const { toggleTemplateLock } =
+                  await import("@/app/home/team-dashboard/template-library/actions");
 
-          <button
-            onClick={async () => {
-              const { toggleTemplateLock } =
+                await toggleTemplateLock(template.id);
+                router.refresh();
+              }}
+              className={`px-4 py-2 text-sm rounded ${
+                template.isLocked
+                  ? "bg-red-600 hover:bg-red-700"
+                  : "bg-orange-600 hover:bg-orange-700"
+              }`}
+            >
+              {template.isLocked ? "Unlock Template" : "Lock Template"}
+            </button>
+          </div>
+
+          {orderedSections.map((section) => {
+            const orderedFields = [...section.fields].sort(
+              (a: any, b: any) => a.orderIndex - b.orderIndex,
+            );
+
+            async function handleFieldDragEnd(event: any) {
+              const { active, over } = event;
+              if (!over || active.id === over.id) return;
+
+              const oldIndex = orderedFields.findIndex(
+                (f: any) => f.id === active.id,
+              );
+              const newIndex = orderedFields.findIndex(
+                (f: any) => f.id === over.id,
+              );
+
+              const newOrder = arrayMove(orderedFields, oldIndex, newIndex);
+
+              const { reorderFields } =
                 await import("@/app/home/team-dashboard/template-library/actions");
 
-              await toggleTemplateLock(template.id);
+              await reorderFields(
+                section.id,
+                newOrder.map((f: any) => f.id),
+              );
+
               router.refresh();
-            }}
-            className={`px-4 py-2 text-sm rounded ${
-              template.isLocked
-                ? "bg-red-600 hover:bg-red-700"
-                : "bg-orange-600 hover:bg-orange-700"
-            }`}
-          >
-            {template.isLocked ? "Unlock Template" : "Lock Template"}
-          </button>
+            }
+
+            return (
+              <div key={section.id} className="mb-10">
+                <h3 className="text-sm uppercase text-gray-500 mb-4">
+                  {section.title}
+                </h3>
+
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleFieldDragEnd}
+                >
+                  <SortableContext
+                    items={orderedFields.map((f: any) => f.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {orderedFields.map((field: any) => (
+                      <SortableField
+                        key={field.id}
+                        field={field}
+                        template={template}
+                        onDeleteField={deleteField}
+                        onSelect={setSelectedField}
+                      />
+                    ))}
+                  </SortableContext>
+                </DndContext>
+              </div>
+            );
+          })}
         </div>
 
-        {orderedSections.map((section) => {
-          const orderedFields = [...section.fields].sort(
-            (a: any, b: any) => a.orderIndex - b.orderIndex,
-          );
+        {/* RIGHT PANEL */}
+        {selectedField && !template.isLocked && (
+          <FieldSettingsPanel
+            field={selectedField}
+            onClose={() => setSelectedField(null)}
+          />
+        )}
 
-          async function handleFieldDragEnd(event: any) {
-            const { active, over } = event;
-            if (!over || active.id === over.id) return;
+        {/* MODALS */}
+        {showAddSection && !template.isLocked && (
+          <AddSectionModal
+            templateId={template.id}
+            onClose={() => setShowAddSection(false)}
+          />
+        )}
 
-            const oldIndex = orderedFields.findIndex(
-              (f: any) => f.id === active.id,
-            );
-            const newIndex = orderedFields.findIndex(
-              (f: any) => f.id === over.id,
-            );
-
-            const newOrder = arrayMove(orderedFields, oldIndex, newIndex);
-
-            const { reorderFields } =
-              await import("@/app/home/team-dashboard/template-library/actions");
-
-            await reorderFields(
-              section.id,
-              newOrder.map((f: any) => f.id),
-            );
-
-            router.refresh();
-          }
-
-          return (
-            <div key={section.id} className="mb-10">
-              <h3 className="text-sm uppercase text-gray-500 mb-4">
-                {section.title}
-              </h3>
-
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragEnd={handleFieldDragEnd}
-              >
-                <SortableContext
-                  items={orderedFields.map((f: any) => f.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  {orderedFields.map((field: any) => (
-                    <SortableField
-                      key={field.id}
-                      field={field}
-                      template={template}
-                      onDeleteField={deleteField}
-                      onSelect={setSelectedField}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-            </div>
-          );
-        })}
+        {showAddFieldForSection && !template.isLocked && (
+          <AddFieldModal
+            templateId={template.id}
+            sectionId={showAddFieldForSection}
+            onClose={() => setShowAddFieldForSection(null)}
+          />
+        )}
       </div>
-
-      {/* RIGHT PANEL */}
-      {selectedField && !template.isLocked && (
-        <FieldSettingsPanel
-          field={selectedField}
-          onClose={() => setSelectedField(null)}
-        />
-      )}
-
-      {/* MODALS */}
-      {showAddSection && !template.isLocked && (
-        <AddSectionModal
-          templateId={template.id}
-          onClose={() => setShowAddSection(false)}
-        />
-      )}
-
-      {showAddFieldForSection && !template.isLocked && (
-        <AddFieldModal
-          templateId={template.id}
-          sectionId={showAddFieldForSection}
-          onClose={() => setShowAddFieldForSection(null)}
-        />
-      )}
-    </div>
+    </>
   );
 }

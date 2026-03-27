@@ -176,7 +176,7 @@ export const users = pgTable(
     inviteToken: text("inviteToken"),
     inviteExpiry: timestamp("inviteExpiry", { mode: "date" }),
     status: text("status")
-      .$type<"INVITED" | "ACTIVE">()
+      .$type<"INVITED" | "ACTIVE" | "SUSPENDED">()
       .notNull()
       .default("INVITED"),
   },

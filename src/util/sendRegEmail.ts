@@ -1,5 +1,4 @@
 // utils/sendRegEmail.ts
-"use client";
 
 import emailjs from "@emailjs/browser";
 
