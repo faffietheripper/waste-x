@@ -9,6 +9,7 @@ import {
   reviews,
 } from "@/db/schema";
 import { desc, eq, ilike, or, sql } from "drizzle-orm";
+import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 
 /* =========================================
    GET ALL ORGANISATIONS (WITH SEARCH)
@@ -24,6 +25,7 @@ export async function getAllOrganisations(search?: string) {
       telephone: organisations.telephone,
       country: organisations.country,
       createdAt: organisations.createdAt,
+      status: organisations.status, // ✅ IMPORTANT
 
       memberCount: sql<number>`count(distinct ${users.id})`,
       listingsCount: sql<number>`count(distinct ${wasteListings.id})`,
@@ -51,6 +53,7 @@ export async function getAllOrganisations(search?: string) {
 
   return query.orderBy(desc(organisations.createdAt));
 }
+
 /* =========================================
    GET SINGLE ORGANISATION
 ========================================= */
@@ -69,6 +72,7 @@ export async function getOrganisationById(orgId: string) {
       postCode: organisations.postCode,
       streetAddress: organisations.streetAddress,
       createdAt: organisations.createdAt,
+      status: organisations.status,
 
       memberCount: sql<number>`count(distinct ${users.id})`,
       listingsCount: sql<number>`count(distinct ${wasteListings.id})`,
@@ -87,4 +91,36 @@ export async function getOrganisationById(orgId: string) {
     .groupBy(organisations.id);
 
   return org;
+}
+
+/* =========================================
+   APPROVE ORGANISATION
+========================================= */
+
+export async function approveOrganisation(formData: FormData) {
+  await requirePlatformAdmin();
+
+  const orgId = formData.get("orgId")?.toString();
+  if (!orgId) throw new Error("Missing organisation ID");
+
+  await database
+    .update(organisations)
+    .set({ status: "ACTIVE" })
+    .where(eq(organisations.id, orgId));
+}
+
+/* =========================================
+   REJECT ORGANISATION
+========================================= */
+
+export async function rejectOrganisation(formData: FormData) {
+  await requirePlatformAdmin();
+
+  const orgId = formData.get("orgId")?.toString();
+  if (!orgId) throw new Error("Missing organisation ID");
+
+  await database
+    .update(organisations)
+    .set({ status: "REJECTED" })
+    .where(eq(organisations.id, orgId));
 }

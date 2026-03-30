@@ -49,6 +49,11 @@ export const organisations = pgTable("bb_organisation", {
   trialEndsAt: timestamp("trialEndsAt", { mode: "date" }),
 
   billingEmail: text("billingEmail"),
+  status: text("status")
+    .$type<"PENDING" | "ACTIVE" | "REJECTED" | "SUSPENDED">()
+    .default("PENDING"),
+
+  approvedAt: timestamp("approvedAt", { mode: "date" }),
 });
 
 export const organisationSubscriptions = pgTable(

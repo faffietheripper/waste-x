@@ -6,6 +6,7 @@ import { auth, signOut } from "@/auth";
 import { getSignedUrlForS3Object } from "@/lib/s3";
 import { eq } from "drizzle-orm";
 import type { ChainOfCustodyType } from "@/util/types";
+import { redirect } from "next/navigation";
 
 /* =========================================================
    S3 UPLOAD URL GENERATOR
@@ -108,53 +109,67 @@ export async function saveProfileAction(formData: FormData) {
       .update(organisations)
       .set(updateData)
       .where(eq(organisations.id, existingOrgId));
-  } else {
-    /* ===============================
-       CREATE NEW ORG
-    ============================== */
 
-    if (
-      !teamName ||
-      !telephone ||
-      !emailAddress ||
-      !country ||
-      !streetAddress ||
-      !city ||
-      !region ||
-      !postCode
-    ) {
-      throw new Error("Missing required organisation fields.");
-    }
-
-    const [newOrg] = await database
-      .insert(organisations)
-      .values({
-        teamName,
-        profilePicture,
-        chainOfCustody,
-        industry,
-        telephone,
-        emailAddress,
-        country,
-        streetAddress,
-        city,
-        region,
-        postCode,
-      })
-      .returning();
-
-    await database
-      .update(users)
-      .set({
-        organisationId: newOrg.id,
-        role: "administrator",
-      })
-      .where(eq(users.id, userId));
+    return { success: true };
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  /* ===============================
+     CREATE NEW ORG (WITH APPROVAL)
+  ============================== */
 
-  await signOut({ redirectTo: "/login" });
+  if (
+    !teamName ||
+    !telephone ||
+    !emailAddress ||
+    !country ||
+    !streetAddress ||
+    !city ||
+    !region ||
+    !postCode
+  ) {
+    throw new Error("Missing required organisation fields.");
+  }
+
+  const [newOrg] = await database
+    .insert(organisations)
+    .values({
+      teamName,
+      profilePicture,
+      chainOfCustody,
+      industry,
+      telephone,
+      emailAddress,
+      country,
+      streetAddress,
+      city,
+      region,
+      postCode,
+
+      // 🔥 ONBOARDING CONTROL
+      status: "PENDING",
+
+      // optional but useful
+      createdAt: new Date(),
+    })
+    .returning();
+
+  /* ===============================
+     LINK USER AS ADMIN
+  ============================== */
+
+  await database
+    .update(users)
+    .set({
+      organisationId: newOrg.id,
+      role: "administrator",
+    })
+    .where(eq(users.id, userId));
+
+  /* ===============================
+     REDIRECT TO PENDING STATE
+  ============================== */
+
+  redirect("/onboarding/pending");
 }
 
 /* =========================================================
