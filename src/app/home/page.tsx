@@ -1,13 +1,7 @@
 import React from "react";
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import {
-  users,
-  organisations,
-  wasteListings,
-  carrierAssignments,
-  notifications,
-} from "@/db/schema";
+import { users, organisations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 
@@ -19,196 +13,208 @@ export default async function AppHome() {
     where: eq(users.id, session.user.id),
   });
 
-  if (!dbUser?.organisationId) {
+  const organisation = dbUser?.organisationId
+    ? await database.query.organisations.findFirst({
+        where: eq(organisations.id, dbUser.organisationId),
+      })
+    : null;
+
+  /* ===============================
+     NO ORG STATE
+  ============================== */
+
+  if (!organisation) {
     return (
-      <div className="p-96">
-        <h1 className="text-2xl font-semibold mb-4">Welcome 👋</h1>
-        <p className="mb-6 text-gray-600">
-          You need to create your organisation before accessing the dashboard.
-        </p>
-        <Link
-          href="/home/team-dashboard"
-          className="bg-blue-600 text-white px-6 py-3 rounded-md"
-        >
-          Create Organisation
-        </Link>
+      <div className="p-8 pl-[24vw] pt-32 space-y-10">
+        <Hero name={dbUser?.name} />
+
+        <InfoSection />
+
+        <CreateOrgCTA />
       </div>
     );
   }
 
-  const organisation = await database.query.organisations.findFirst({
-    where: eq(organisations.id, dbUser.organisationId),
-  });
-
   /* ===============================
-     DATA
+     ORG EXISTS → INFO DASHBOARD
   ============================== */
-
-  const orgListings = await database.query.wasteListings.findMany({
-    where: eq(wasteListings.organisationId, dbUser.organisationId),
-  });
-
-  const orgAssignments = await database.query.carrierAssignments.findMany({
-    where: eq(
-      carrierAssignments.assignedByOrganisationId,
-      dbUser.organisationId,
-    ),
-  });
-
-  const orgUsers = await database.query.users.findMany({
-    where: eq(users.organisationId, dbUser.organisationId),
-  });
-
-  const orgNotifications = await database.query.notifications.findMany({
-    where: eq(notifications.recipientId, session.user.id),
-  });
-
-  /* ===============================
-     SNAPSHOT METRICS
-  ============================== */
-
-  const activeListings = orgListings.filter((l) => !l.archived);
-  const assignedJobs = orgAssignments.filter(
-    (a) => a.status === "pending" || a.status === "accepted",
-  );
-  const collectedJobs = orgAssignments.filter((a) => a.status === "collected");
-  const completedJobs = orgAssignments.filter((a) => a.status === "completed");
-
-  /* ===============================
-     RECENT DATA
-  ============================== */
-
-  const recentAssignments = orgAssignments
-    .sort(
-      (a, b) =>
-        new Date(b.assignedAt ?? 0).getTime() -
-        new Date(a.assignedAt ?? 0).getTime(),
-    )
-    .slice(0, 5);
-
-  const recentNotifications = orgNotifications
-    .sort(
-      (a, b) =>
-        new Date(b.createdAt ?? 0).getTime() -
-        new Date(a.createdAt ?? 0).getTime(),
-    )
-    .slice(0, 5);
 
   return (
-    <div className="p-8 space-y-10 pl-[24vw] pt-32">
-      {/* HEADER */}
-      <div className="bg-gradient-to-r from-indigo-600 to-blue-700 text-white p-8 rounded-2xl shadow-xl">
-        <h1 className="text-3xl font-bold mb-2">Welcome back, {dbUser.name}</h1>
-        <p className="text-sm opacity-90">{organisation?.teamName}</p>
-        <p className="text-sm opacity-75">
-          {organisation?.city}, {organisation?.country}
-        </p>
-      </div>
+    <div className="p-8 pl-[24vw] pt-32 space-y-10">
+      <Hero name={dbUser?.name} org={organisation.teamName} />
 
-      {/* KPI SNAPSHOT */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-        <DashboardCard title="Active Listings" value={activeListings.length} />
-        <DashboardCard title="Assigned Jobs" value={assignedJobs.length} />
-        <DashboardCard title="Collected Jobs" value={collectedJobs.length} />
-        <DashboardCard
-          title="Completed Transfers"
-          value={completedJobs.length}
-        />
-        <DashboardCard title="Team Members" value={orgUsers.length} />
-      </div>
+      <InfoSection />
 
-      {/* MAIN GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* ASSIGNMENTS */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border">
-          <h2 className="text-lg font-semibold mb-6">
-            Recent Assignment Activity
-          </h2>
+      <QuickLinks />
 
-          {recentAssignments.length === 0 && (
-            <p className="text-gray-500 text-sm">No assignment activity yet.</p>
-          )}
+      <GettingStarted chain={organisation.chainOfCustody} />
+    </div>
+  );
+}
 
-          <div className="space-y-4">
-            {recentAssignments.map((assignment) => (
-              <div
-                key={assignment.id}
-                className="flex justify-between items-center border-b pb-3"
-              >
-                <div>
-                  <div className="font-medium text-sm">
-                    Job #{assignment.listingId}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {assignment.assignedAt?.toLocaleDateString()}
-                  </div>
-                </div>
+/* ===============================
+   HERO
+============================== */
 
-                <StatusBadge status={assignment.status} />
-              </div>
-            ))}
-          </div>
-        </div>
+function Hero({ name, org }: { name?: string; org?: string }) {
+  return (
+    <div className="bg-gradient-to-r from-indigo-600 to-blue-700 text-white p-8 rounded-2xl shadow-xl">
+      <h1 className="text-3xl font-bold mb-2">
+        Welcome to Waste X{name ? `, ${name}` : ""}
+      </h1>
 
-        {/* NOTIFICATIONS */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border">
-          <h2 className="text-lg font-semibold mb-6">Live Notifications</h2>
+      {org && <p className="text-sm opacity-90">Organisation: {org}</p>}
 
-          {recentNotifications.length === 0 && (
-            <p className="text-gray-500 text-sm">No notifications yet.</p>
-          )}
+      <p className="text-sm opacity-75 mt-2">
+        Digital infrastructure for waste tracking, compliance, and operational
+        execution.
+      </p>
+    </div>
+  );
+}
 
-          <div className="space-y-4">
-            {recentNotifications.map((note) => (
-              <div
-                key={note.id}
-                className={`p-3 rounded-md border ${
-                  note.isRead ? "bg-gray-50" : "bg-blue-50 border-blue-200"
-                }`}
-              >
-                <p className="text-sm font-medium">{note.title}</p>
-                <p className="text-xs text-gray-500">{note.message}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+/* ===============================
+   INFO SECTION
+============================== */
 
-      {/* FOOTER */}
-      <div className="bg-gray-50 p-4 rounded-xl border text-xs text-gray-500 text-center">
-        Waste X Infrastructure · Operational Overview
+function InfoSection() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* WHAT IS WASTE X */}
+      <Card title="What is Waste X?">
+        Waste X is a structured digital system designed to manage the full chain
+        of custody for waste — from generation through to final processing.
+      </Card>
+
+      {/* HOW IT WORKS */}
+      <Card title="How the System Works">
+        Waste X connects waste generators, managers, and carriers into a single
+        compliant workflow — ensuring traceability, accountability, and audit
+        readiness.
+      </Card>
+
+      {/* COMPLIANCE */}
+      <Card title="Compliance & Infrastructure">
+        Built to align with UK digital waste tracking initiatives, Waste X
+        provides audit-ready records and secure operational workflows.
+      </Card>
+    </div>
+  );
+}
+
+/* ===============================
+   QUICK LINKS
+============================== */
+
+function QuickLinks() {
+  return (
+    <div className="bg-white p-6 rounded-2xl shadow-sm border">
+      <h2 className="text-lg font-semibold mb-4">Resources</h2>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+        <a
+          href="https://www.wastextracking.com/"
+          target="_blank"
+          className="border p-4 rounded-lg hover:bg-gray-50 transition"
+        >
+          🌐 Business Website
+        </a>
+
+        <Link
+          href="/home/policies"
+          className="border p-4 rounded-lg hover:bg-gray-50 transition"
+        >
+          📜 Policies & Compliance
+        </Link>
+
+        <Link
+          href="/how-it-works"
+          className="border p-4 rounded-lg hover:bg-gray-50 transition"
+        >
+          ⚙️ How It Works
+        </Link>
       </div>
     </div>
   );
 }
 
-/* ================= COMPONENTS ================= */
+/* ===============================
+   GETTING STARTED
+============================== */
 
-function DashboardCard({ title, value }: { title: string; value: number }) {
+function GettingStarted({ chain }: { chain: string }) {
   return (
-    <div className="bg-white p-6 rounded-2xl shadow-sm border text-center">
-      <div className="text-sm text-gray-500">{title}</div>
-      <div className="text-3xl font-bold mt-2">{value}</div>
+    <div className="bg-white p-6 rounded-2xl shadow-sm border">
+      <h2 className="text-lg font-semibold mb-4">Getting Started</h2>
+
+      <div className="space-y-3 text-sm">
+        {chain === "wasteGenerator" && (
+          <>
+            <p>• Create and manage waste listings</p>
+            <p>• Review and accept bids</p>
+            <p>• Assign jobs to carriers</p>
+          </>
+        )}
+
+        {chain === "wasteManager" && (
+          <>
+            <p>• Browse and bid on listings</p>
+            <p>• Manage awarded jobs</p>
+            <p>• Complete and track transfers</p>
+          </>
+        )}
+
+        {chain === "wasteCarrier" && (
+          <>
+            <p>• View assigned jobs</p>
+            <p>• Confirm collection</p>
+            <p>• Complete waste transfers</p>
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-700",
-    accepted: "bg-blue-100 text-blue-700",
-    collected: "bg-purple-100 text-purple-700",
-    completed: "bg-green-100 text-green-700",
-    rejected: "bg-red-100 text-red-700",
-  };
+/* ===============================
+   CREATE ORG CTA
+============================== */
 
+function CreateOrgCTA() {
   return (
-    <span
-      className={`px-3 py-1 text-xs rounded-full ${
-        styles[status] ?? "bg-gray-100 text-gray-700"
-      }`}
-    >
-      {status}
-    </span>
+    <div className="bg-white p-10 rounded-2xl shadow-sm border text-center">
+      <h2 className="text-xl font-semibold mb-4">Get Started with Waste X</h2>
+
+      <p className="text-sm text-gray-600 mb-6">
+        Create your organisation to begin using the platform and accessing
+        operational workflows.
+      </p>
+
+      <Link
+        href="/home/team-dashboard"
+        className="bg-blue-600 text-white px-6 py-3 rounded-md"
+      >
+        Create Organisation
+      </Link>
+    </div>
+  );
+}
+
+/* ===============================
+   CARD
+============================== */
+
+function Card({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white p-6 rounded-2xl shadow-sm border">
+      <h2 className="text-lg font-semibold mb-3">{title}</h2>
+      <p className="text-sm text-gray-600">{children}</p>
+    </div>
   );
 }

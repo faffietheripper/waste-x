@@ -1,4 +1,5 @@
 import ConfirmProfileDelete from "@/components/app/ConfirmProfileDelete";
+import UserOverview from "@/components/app/MyActivity/UserOverview";
 import ManagePassword from "@/components/ManagePassword";
 import React from "react";
 
@@ -6,7 +7,8 @@ export default function Account() {
   return (
     <div>
       <h1 className="text-3xl font-bold mb-10">Account</h1>
-      <div className="space-y-4 ">
+      <UserOverview />
+      <div className="space-y-4 mt-6 ">
         <details className="group rounded-lg bg-gray-200 p-6 [&_summary::-webkit-details-marker]:hidden">
           <summary className="flex cursor-pointer items-center justify-between gap-1.5 text-gray-900">
             <h2 className="font-medium">Manage Password</h2>

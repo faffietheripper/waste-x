@@ -97,7 +97,7 @@ export default async function Header() {
         {/* LOGO */}
         <Link
           href="/home"
-          className="text-3xl font-bold flex items-center gap-4 mb-8"
+          className="text-3xl font-bold z-10 flex items-center gap-4 mb-8"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

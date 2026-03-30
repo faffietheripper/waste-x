@@ -40,7 +40,7 @@ const SlideTabs: React.FC<SlideTabsProps> = ({
       className="relative flex justify-around bg-gray-200 h-[13vh] pt-4 text-sm px-10"
     >
       <Tab setPosition={setPosition}>
-        <Link href="/home/my-activity">My Profile</Link>
+        <Link href="/home/my-activity">Activity Summary</Link>
       </Tab>
 
       <Tab setPosition={setPosition}>

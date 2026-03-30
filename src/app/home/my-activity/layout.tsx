@@ -5,7 +5,6 @@ import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import ActivityNav from "@/components/app/ActivityNav";
 import { redirect } from "next/navigation";
-import { ChainOfCustodyType } from "@/util/types";
 
 export default async function Layout({
   children,
