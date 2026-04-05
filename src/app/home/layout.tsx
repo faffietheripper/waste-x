@@ -41,16 +41,15 @@ export default async function Layout({
 
     // Organisation must exist AND relation must resolve
     if (!dbUser.organisationId || !dbUser.organisation) {
-      redirect("/home/team-dashboard?reason=no-organisation");
+      console.log("NO ORG");
     }
 
-    // Organisation status checks (no optional chaining needed now)
     if (dbUser.organisation.status === "PENDING") {
-      redirect("/onboarding/pending");
+      console.log("PENDING");
     }
 
     if (dbUser.organisation.status === "REJECTED") {
-      redirect("/onboarding/rejected");
+      console.log("REJECTED");
     }
 
     /* ===============================
