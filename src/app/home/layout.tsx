@@ -67,14 +67,14 @@ export default async function HomeLayout({
     ============================== */
     return (
       <div>
-        {/* <AppNav /> */}
-        {/* <Toaster />*/}
-        {/* <SetupAlert
-      user={{
-        role: safeRole,
-        profileCompleted,
-      }}
-    /> */}
+        <AppNav />
+        <Toaster />
+        <SetupAlert
+          user={{
+            role: safeRole,
+            profileCompleted,
+          }}
+        />
         <div>{children}</div>
       </div>
     );

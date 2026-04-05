@@ -7,108 +7,91 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export default async function AppHome() {
-  try {
-    /* ===============================
-       AUTH
-    ============================== */
-    const session = await auth();
+  /* ===============================
+     AUTH
+  ============================== */
+  const session = await auth();
+  console.log("STEP 1: session", session);
 
-    if (!session?.user?.id) {
-      redirect("/login");
-    }
-
-    /* ===============================
-       USER + ORG
-    ============================== */
-    const dbUser = await database.query.users.findFirst({
-      where: eq(users.id, session.user.id),
-    });
-
-    if (!dbUser) {
-      redirect("/login");
-    }
-
-    const organisation = dbUser.organisationId
-      ? await database.query.organisations.findFirst({
-          where: eq(organisations.id, dbUser.organisationId),
-        })
-      : null;
-
-    /* ===============================
-       🚨 GLOBAL GATING (ALL MOVED HERE)
-    ============================== */
-
-    // 🚫 NO ORGANISATION
-    if (!organisation) {
-      redirect("/home/team-dashboard?reason=no-organisation");
-    }
-
-    // 🚫 ORG STATUS
-    if (organisation.status === "PENDING") {
-      redirect("/onboarding/pending");
-    }
-
-    if (organisation.status === "REJECTED") {
-      redirect("/onboarding/rejected");
-    }
-
-    /* ===============================
-       PROFILE CHECK
-    ============================== */
-
-    const profile = await database.query.userProfiles.findFirst({
-      where: eq(userProfiles.userId, session.user.id),
-    });
-
-    const profileCompleted = !!(
-      profile?.fullName &&
-      profile?.telephone &&
-      profile?.emailAddress &&
-      profile?.country &&
-      profile?.streetAddress &&
-      profile?.city &&
-      profile?.region &&
-      profile?.postCode
-    );
-
-    /* ===============================
-       OPTIONAL: PROFILE GATE (if you want later)
-    ============================== */
-
-    // if (!profileCompleted) {
-    //   redirect("/home/me/account");
-    // }
-
-    /* ===============================
-       RENDER
-    ============================== */
-
-    return (
-      <div className="p-8 pl-[24vw] pt-32 space-y-10">
-        <Hero name={dbUser.name} org={organisation.teamName} />
-
-        <InfoSection />
-
-        <QuickLinks />
-
-        <GettingStarted chain={organisation.chainOfCustody} />
-      </div>
-    );
-  } catch (error: any) {
-    console.error("APP HOME CRASH:", {
-      message: error?.message,
-      stack: error?.stack,
-    });
-
-    return (
-      <div className="p-10">
-        <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
-        <p className="text-sm text-gray-500">
-          We couldn’t load your workspace. Please refresh or try again.
-        </p>
-      </div>
-    );
+  if (!session?.user?.id) {
+    redirect("/login");
   }
+
+  /* ===============================
+     USER
+  ============================== */
+  const dbUser = await database.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+  });
+
+  console.log("STEP 2: dbUser", dbUser);
+
+  if (!dbUser) {
+    redirect("/login");
+  }
+
+  /* ===============================
+     ORGANISATION
+  ============================== */
+  const organisation = dbUser.organisationId
+    ? await database.query.organisations.findFirst({
+        where: eq(organisations.id, dbUser.organisationId),
+      })
+    : null;
+
+  console.log("STEP 3: organisation", organisation);
+
+  /* ===============================
+     GLOBAL GATING
+  ============================== */
+
+  if (!organisation) {
+    redirect("/home/team-dashboard?reason=no-organisation");
+  }
+
+  if (organisation.status === "PENDING") {
+    redirect("/onboarding/pending");
+  }
+
+  if (organisation.status === "REJECTED") {
+    redirect("/onboarding/rejected");
+  }
+
+  /* ===============================
+     PROFILE
+  ============================== */
+  const profile = await database.query.userProfiles.findFirst({
+    where: eq(userProfiles.userId, session.user.id),
+  });
+
+  console.log("STEP 4: profile", profile);
+
+  const profileCompleted = !!(
+    profile?.fullName &&
+    profile?.telephone &&
+    profile?.emailAddress &&
+    profile?.country &&
+    profile?.streetAddress &&
+    profile?.city &&
+    profile?.region &&
+    profile?.postCode
+  );
+
+  /* ===============================
+     RENDER
+  ============================== */
+
+  return (
+    <div className="p-8 pl-[24vw] pt-32 space-y-10">
+      <Hero name={dbUser.name} org={organisation.teamName} />
+
+      <InfoSection />
+
+      <QuickLinks />
+
+      <GettingStarted chain={organisation.chainOfCustody} />
+    </div>
+  );
 }
 
 /* ===============================
