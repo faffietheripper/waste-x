@@ -1,55 +1,114 @@
 import React from "react";
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users, organisations } from "@/db/schema";
+import { users, organisations, userProfiles } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 export default async function AppHome() {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  try {
+    /* ===============================
+       AUTH
+    ============================== */
+    const session = await auth();
 
-  const dbUser = await database.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-  });
+    if (!session?.user?.id) {
+      redirect("/login");
+    }
 
-  const organisation = dbUser?.organisationId
-    ? await database.query.organisations.findFirst({
-        where: eq(organisations.id, dbUser.organisationId),
-      })
-    : null;
+    /* ===============================
+       USER + ORG
+    ============================== */
+    const dbUser = await database.query.users.findFirst({
+      where: eq(users.id, session.user.id),
+    });
 
-  /* ===============================
-     NO ORG STATE
-  ============================== */
+    if (!dbUser) {
+      redirect("/login");
+    }
 
-  if (!organisation) {
+    const organisation = dbUser.organisationId
+      ? await database.query.organisations.findFirst({
+          where: eq(organisations.id, dbUser.organisationId),
+        })
+      : null;
+
+    /* ===============================
+       🚨 GLOBAL GATING (ALL MOVED HERE)
+    ============================== */
+
+    // 🚫 NO ORGANISATION
+    if (!organisation) {
+      redirect("/home/team-dashboard?reason=no-organisation");
+    }
+
+    // 🚫 ORG STATUS
+    if (organisation.status === "PENDING") {
+      redirect("/onboarding/pending");
+    }
+
+    if (organisation.status === "REJECTED") {
+      redirect("/onboarding/rejected");
+    }
+
+    /* ===============================
+       PROFILE CHECK
+    ============================== */
+
+    const profile = await database.query.userProfiles.findFirst({
+      where: eq(userProfiles.userId, session.user.id),
+    });
+
+    const profileCompleted = !!(
+      profile?.fullName &&
+      profile?.telephone &&
+      profile?.emailAddress &&
+      profile?.country &&
+      profile?.streetAddress &&
+      profile?.city &&
+      profile?.region &&
+      profile?.postCode
+    );
+
+    /* ===============================
+       OPTIONAL: PROFILE GATE (if you want later)
+    ============================== */
+
+    // if (!profileCompleted) {
+    //   redirect("/home/me/account");
+    // }
+
+    /* ===============================
+       RENDER
+    ============================== */
+
     return (
       <div className="p-8 pl-[24vw] pt-32 space-y-10">
-        <Hero name={dbUser?.name} />
+        <Hero name={dbUser.name} org={organisation.teamName} />
 
         <InfoSection />
 
-        <CreateOrgCTA />
+        <QuickLinks />
+
+        <GettingStarted chain={organisation.chainOfCustody} />
+      </div>
+    );
+  } catch (error: any) {
+    console.error("APP HOME CRASH:", {
+      message: error?.message,
+      stack: error?.stack,
+    });
+
+    return (
+      <div className="p-10">
+        <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
+        <p className="text-sm text-gray-500">
+          We couldn’t load your workspace. Please refresh or try again.
+        </p>
       </div>
     );
   }
-
-  /* ===============================
-     ORG EXISTS → INFO DASHBOARD
-  ============================== */
-
-  return (
-    <div className="p-8 pl-[24vw] pt-32 space-y-10">
-      <Hero name={dbUser?.name} org={organisation.teamName} />
-
-      <InfoSection />
-
-      <QuickLinks />
-
-      <GettingStarted chain={organisation.chainOfCustody} />
-    </div>
-  );
 }
 
 /* ===============================
@@ -80,20 +139,17 @@ function Hero({ name, org }: { name?: string; org?: string }) {
 function InfoSection() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* WHAT IS WASTE X */}
       <Card title="What is Waste X?">
         Waste X is a structured digital system designed to manage the full chain
         of custody for waste — from generation through to final processing.
       </Card>
 
-      {/* HOW IT WORKS */}
       <Card title="How the System Works">
         Waste X connects waste generators, managers, and carriers into a single
         compliant workflow — ensuring traceability, accountability, and audit
         readiness.
       </Card>
 
-      {/* COMPLIANCE */}
       <Card title="Compliance & Infrastructure">
         Built to align with UK digital waste tracking initiatives, Waste X
         provides audit-ready records and secure operational workflows.
@@ -172,30 +228,6 @@ function GettingStarted({ chain }: { chain: string }) {
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-/* ===============================
-   CREATE ORG CTA
-============================== */
-
-function CreateOrgCTA() {
-  return (
-    <div className="bg-white p-10 rounded-2xl shadow-sm border text-center">
-      <h2 className="text-xl font-semibold mb-4">Get Started with Waste X</h2>
-
-      <p className="text-sm text-gray-600 mb-6">
-        Create your organisation to begin using the platform and accessing
-        operational workflows.
-      </p>
-
-      <Link
-        href="/home/team-dashboard"
-        className="bg-blue-600 text-white px-6 py-3 rounded-md"
-      >
-        Create Organisation
-      </Link>
     </div>
   );
 }

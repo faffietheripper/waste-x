@@ -2,63 +2,46 @@ import SetupAlert from "@/components/app/SetupAlert";
 import { Toaster } from "@/components/ui/toaster";
 import AppNav from "@/components/app/AppNav";
 import { auth } from "@/auth";
-import { redirect } from "next/navigation";
 import { database } from "@/db/database";
 import { userProfiles, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-export default async function Layout({
+export default async function HomeLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   try {
     /* ===============================
-       AUTH CHECK (STRICT)
+       AUTH (NON-BLOCKING)
     ============================== */
     const session = await auth();
 
+    // ❗ DO NOT redirect in layout
     if (!session?.user?.id) {
-      redirect("/login");
+      return (
+        <div className="p-10">
+          <h2 className="text-lg font-semibold">Unauthorized</h2>
+        </div>
+      );
     }
 
     /* ===============================
-       USER + ORG FETCH
+       USER FETCH (SAFE)
     ============================== */
     const dbUser = await database.query.users.findFirst({
       where: eq(users.id, session.user.id),
-      with: {
-        organisation: true,
-      },
     });
 
     if (!dbUser) {
-      console.error("User not found for session:", session.user.id);
-      redirect("/login");
-    }
-
-    /* ===============================
-       GLOBAL GATING
-    ============================== */
-
-    // Organisation must exist AND relation must resolve
-    if (!dbUser.organisationId || !dbUser.organisation) {
-      redirect("/home/team-dashboard?reason=no-organisation");
-    }
-
-    // from here down, organisation is GUARANTEED
-    const organisation = dbUser.organisation;
-
-    if (organisation.status === "PENDING") {
-      redirect("/onboarding/pending");
-    }
-
-    if (organisation.status === "REJECTED") {
-      redirect("/onboarding/rejected");
+      return (
+        <div className="p-10">
+          <h2 className="text-lg font-semibold">User not found</h2>
+        </div>
+      );
     }
 
     /* ===============================
        PROFILE CHECK
     ============================== */
-
     const profile = await database.query.userProfiles.findFirst({
       where: eq(userProfiles.userId, session.user.id),
     });
@@ -75,22 +58,13 @@ export default async function Layout({
     );
 
     /* ===============================
-       SAFE ROLE HANDLING
+       SAFE ROLE
     ============================== */
-
     const safeRole = session.user.role ?? "user";
 
     /* ===============================
-       DEBUG LOGS (TEMP)
+       RENDER (PURE UI)
     ============================== */
-    console.log("SESSION USER ID:", session.user.id);
-    console.log("ROLE:", safeRole);
-    console.log("PROFILE COMPLETE:", profileCompleted);
-
-    /* ===============================
-       RENDER
-    ============================== */
-
     return (
       <div>
         <AppNav />
@@ -107,10 +81,6 @@ export default async function Layout({
       </div>
     );
   } catch (error: any) {
-    /* ===============================
-       FAIL SAFE (CRITICAL)
-    ============================== */
-
     console.error("HOME LAYOUT CRASH:", {
       message: error?.message,
       stack: error?.stack,
