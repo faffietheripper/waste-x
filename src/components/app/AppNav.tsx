@@ -192,7 +192,9 @@ export default async function AppNav() {
             )}
           </Link>
 
-          <SignOutButton />
+          <div>
+            <SignOutButton />
+          </div>
         </div>
       </div>
 

@@ -1,5 +1,3 @@
-import Header from "@/components/app/Header";
-import Header2 from "@/components/app/Header2";
 import SetupAlert from "@/components/app/SetupAlert";
 import { Toaster } from "@/components/ui/toaster";
 
