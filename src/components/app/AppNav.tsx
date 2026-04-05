@@ -160,7 +160,7 @@ export default async function AppNav() {
         {/* 🔷 LEFT — LOGO (ANCHOR) */}
 
         <Image
-          src="/wastex no-bg.png"
+          src="/wastexblack.png"
           height={180}
           width={180}
           alt="Waste X logo"
