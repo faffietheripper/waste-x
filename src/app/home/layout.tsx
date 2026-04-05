@@ -7,7 +7,6 @@ import { redirect } from "next/navigation";
 import { database } from "@/db/database";
 import { userProfiles, users, organisations } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import AppNav from "@/components/app/AppNav";
 
 export default async function Layout({
   children,
@@ -83,7 +82,7 @@ export default async function Layout({
 
   return (
     <div>
-      <AppNav />
+      {/* <AppNav /> */}
       <Toaster />
 
       <div>
