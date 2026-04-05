@@ -41,28 +41,18 @@ export default async function Layout({
 
     // Organisation must exist AND relation must resolve
     if (!dbUser.organisationId || !dbUser.organisation) {
-      console.log("NO ORG");
-
-      // IMPORTANT: stop execution here
-      return (
-        <div className="p-10">
-          <h2>No organisation found</h2>
-        </div>
-      );
+      redirect("/home/team-dashboard?reason=no-organisation");
     }
 
+    // from here down, organisation is GUARANTEED
     const organisation = dbUser.organisation;
 
     if (organisation.status === "PENDING") {
-      console.log("PENDING");
-
-      return <div className="p-10">Organisation pending approval</div>;
+      redirect("/onboarding/pending");
     }
 
     if (organisation.status === "REJECTED") {
-      console.log("REJECTED");
-
-      return <div className="p-10">Organisation rejected</div>;
+      redirect("/onboarding/rejected");
     }
 
     /* ===============================
