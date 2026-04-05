@@ -9,88 +9,65 @@ import { eq } from "drizzle-orm";
 export default async function HomeLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  try {
-    /* ===============================
-       AUTH (NON-BLOCKING)
-    ============================== */
-    const session = await auth();
+  /* ===============================
+     AUTH
+  ============================== */
+  const session = await auth();
+  console.log("LAYOUT STEP 1: session", session);
 
-    // ❗ DO NOT redirect in layout
-    if (!session?.user?.id) {
-      return (
-        <div className="p-10">
-          <h2 className="text-lg font-semibold">Unauthorized</h2>
-        </div>
-      );
-    }
-
-    /* ===============================
-       USER FETCH (SAFE)
-    ============================== */
-    const dbUser = await database.query.users.findFirst({
-      where: eq(users.id, session.user.id),
-    });
-
-    if (!dbUser) {
-      return (
-        <div className="p-10">
-          <h2 className="text-lg font-semibold">User not found</h2>
-        </div>
-      );
-    }
-
-    /* ===============================
-       PROFILE CHECK
-    ============================== */
-    const profile = await database.query.userProfiles.findFirst({
-      where: eq(userProfiles.userId, session.user.id),
-    });
-
-    const profileCompleted = !!(
-      profile?.fullName &&
-      profile?.telephone &&
-      profile?.emailAddress &&
-      profile?.country &&
-      profile?.streetAddress &&
-      profile?.city &&
-      profile?.region &&
-      profile?.postCode
-    );
-
-    /* ===============================
-       SAFE ROLE
-    ============================== */
-    const safeRole = session.user.role ?? "user";
-
-    /* ===============================
-       RENDER (PURE UI)
-    ============================== */
-    return (
-      <div>
-        <AppNav />
-        <Toaster />
-        <SetupAlert
-          user={{
-            role: safeRole,
-            profileCompleted,
-          }}
-        />
-        <div>{children}</div>
-      </div>
-    );
-  } catch (error: any) {
-    console.error("HOME LAYOUT CRASH:", {
-      message: error?.message,
-      stack: error?.stack,
-    });
-
-    return (
-      <div className="p-10">
-        <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
-        <p className="text-sm text-gray-500">
-          We couldn’t load your workspace. Please refresh or try again.
-        </p>
-      </div>
-    );
+  if (!session?.user?.id) {
+    return <div className="p-10">Unauthorized</div>;
   }
+
+  /* ===============================
+     USER
+  ============================== */
+  const dbUser = await database.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+  });
+
+  console.log("LAYOUT STEP 2: dbUser", dbUser);
+
+  if (!dbUser) {
+    return <div className="p-10">User not found</div>;
+  }
+
+  /* ===============================
+     PROFILE
+  ============================== */
+  const profile = await database.query.userProfiles.findFirst({
+    where: eq(userProfiles.userId, session.user.id),
+  });
+
+  console.log("LAYOUT STEP 3: profile", profile);
+
+  const profileCompleted = !!(
+    profile?.fullName &&
+    profile?.telephone &&
+    profile?.emailAddress &&
+    profile?.country &&
+    profile?.streetAddress &&
+    profile?.city &&
+    profile?.region &&
+    profile?.postCode
+  );
+
+  const safeRole = session.user.role ?? "user";
+
+  /* ===============================
+     RENDER
+  ============================== */
+  return (
+    <div>
+      <AppNav />
+      <Toaster />
+      <SetupAlert
+        user={{
+          role: safeRole,
+          profileCompleted,
+        }}
+      />
+      <div>{children}</div>
+    </div>
+  );
 }
