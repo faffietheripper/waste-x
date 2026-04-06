@@ -8,25 +8,27 @@ import { eq } from "drizzle-orm";
 
 export default async function HomeLayout({
   children,
-}: Readonly<{ children: React.ReactNode }>) {
+}: {
+  children: React.ReactNode;
+}) {
   /* ===============================
      AUTH
   ============================== */
   const session = await auth();
-  console.log("LAYOUT STEP 1: session", session);
 
   if (!session?.user?.id) {
     return <div className="p-10">Unauthorized</div>;
   }
 
   /* ===============================
-     USER
+     USER + ORG (ONE FETCH ONLY)
   ============================== */
   const dbUser = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
+    with: {
+      organisation: true,
+    },
   });
-
-  console.log("LAYOUT STEP 2: dbUser", dbUser);
 
   if (!dbUser) {
     return <div className="p-10">User not found</div>;
@@ -39,8 +41,6 @@ export default async function HomeLayout({
     where: eq(userProfiles.userId, session.user.id),
   });
 
-  console.log("LAYOUT STEP 3: profile", profile);
-
   const profileCompleted = !!(
     profile?.fullName &&
     profile?.telephone &&
@@ -52,21 +52,22 @@ export default async function HomeLayout({
     profile?.postCode
   );
 
-  const safeRole = session.user.role ?? "user";
-
   /* ===============================
      RENDER
   ============================== */
   return (
     <div>
-      <AppNav />
+      <AppNav user={dbUser} profile={profile} />
+
       <Toaster />
+
       <SetupAlert
         user={{
-          role: safeRole,
+          role: dbUser.role,
           profileCompleted,
         }}
       />
+
       <div>{children}</div>
     </div>
   );
