@@ -1,95 +1,16 @@
 import React from "react";
-import { auth } from "@/auth";
-import { database } from "@/db/database";
-import { users, organisations, userProfiles } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
-export default async function AppHome() {
-  /* ===============================
-     AUTH
-  ============================== */
-  const session = await auth();
-  console.log("STEP 1: session", session);
-
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
-
-  /* ===============================
-     USER
-  ============================== */
-  const dbUser = await database.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-  });
-
-  console.log("STEP 2: dbUser", dbUser);
-
-  if (!dbUser) {
-    redirect("/login");
-  }
-
-  /* ===============================
-     ORGANISATION
-  ============================== */
-  const organisation = dbUser.organisationId
-    ? await database.query.organisations.findFirst({
-        where: eq(organisations.id, dbUser.organisationId),
-      })
-    : null;
-
-  console.log("STEP 3: organisation", organisation);
-
-  /* ===============================
-     GLOBAL GATING
-  ============================== */
-
-  if (!organisation) {
-    redirect("/home/team-dashboard?reason=no-organisation");
-  }
-
-  if (organisation.status === "PENDING") {
-    redirect("/onboarding/pending");
-  }
-
-  if (organisation.status === "REJECTED") {
-    redirect("/onboarding/rejected");
-  }
-
-  /* ===============================
-     PROFILE
-  ============================== */
-  const profile = await database.query.userProfiles.findFirst({
-    where: eq(userProfiles.userId, session.user.id),
-  });
-
-  console.log("STEP 4: profile", profile);
-
-  const profileCompleted = !!(
-    profile?.fullName &&
-    profile?.telephone &&
-    profile?.emailAddress &&
-    profile?.country &&
-    profile?.streetAddress &&
-    profile?.city &&
-    profile?.region &&
-    profile?.postCode
-  );
-
-  /* ===============================
-     RENDER
-  ============================== */
-
+export default function AppHome() {
   return (
     <div className="p-8 pl-[24vw] pt-32 space-y-10">
-      <Hero name={dbUser.name} org={organisation.teamName} />
+      <Hero />
 
       <InfoSection />
 
       <QuickLinks />
 
-      <GettingStarted chain={organisation.chainOfCustody} />
+      <GettingStarted />
     </div>
   );
 }
@@ -98,14 +19,10 @@ export default async function AppHome() {
    HERO
 ============================== */
 
-function Hero({ name, org }: { name?: string; org?: string }) {
+function Hero() {
   return (
     <div className="bg-gradient-to-r from-indigo-600 to-blue-700 text-white p-8 rounded-2xl shadow-xl">
-      <h1 className="text-3xl font-bold mb-2">
-        Welcome to Waste X{name ? `, ${name}` : ""}
-      </h1>
-
-      {org && <p className="text-sm opacity-90">Organisation: {org}</p>}
+      <h1 className="text-3xl font-bold mb-2">Welcome to Waste X</h1>
 
       <p className="text-sm opacity-75 mt-2">
         Digital infrastructure for waste tracking, compliance, and operational
@@ -181,35 +98,16 @@ function QuickLinks() {
    GETTING STARTED
 ============================== */
 
-function GettingStarted({ chain }: { chain: string }) {
+function GettingStarted() {
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border">
       <h2 className="text-lg font-semibold mb-4">Getting Started</h2>
 
       <div className="space-y-3 text-sm">
-        {chain === "wasteGenerator" && (
-          <>
-            <p>• Create and manage waste listings</p>
-            <p>• Review and accept bids</p>
-            <p>• Assign jobs to carriers</p>
-          </>
-        )}
-
-        {chain === "wasteManager" && (
-          <>
-            <p>• Browse and bid on listings</p>
-            <p>• Manage awarded jobs</p>
-            <p>• Complete and track transfers</p>
-          </>
-        )}
-
-        {chain === "wasteCarrier" && (
-          <>
-            <p>• View assigned jobs</p>
-            <p>• Confirm collection</p>
-            <p>• Complete waste transfers</p>
-          </>
-        )}
+        <p>• Create and manage waste listings</p>
+        <p>• Review and accept bids</p>
+        <p>• Assign jobs to carriers</p>
+        <p>• Track waste movement and compliance</p>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { userProfiles, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
 
 export default async function HomeLayout({
   children,
@@ -17,11 +18,11 @@ export default async function HomeLayout({
   const session = await auth();
 
   if (!session?.user?.id) {
-    return <div className="p-10">Unauthorized</div>;
+    redirect("/login");
   }
 
   /* ===============================
-     USER + ORG (ONE FETCH ONLY)
+     USER + ORG
   ============================== */
   const dbUser = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
@@ -31,7 +32,27 @@ export default async function HomeLayout({
   });
 
   if (!dbUser) {
-    return <div className="p-10">User not found</div>;
+    redirect("/login");
+  }
+
+  /* ===============================
+     🔥 GLOBAL GATING (HERE)
+  ============================== */
+
+  // 🚫 NO ORGANISATION
+  if (!dbUser.organisationId || !dbUser.organisation) {
+    redirect("/home/team-dashboard?reason=no-organisation");
+  }
+
+  const organisation = dbUser.organisation;
+
+  // 🚫 STATUS GATES
+  if (organisation.status === "PENDING") {
+    redirect("/onboarding/pending");
+  }
+
+  if (organisation.status === "REJECTED") {
+    redirect("/onboarding/rejected");
   }
 
   /* ===============================
