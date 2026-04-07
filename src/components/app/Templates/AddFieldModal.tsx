@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { addFieldToSection } from "@/app/home/team-dashboard/template-library/actions";
+import { useAction } from "@/lib/actions/useAction";
 
 export default function AddFieldModal({
   templateId,
@@ -18,41 +19,60 @@ export default function AddFieldModal({
     "text" | "number" | "dropdown" | "boolean" | "file"
   >("text");
   const [required, setRequired] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const router = useRouter();
+  const run = useAction();
 
   async function handleSubmit() {
-    if (!label) return;
+    if (!label.trim()) return;
 
-    await addFieldToSection({
-      templateId,
-      sectionId,
-      key: label.toLowerCase().replace(/\s+/g, "_"),
-      label,
-      fieldType,
-      required,
-    });
+    setLoading(true);
 
-    onClose();
-    router.refresh();
+    try {
+      await run(() =>
+        addFieldToSection({
+          templateId,
+          sectionId,
+          key: label.toLowerCase().trim().replace(/\s+/g, "_"),
+          label,
+          fieldType,
+          required,
+        }),
+      );
+
+      onClose();
+      router.refresh();
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 text-black flex items-center justify-center">
-      <div className="bg-white p-8 w-96">
-        <h2 className="text-lg font-semibold mb-4">Add Field</h2>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+      <div className="bg-white p-8 w-96 rounded-xl space-y-4">
+        <h2 className="text-lg font-semibold">Add Field</h2>
 
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="Field label"
-          className="w-full border text-black p-3 mb-4"
+          className="w-full border p-3 rounded-md"
         />
 
         <select
           value={fieldType}
-          onChange={(e) => setFieldType(e.target.value as any)}
-          className="w-full border p-3 mb-4"
+          onChange={(e) =>
+            setFieldType(
+              e.target.value as
+                | "text"
+                | "number"
+                | "dropdown"
+                | "boolean"
+                | "file",
+            )
+          }
+          className="w-full border p-3 rounded-md"
         >
           <option value="text">Text</option>
           <option value="number">Number</option>
@@ -61,7 +81,7 @@ export default function AddFieldModal({
           <option value="file">File Upload</option>
         </select>
 
-        <label className="flex items-center gap-2 mb-4">
+        <label className="flex items-center gap-2">
           <input
             type="checkbox"
             checked={required}
@@ -70,15 +90,21 @@ export default function AddFieldModal({
           Required
         </label>
 
-        <div className="flex justify-end gap-3">
-          <button onClick={onClose} className="text-gray-500">
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="text-gray-500"
+          >
             Cancel
           </button>
+
           <button
             onClick={handleSubmit}
-            className="bg-black text-white px-5 py-2"
+            disabled={loading}
+            className="bg-black text-white px-5 py-2 rounded-md disabled:opacity-50"
           >
-            Add
+            {loading ? "Adding..." : "Add"}
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { addSection } from "@/app/home/team-dashboard/template-library/actions";
+import { useAction } from "@/lib/actions/useAction";
 
 export default function AddSectionModal({
   templateId,
@@ -12,38 +13,53 @@ export default function AddSectionModal({
   onClose: () => void;
 }) {
   const [title, setTitle] = useState("");
-  const router = useRouter(); // ✅ inside component
+  const [loading, setLoading] = useState(false);
+
+  const router = useRouter();
+  const run = useAction();
 
   async function handleSubmit() {
-    if (!title) return;
+    if (!title.trim()) return;
 
-    await addSection(templateId, title);
+    setLoading(true);
 
-    router.refresh(); // ✅ refresh AFTER action
-    onClose();
+    try {
+      await run(() => addSection(templateId, title.trim()));
+
+      router.refresh();
+      onClose();
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 text-black flex items-center justify-center">
-      <div className="bg-white p-8 w-96">
-        <h2 className="text-lg font-semibold mb-4">Add Section</h2>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+      <div className="bg-white p-8 w-96 rounded-xl space-y-4">
+        <h2 className="text-lg font-semibold">Add Section</h2>
 
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Section title"
-          className="w-full text-black border p-3 mb-4"
+          className="w-full border p-3 rounded-md"
         />
 
         <div className="flex justify-end gap-3">
-          <button onClick={onClose} className="text-gray-500">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="text-gray-500"
+          >
             Cancel
           </button>
+
           <button
             onClick={handleSubmit}
-            className="bg-black text-white px-5 py-2"
+            disabled={loading}
+            className="bg-black text-white px-5 py-2 rounded-md disabled:opacity-50"
           >
-            Add
+            {loading ? "Adding..." : "Add"}
           </button>
         </div>
       </div>

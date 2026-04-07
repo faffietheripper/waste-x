@@ -808,9 +808,67 @@ export const auditEvents = pgTable(
   }),
 );
 
+export const errorLogs = pgTable(
+  "bb_error_log",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+
+    severity: text("severity")
+      .$type<"low" | "medium" | "high" | "critical">()
+      .notNull(),
+
+    code: text("code").notNull(),
+    message: text("message").notNull(),
+
+    layer: text("layer")
+      .$type<"api" | "db" | "auth" | "validation" | "external">()
+      .notNull(),
+
+    // 🔗 RELATIONS (aligned with your system)
+    userId: text("userId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    organisationId: text("organisationId").references(() => organisations.id, {
+      onDelete: "set null",
+    }),
+
+    // 🌐 REQUEST CONTEXT
+    route: text("route"),
+    method: text("method"),
+
+    // 📦 FLEXIBLE DATA
+    metadata: text("metadata"), // JSON string (consistent with your schema style)
+
+    resolved: boolean("resolved").default(false),
+  },
+  (table) => ({
+    orgIdx: index("error_org_idx").on(table.organisationId),
+    userIdx: index("error_user_idx").on(table.userId),
+    codeIdx: index("error_code_idx").on(table.code),
+    createdIdx: index("error_created_idx").on(table.createdAt),
+  }),
+);
+
 /* =========================================================
    RELATIONS
 ========================================================= */
+
+export const errorLogsRelations = relations(errorLogs, ({ one }) => ({
+  user: one(users, {
+    fields: [errorLogs.userId],
+    references: [users.id],
+  }),
+
+  organisation: one(organisations, {
+    fields: [errorLogs.organisationId],
+    references: [organisations.id],
+  }),
+}));
 
 export const listingTemplatesRelations = relations(
   listingTemplates,

@@ -8,6 +8,7 @@ import {
   fetchProfileAction,
 } from "@/app/home/me/actions";
 import { getImageUrl } from "@/util/files";
+import { useToast } from "@/components/ui/use-toast";
 
 /* =========================================================
    TYPES
@@ -30,11 +31,13 @@ interface ProfileData {
 ========================================================= */
 
 export default function ProfileForm() {
+  const { toast } = useToast();
+  const router = useRouter();
+
   const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [newProfilePicture, setNewProfilePicture] = useState<File | null>(null);
-
-  const router = useRouter();
 
   /* =========================================================
      LOAD PROFILE
@@ -42,13 +45,22 @@ export default function ProfileForm() {
 
   useEffect(() => {
     async function loadProfile() {
-      const profile = await fetchProfileAction();
-      setProfileData(profile);
-      setIsLoading(false);
+      try {
+        const profile = await fetchProfileAction();
+        setProfileData(profile);
+      } catch {
+        toast({
+          title: "Error",
+          description: "Failed to load profile.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
     }
 
     loadProfile();
-  }, []);
+  }, [toast]);
 
   /* =========================================================
      FILE HANDLER
@@ -67,48 +79,74 @@ export default function ProfileForm() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
+    if (submitting) return;
+
+    setSubmitting(true);
+
     const form = e.currentTarget;
     const formData = new FormData(form);
 
     let uploadedFileName = profileData?.profilePicture || "";
 
-    /* ===============================
-       UPLOAD PROFILE IMAGE
-    ============================== */
+    try {
+      /* ===============================
+         UPLOAD PROFILE IMAGE
+      ============================== */
 
-    if (newProfilePicture) {
-      const [signedUrl] = await createUploadUrlAction(
-        [newProfilePicture.name],
-        [newProfilePicture.type],
-      );
+      if (newProfilePicture) {
+        const uniqueKey = `${crypto.randomUUID()}-${newProfilePicture.name}`;
 
-      if (signedUrl) {
+        const urls = await createUploadUrlAction(
+          [uniqueKey], // ✅ MUST be array
+          [newProfilePicture.type],
+        );
+
+        const signedUrl = urls[0];
+
+        if (!signedUrl) {
+          throw new Error("Failed to generate upload URL");
+        }
+
         await fetch(signedUrl, {
           method: "PUT",
           body: newProfilePicture,
         });
-
-        uploadedFileName = newProfilePicture.name;
+        uploadedFileName = uniqueKey;
       }
+
+      /* ===============================
+         SAVE PROFILE
+      ============================== */
+
+      await saveProfileAction({
+        profilePicture: uploadedFileName,
+        fullName: (formData.get("fullName") as string) || "",
+        telephone: (formData.get("telephone") as string) || "",
+        emailAddress: (formData.get("emailAddress") as string) || "",
+        country: (formData.get("country") as string) || "",
+        streetAddress: (formData.get("streetAddress") as string) || "",
+        city: (formData.get("city") as string) || "",
+        region: (formData.get("region") as string) || "",
+        postCode: (formData.get("postCode") as string) || "",
+      });
+
+      toast({
+        title: "Profile updated",
+        description: "Your profile has been saved successfully.",
+      });
+
+      router.refresh();
+    } catch (error) {
+      console.error(error);
+
+      toast({
+        title: "Error",
+        description: "Failed to update profile.",
+        variant: "destructive",
+      });
+    } finally {
+      setSubmitting(false);
     }
-
-    /* ===============================
-       SAVE PROFILE
-    ============================== */
-
-    await saveProfileAction({
-      profilePicture: uploadedFileName,
-      fullName: (formData.get("fullName") as string) || "",
-      telephone: (formData.get("telephone") as string) || "",
-      emailAddress: (formData.get("emailAddress") as string) || "",
-      country: (formData.get("country") as string) || "",
-      streetAddress: (formData.get("streetAddress") as string) || "",
-      city: (formData.get("city") as string) || "",
-      region: (formData.get("region") as string) || "",
-      postCode: (formData.get("postCode") as string) || "",
-    });
-
-    router.refresh();
   };
 
   /* =========================================================
@@ -130,7 +168,6 @@ export default function ProfileForm() {
         onSubmit={handleSubmit}
       >
         {/* PROFILE IMAGE */}
-
         <div className="text-center">
           <h2 className="font-semibold mb-4">Profile Picture</h2>
 
@@ -146,7 +183,6 @@ export default function ProfileForm() {
         </div>
 
         {/* NAME */}
-
         <div>
           <label className="block text-sm font-medium mb-2">Full Name</label>
           <input
@@ -158,7 +194,6 @@ export default function ProfileForm() {
         </div>
 
         {/* CONTACT */}
-
         <div className="grid grid-cols-2 gap-4">
           <input
             required
@@ -178,7 +213,6 @@ export default function ProfileForm() {
         </div>
 
         {/* ADDRESS */}
-
         <input
           required
           name="streetAddress"
@@ -222,12 +256,12 @@ export default function ProfileForm() {
         />
 
         {/* SUBMIT */}
-
         <button
           type="submit"
-          className="bg-blue-600 text-white px-6 py-3 rounded-md self-end"
+          disabled={submitting}
+          className="bg-blue-600 text-white px-6 py-3 rounded-md self-end disabled:opacity-50"
         >
-          Save Profile
+          {submitting ? "Saving..." : "Save Profile"}
         </button>
       </form>
     </main>

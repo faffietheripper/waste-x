@@ -7,9 +7,38 @@ import {
 } from "@/app/home/create-waste-listings/actions";
 import { DatePickerDemo } from "@/components/DatePicker";
 import { Input } from "@/components/ui/input";
+import { useAction } from "@/lib/actions/useAction";
 
-export default function DynamicWasteListingForm({ template }: any) {
-  const [formValues, setFormValues] = useState<any>({});
+/* =========================================================
+   TYPES
+========================================================= */
+
+interface Template {
+  id: string;
+  sections: {
+    id: string;
+    title: string;
+    fields: {
+      id: string;
+      key: string;
+      label: string;
+      fieldType: "text" | "number" | "dropdown" | "boolean" | "file";
+      required?: boolean;
+      optionsJson?: string | null;
+    }[];
+  }[];
+}
+
+/* =========================================================
+   COMPONENT
+========================================================= */
+
+export default function DynamicWasteListingForm({
+  template,
+}: {
+  template: Template;
+}) {
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
   const [projectName, setProjectName] = useState("");
   const [location, setLocation] = useState("");
   const [startingPrice, setStartingPrice] = useState<number | "">("");
@@ -17,95 +46,118 @@ export default function DynamicWasteListingForm({ template }: any) {
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
+  const run = useAction();
+
   function handleChange(key: string, value: any) {
-    setFormValues((prev: any) => ({
+    setFormValues((prev) => ({
       ...prev,
       [key]: value,
     }));
   }
 
-  async function handleSubmit(e: any) {
-    e.preventDefault();
+  /* =========================================================
+     VALIDATION
+  ========================================================= */
 
+  function validate(): string | null {
+    if (!date) return "End date is required.";
+    if (!projectName.trim()) return "Project name is required.";
+    if (!location.trim()) return "Location is required.";
+    if (startingPrice === "" || startingPrice < 0)
+      return "Invalid starting price.";
+
+    for (const section of template.sections) {
+      for (const field of section.fields) {
+        if (field.required && !formValues[field.key]) {
+          return `Missing: ${field.label}`;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /* =========================================================
+     SUBMIT
+  ========================================================= */
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
     if (submitting) return;
 
-    if (!date) {
-      alert("Please select an end date.");
-      return;
-    }
-
-    if (!projectName) {
-      alert("Please enter a project name.");
-      return;
-    }
-
-    if (!location) {
-      alert("Please enter a location.");
-      return;
-    }
-
-    if (startingPrice === "" || startingPrice < 0) {
-      alert("Please enter a valid starting price.");
+    const error = validate();
+    if (error) {
+      // ❗ Let global system handle UX (you’ll wire toast later)
+      console.error(error);
       return;
     }
 
     setSubmitting(true);
 
     try {
-      for (const section of template.sections) {
-        for (const field of section.fields) {
-          if (field.required && !formValues[field.key]) {
-            alert(`Please fill in: ${field.label}`);
-            setSubmitting(false);
-            return;
-          }
+      /* ===============================
+         FILE UPLOAD
+      ============================== */
+
+      let fileKeys: string[] = [];
+
+      if (files.length > 0) {
+        fileKeys = files.map((file) => `${crypto.randomUUID()}-${file.name}`);
+
+        const uploadUrls = await run(() =>
+          createUploadUrlAction(
+            fileKeys,
+            files.map((f) => f.type),
+          ),
+        );
+
+        if (!uploadUrls || uploadUrls.length !== files.length) {
+          throw new Error("File upload initialisation failed.");
         }
+
+        await Promise.all(
+          files.map((file, i) =>
+            fetch(uploadUrls[i], {
+              method: "PUT",
+              body: file,
+            }),
+          ),
+        );
       }
 
-      const fileKeys = files.map(
-        (file) => `${crypto.randomUUID()}-${file.name}`,
+      /* ===============================
+         CREATE LISTING
+      ============================== */
+
+      await run(() =>
+        createListingAction({
+          templateId: template.id,
+          templateData: formValues,
+          name: projectName,
+          location,
+          startingPrice: Number(startingPrice),
+          endDate: date!,
+          fileName: fileKeys,
+        }),
       );
-
-      const uploadUrls = await createUploadUrlAction(
-        fileKeys,
-        files.map((f) => f.type),
-      );
-
-      await Promise.all(
-        files.map((file, i) =>
-          fetch(uploadUrls[i], {
-            method: "PUT",
-            body: file,
-          }),
-        ),
-      );
-
-      await createListingAction({
-        templateId: template.id,
-        templateData: formValues,
-        name: projectName,
-        location,
-        startingPrice: Number(startingPrice),
-        endDate: date,
-        fileName: fileKeys,
-      });
-
-      alert("Listing created successfully!");
-    } catch (error) {
-      console.error(error);
-      alert("Something went wrong while creating the listing.");
+    } finally {
+      setSubmitting(false);
     }
-
-    setSubmitting(false);
   }
+
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <form onSubmit={handleSubmit} className="space-y-10 max-w-3xl">
-      {template.sections.map((section: any) => (
+      {/* ================= TEMPLATE FIELDS ================= */}
+
+      {template.sections.map((section) => (
         <div key={section.id}>
           <h3 className="text-lg font-semibold mb-4">{section.title}</h3>
 
-          {section.fields.map((field: any) => (
+          {section.fields.map((field) => (
             <div key={field.id} className="mb-5">
               <label className="block mb-2 font-medium">
                 {field.label}
@@ -114,7 +166,6 @@ export default function DynamicWasteListingForm({ template }: any) {
 
               {field.fieldType === "text" && (
                 <input
-                  required={field.required}
                   className="border p-3 w-full rounded"
                   onChange={(e) => handleChange(field.key, e.target.value)}
                 />
@@ -123,7 +174,6 @@ export default function DynamicWasteListingForm({ template }: any) {
               {field.fieldType === "number" && (
                 <input
                   type="number"
-                  required={field.required}
                   className="border p-3 w-full rounded"
                   onChange={(e) =>
                     handleChange(field.key, Number(e.target.value))
@@ -140,7 +190,6 @@ export default function DynamicWasteListingForm({ template }: any) {
 
               {field.fieldType === "dropdown" && (
                 <select
-                  required={field.required}
                   className="border p-3 w-full rounded"
                   onChange={(e) => handleChange(field.key, e.target.value)}
                 >
@@ -158,72 +207,48 @@ export default function DynamicWasteListingForm({ template }: any) {
         </div>
       ))}
 
+      {/* ================= PROJECT DETAILS ================= */}
+
       <div className="border-t pt-8 space-y-6">
         <h3 className="text-lg font-semibold">Project & Commercial Details</h3>
 
-        <div>
-          <label className="block mb-2 font-medium">
-            Project Name <span className="text-red-500">*</span>
-          </label>
+        <Input
+          value={projectName}
+          onChange={(e) => setProjectName(e.target.value)}
+          placeholder="Project Name"
+        />
 
-          <Input
-            value={projectName}
-            onChange={(e) => setProjectName(e.target.value)}
-            required
-          />
-        </div>
+        <Input
+          value={location}
+          onChange={(e) => setLocation(e.target.value)}
+          placeholder="Location"
+        />
 
-        <div>
-          <label className="block mb-2 font-medium">
-            Location <span className="text-red-500">*</span>
-          </label>
+        <Input
+          type="number"
+          value={startingPrice}
+          onChange={(e) =>
+            setStartingPrice(
+              e.target.value === "" ? "" : Number(e.target.value),
+            )
+          }
+          placeholder="Starting Price (£)"
+        />
 
-          <Input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="e.g. Manchester Construction Site"
-            required
-          />
-        </div>
+        <DatePickerDemo date={date} setDate={setDate} />
 
-        <div>
-          <label className="block mb-2 font-medium">
-            Starting Price (£) <span className="text-red-500">*</span>
-          </label>
-
-          <Input
-            type="number"
-            min="0"
-            step="1"
-            value={startingPrice}
-            onChange={(e) =>
-              setStartingPrice(
-                e.target.value === "" ? "" : Number(e.target.value),
-              )
-            }
-            required
-          />
-        </div>
-
-        <div>
-          <label className="block mb-2 font-medium">End Date</label>
-          <DatePickerDemo date={date} setDate={setDate} />
-        </div>
-
-        <div>
-          <label className="block mb-2 font-medium">Upload Files</label>
-
-          <Input
-            type="file"
-            multiple
-            onChange={(e) => setFiles(Array.from(e.target.files || []))}
-          />
-        </div>
+        <Input
+          type="file"
+          multiple
+          onChange={(e) => setFiles(Array.from(e.target.files || []))}
+        />
       </div>
+
+      {/* ================= STATUS ================= */}
 
       {submitting && (
         <p className="text-sm text-gray-500">
-          Please wait while we process your listing and upload files...
+          Processing listing and uploading files...
         </p>
       )}
 
@@ -232,7 +257,7 @@ export default function DynamicWasteListingForm({ template }: any) {
         disabled={submitting}
         className="bg-black text-white px-6 py-3 rounded disabled:opacity-50"
       >
-        {submitting ? "Creating Listing..." : "Create Listing"}
+        {submitting ? "Creating..." : "Create Listing"}
       </button>
     </form>
   );

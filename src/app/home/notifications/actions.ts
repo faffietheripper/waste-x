@@ -5,6 +5,9 @@ import { database } from "@/db/database";
 import { notifications, users, userProfiles } from "@/db/schema";
 import { auth } from "@/auth";
 
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
+
 /* =========================================================
    HELPER — Get user's organisation
 ========================================================= */
@@ -25,7 +28,7 @@ async function getUserOrganisationId(userId: string) {
 }
 
 /* =========================================================
-   CREATE NOTIFICATION
+   CREATE NOTIFICATION (UTILITY — DO NOT WRAP)
 ========================================================= */
 
 export async function createNotification(
@@ -56,81 +59,108 @@ export async function createNotification(
    GET USER NOTIFICATIONS
 ========================================================= */
 
-export async function getUserNotifications(userId: string) {
-  const organisationId = await getUserOrganisationId(userId);
+export const getUserNotifications = withErrorHandling(
+  async (userId: string) => {
+    const organisationId = await getUserOrganisationId(userId);
 
-  return await database
-    .select()
-    .from(notifications)
-    .where(
-      and(
-        eq(notifications.recipientId, userId),
-        eq(notifications.organisationId, organisationId),
-      ),
-    )
-    .orderBy(notifications.createdAt);
-}
+    return await database
+      .select()
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.recipientId, userId),
+          eq(notifications.organisationId, organisationId),
+        ),
+      )
+      .orderBy(notifications.createdAt);
+  },
+  {
+    actionName: "getUserNotifications",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "low",
+  },
+);
 
 /* =========================================================
    MARK AS READ
 ========================================================= */
-export async function markAsRead(notificationId: string) {
-  const session = await auth();
 
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
+export const markAsRead = withErrorHandling(
+  async (notificationId: string) => {
+    const session = await auth();
 
-  const organisationId = await getUserOrganisationId(session.user.id);
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized");
+    }
 
-  await database
-    .update(notifications)
-    .set({ isRead: true })
-    .where(
-      and(
-        eq(notifications.id, notificationId),
-        eq(notifications.organisationId, organisationId),
-      ),
-    );
-}
+    const organisationId = await getUserOrganisationId(session.user.id);
+
+    await database
+      .update(notifications)
+      .set({ isRead: true })
+      .where(
+        and(
+          eq(notifications.id, notificationId),
+          eq(notifications.organisationId, organisationId),
+        ),
+      );
+  },
+  {
+    actionName: "markAsRead",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "low",
+  },
+);
 
 /* =========================================================
    GET UNREAD COUNT
 ========================================================= */
 
-export async function getUnreadNotificationsCount(userId: string) {
-  const organisationId = await getUserOrganisationId(userId);
+export const getUnreadNotificationsCount = withErrorHandling(
+  async (userId: string) => {
+    const organisationId = await getUserOrganisationId(userId);
 
-  const unread = await database
-    .select()
-    .from(notifications)
-    .where(
-      and(
-        eq(notifications.recipientId, userId),
-        eq(notifications.organisationId, organisationId),
-        eq(notifications.isRead, false),
-      ),
-    );
+    const unread = await database
+      .select()
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.recipientId, userId),
+          eq(notifications.organisationId, organisationId),
+          eq(notifications.isRead, false),
+        ),
+      );
 
-  return unread.length;
-}
+    return unread.length;
+  },
+  {
+    actionName: "getUnreadNotificationsCount",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "low",
+  },
+);
 
 /* =========================================================
    SYSTEM PROFILE CHECK
 ========================================================= */
 
-export async function checkForSystemNotifications(
-  userId: string,
-): Promise<boolean> {
-  const user = await database.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { role: true },
-  });
+export const checkForSystemNotifications = withErrorHandling(
+  async (userId: string): Promise<boolean> => {
+    const user = await database.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { role: true },
+    });
 
-  const profile = await database.query.userProfiles.findFirst({
-    where: eq(userProfiles.userId, userId),
-    columns: { id: true },
-  });
+    const profile = await database.query.userProfiles.findFirst({
+      where: eq(userProfiles.userId, userId),
+      columns: { id: true },
+    });
 
-  return !user?.role || !profile;
-}
+    return !user?.role || !profile;
+  },
+  {
+    actionName: "checkForSystemNotifications",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "low",
+  },
+);

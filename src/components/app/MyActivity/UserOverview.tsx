@@ -6,25 +6,33 @@ import { eq } from "drizzle-orm";
 import Image from "next/image";
 import { getImageUrl } from "@/util/files";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 export default async function UserOverview() {
   const session = await auth();
 
   if (!session?.user?.id) {
-    throw new Error("Unauthorized");
+    redirect("/login"); // ✅ better than throwing
   }
 
   const userId = session.user.id;
 
-  const profileArray = await database
-    .select()
-    .from(userProfiles)
-    .where(eq(userProfiles.userId, userId));
+  let profile;
 
-  const profile = profileArray[0];
+  try {
+    const profileArray = await database
+      .select()
+      .from(userProfiles)
+      .where(eq(userProfiles.userId, userId));
+
+    profile = profileArray[0];
+  } catch (error) {
+    // Optional: later we can plug server-side handleError here
+    return <div className="p-6 text-red-600">Failed to load profile data.</div>;
+  }
 
   if (!profile) {
-    return <div>No profile data found.</div>;
+    return <div className="p-6 text-gray-500">No profile data found.</div>;
   }
 
   return (

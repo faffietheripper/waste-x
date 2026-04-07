@@ -8,79 +8,77 @@ import { revalidatePath } from "next/cache";
 import { isBidOver } from "@/util/bids";
 import { createNotification } from "../../notifications/actions";
 
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
+
 /* =========================================================
    CREATE BID
 ========================================================= */
 
-export async function createBidAction({
-  amount,
-  listingId,
-}: {
-  amount: number;
-  listingId: number;
-}) {
-  const session = await auth();
-  const userId = session?.user?.id;
+export const createBidAction = withErrorHandling(
+  async ({ amount, listingId }: { amount: number; listingId: number }) => {
+    const session = await auth();
+    const userId = session?.user?.id;
 
-  if (!userId) {
-    return {
-      success: false,
-      message: "You must be logged in.",
-    };
-  }
+    /* ===============================
+       UX VALIDATION
+    ============================== */
 
-  const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
-  });
+    if (!userId) {
+      return {
+        success: false,
+        message: "You must be logged in.",
+      };
+    }
 
-  if (!listing) {
-    return {
-      success: false,
-      message: "Listing not found.",
-    };
-  }
+    const listing = await database.query.wasteListings.findFirst({
+      where: eq(wasteListings.id, listingId),
+    });
 
-  if (await isBidOver(listing)) {
-    return {
-      success: false,
-      message: "Auction is over.",
-    };
-  }
+    if (!listing) {
+      return {
+        success: false,
+        message: "Listing not found.",
+      };
+    }
 
-  const profile = await database.query.userProfiles.findFirst({
-    where: eq(userProfiles.userId, userId),
-  });
+    if (await isBidOver(listing)) {
+      return {
+        success: false,
+        message: "Auction is over.",
+      };
+    }
 
-  if (!profile) {
-    return {
-      success: false,
-      message: "Complete your profile before bidding.",
-    };
-  }
+    const profile = await database.query.userProfiles.findFirst({
+      where: eq(userProfiles.userId, userId),
+    });
 
-  const user = await database.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: {
-      organisationId: true,
-    },
-  });
+    if (!profile) {
+      return {
+        success: false,
+        message: "Complete your profile before bidding.",
+      };
+    }
 
-  if (!user?.organisationId) {
-    return {
-      success: false,
-      message: "User must belong to an organisation.",
-    };
-  }
+    const user = await database.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { organisationId: true },
+    });
 
-  const organisationId = user.organisationId;
+    if (!user?.organisationId) {
+      return {
+        success: false,
+        message: "User must belong to an organisation.",
+      };
+    }
 
-  try {
+    const organisationId = user.organisationId;
+
+    /* ===============================
+       TRANSACTION (RACE SAFE)
+    ============================== */
+
     await database.transaction(async (tx) => {
-      /* -----------------------------------------------------
-         RACE CONDITION PROTECTION
-         Re-check listing inside the transaction
-      ----------------------------------------------------- */
-
       const latestListing = await tx.query.wasteListings.findFirst({
         where: eq(wasteListings.id, listingId),
       });
@@ -95,10 +93,6 @@ export async function createBidAction({
         throw new Error(`Bid must be higher than £${currentBid}`);
       }
 
-      /* -----------------------------------------------------
-         INSERT BID
-      ----------------------------------------------------- */
-
       await tx.insert(bids).values({
         amount,
         listingId: latestListing.id,
@@ -106,20 +100,12 @@ export async function createBidAction({
         organisationId,
       });
 
-      /* -----------------------------------------------------
-         UPDATE LISTING CURRENT BID
-      ----------------------------------------------------- */
-
       await tx
         .update(wasteListings)
         .set({
           currentBid: amount,
         })
         .where(eq(wasteListings.id, latestListing.id));
-
-      /* -----------------------------------------------------
-         CREATE NOTIFICATION
-      ----------------------------------------------------- */
 
       if (latestListing.userId) {
         await createNotification(
@@ -138,82 +124,89 @@ export async function createBidAction({
       success: true,
       message: "Bid placed successfully.",
     };
-  } catch (error: any) {
-    return {
-      success: false,
-      message: error.message || "Failed to place bid.",
-    };
-  }
-}
+  },
+  {
+    actionName: "createBidAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "high", // marketplace critical path
+  },
+);
 
 /* =========================================================
    ASSIGN WINNING BID
 ========================================================= */
 
-export async function handleAssignWinningBid(formData: FormData) {
-  const listingId = Number(formData.get("listingId"));
-  const bidId = Number(formData.get("bidId"));
+export const handleAssignWinningBid = withErrorHandling(
+  async (formData: FormData) => {
+    const listingId = Number(formData.get("listingId"));
+    const bidId = Number(formData.get("bidId"));
 
-  if (!listingId || !bidId) {
+    if (!listingId || !bidId) {
+      return {
+        success: false,
+        message: "Invalid request.",
+      };
+    }
+
+    const session = await auth();
+
+    if (!session?.user?.id) {
+      return {
+        success: false,
+        message: "Unauthorized.",
+      };
+    }
+
+    const listing = await database.query.wasteListings.findFirst({
+      where: eq(wasteListings.id, listingId),
+    });
+
+    if (!listing) {
+      return {
+        success: false,
+        message: "Listing not found.",
+      };
+    }
+
+    if (listing.organisationId !== session.user.organisationId) {
+      return {
+        success: false,
+        message: "Not allowed.",
+      };
+    }
+
+    const bid = await database.query.bids.findFirst({
+      where: eq(bids.id, bidId),
+    });
+
+    if (!bid) {
+      return {
+        success: false,
+        message: "Bid not found.",
+      };
+    }
+
+    await database.transaction(async (tx) => {
+      await tx
+        .update(wasteListings)
+        .set({
+          winningBidId: bid.id,
+          winningOrganisationId: bid.organisationId,
+          assigned: true,
+        })
+        .where(eq(wasteListings.id, listingId));
+    });
+
+    revalidatePath(`/home/waste-listings/${listingId}`);
+
     return {
-      success: false,
-      message: "Invalid request.",
+      success: true,
+      message: "Winning bid assigned.",
     };
-  }
-
-  const session = await auth();
-
-  if (!session?.user?.id) {
-    return {
-      success: false,
-      message: "Unauthorized.",
-    };
-  }
-
-  const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
-  });
-
-  if (!listing) {
-    return {
-      success: false,
-      message: "Listing not found.",
-    };
-  }
-
-  if (listing.organisationId !== session.user.organisationId) {
-    return {
-      success: false,
-      message: "Not allowed.",
-    };
-  }
-
-  const bid = await database.query.bids.findFirst({
-    where: eq(bids.id, bidId),
-  });
-
-  if (!bid) {
-    return {
-      success: false,
-      message: "Bid not found.",
-    };
-  }
-
-  await database.transaction(async (tx) => {
-    await tx
-      .update(wasteListings)
-      .set({
-        winningBidId: bid.id,
-        winningOrganisationId: bid.organisationId,
-        assigned: true,
-      })
-      .where(eq(wasteListings.id, listingId));
-  });
-
-  revalidatePath(`/home/waste-listings/${listingId}`);
-
-  return {
-    success: true,
-    message: "Winning bid assigned.",
-  };
-}
+  },
+  {
+    actionName: "handleAssignWinningBid",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "high",
+  },
+);

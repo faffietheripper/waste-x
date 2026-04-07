@@ -6,72 +6,95 @@ import { reviews, wasteListings, organisations, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { createNotification } from "../../notifications/actions";
 
-export async function createReviewAction({
-  listingId,
-  rating,
-  reviewText,
-}: {
-  listingId: number;
-  rating: number;
-  reviewText: string;
-}) {
-  const session = await auth();
-  const userId = session?.user?.id;
-  const userOrganisationId = session?.user?.organisationId;
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-  if (!userId || !userOrganisationId) {
-    return { error: "You must be logged in to leave a review." };
-  }
+export const createReviewAction = withErrorHandling(
+  async ({
+    listingId,
+    rating,
+    reviewText,
+  }: {
+    listingId: number;
+    rating: number;
+    reviewText: string;
+  }) => {
+    const session = await auth();
+    const userId = session?.user?.id;
+    const userOrganisationId = session?.user?.organisationId;
 
-  if (!listingId || !rating || !reviewText) {
-    return { error: "All fields are required." };
-  }
+    /* ===============================
+       USER VALIDATION (UX SAFE)
+    ============================== */
 
-  // Fetch listing
-  const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
-  });
+    if (!userId || !userOrganisationId) {
+      return { error: "You must be logged in to leave a review." };
+    }
 
-  if (!listing) {
-    return { error: "Listing not found." };
-  }
+    if (!listingId || !rating || !reviewText) {
+      return { error: "All fields are required." };
+    }
 
-  // Reviewer must belong to one of involved orgs
-  const isAuthorized =
-    listing.organisationId === userOrganisationId ||
-    listing.winningOrganisationId === userOrganisationId;
+    /* ===============================
+       FETCH LISTING
+    ============================== */
 
-  if (!isAuthorized) {
-    return { error: "You are not authorized to review this listing." };
-  }
+    const listing = await database.query.wasteListings.findFirst({
+      where: eq(wasteListings.id, listingId),
+    });
 
-  // Determine target org
-  let targetOrganisationId: string | null = null;
+    if (!listing) {
+      return { error: "Listing not found." };
+    }
 
-  if (userOrganisationId === listing.organisationId) {
-    targetOrganisationId = listing.winningOrganisationId;
-  } else if (userOrganisationId === listing.winningOrganisationId) {
-    targetOrganisationId = listing.organisationId;
-  }
+    /* ===============================
+       AUTHORISATION CHECK
+    ============================== */
 
-  if (!targetOrganisationId) {
-    return { error: "Unable to determine organisation to review." };
-  }
+    const isAuthorized =
+      listing.organisationId === userOrganisationId ||
+      listing.winningOrganisationId === userOrganisationId;
 
-  if (targetOrganisationId === userOrganisationId) {
-    return { error: "You cannot review your own organisation." };
-  }
+    if (!isAuthorized) {
+      return { error: "You are not authorized to review this listing." };
+    }
 
-  // Ensure org exists
-  const targetOrg = await database.query.organisations.findFirst({
-    where: eq(organisations.id, targetOrganisationId),
-  });
+    /* ===============================
+       DETERMINE TARGET ORG
+    ============================== */
 
-  if (!targetOrg) {
-    return { error: "Organisation not found." };
-  }
+    let targetOrganisationId: string | null = null;
 
-  try {
+    if (userOrganisationId === listing.organisationId) {
+      targetOrganisationId = listing.winningOrganisationId;
+    } else if (userOrganisationId === listing.winningOrganisationId) {
+      targetOrganisationId = listing.organisationId;
+    }
+
+    if (!targetOrganisationId) {
+      return { error: "Unable to determine organisation to review." };
+    }
+
+    if (targetOrganisationId === userOrganisationId) {
+      return { error: "You cannot review your own organisation." };
+    }
+
+    /* ===============================
+       VALIDATE TARGET ORG
+    ============================== */
+
+    const targetOrg = await database.query.organisations.findFirst({
+      where: eq(organisations.id, targetOrganisationId),
+    });
+
+    if (!targetOrg) {
+      return { error: "Organisation not found." };
+    }
+
+    /* ===============================
+       CREATE REVIEW
+    ============================== */
+
     await database.insert(reviews).values({
       reviewerId: userId,
       reviewedOrganisationId: targetOrganisationId,
@@ -80,7 +103,10 @@ export async function createReviewAction({
       comment: reviewText,
     });
 
-    // Notify all users in that organisation
+    /* ===============================
+       NOTIFY ORG MEMBERS
+    ============================== */
+
     const orgMembers = await database.query.users.findMany({
       where: eq(users.organisationId, targetOrganisationId),
       columns: { id: true },
@@ -97,9 +123,14 @@ export async function createReviewAction({
       ),
     );
 
-    return { success: true, message: "Review submitted successfully." };
-  } catch (error) {
-    console.error("Error creating review:", error);
-    return { error: "Failed to create review." };
-  }
-}
+    return {
+      success: true,
+      message: "Review submitted successfully.",
+    };
+  },
+  {
+    actionName: "createReviewAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "medium", // important but not destructive
+  },
+);

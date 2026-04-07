@@ -7,108 +7,134 @@ import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "../../notifications/actions";
 
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
+
 /* =========================================================
    ACCEPT OFFER
 ========================================================= */
 
-export async function acceptOfferAction(formData: FormData) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+export const acceptOfferAction = withErrorHandling(
+  async (formData: FormData) => {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Unauthorized");
 
-  const listingId = Number(formData.get("listingId"));
-  if (!listingId) throw new Error("Listing ID required");
+    const listingId = Number(formData.get("listingId"));
+    if (!listingId) throw new Error("Listing ID required");
 
-  const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
-  });
+    const listing = await database.query.wasteListings.findFirst({
+      where: eq(wasteListings.id, listingId),
+    });
 
-  if (!listing) throw new Error("Listing not found");
+    if (!listing) throw new Error("Listing not found");
 
-  await database
-    .update(wasteListings)
-    .set({ offerAccepted: true })
-    .where(eq(wasteListings.id, listingId));
+    await database
+      .update(wasteListings)
+      .set({ offerAccepted: true })
+      .where(eq(wasteListings.id, listingId));
 
-  if (listing.userId) {
-    await createNotification(
-      listing.userId,
-      "Job Accepted 🎉",
-      `Your listing "${listing.name}" has been accepted and will be assigned to a carrier shortly.`,
-      `/home/waste-listings/${listingId}`,
-    );
-  }
+    if (listing.userId) {
+      await createNotification(
+        listing.userId,
+        "Job Accepted 🎉",
+        `Your listing "${listing.name}" has been accepted and will be assigned to a carrier shortly.`,
+        `/home/waste-listings/${listingId}`,
+      );
+    }
 
-  revalidatePath("/home/my-activity/my-bids");
-  revalidatePath("/home/my-activity/jobs-in-progress");
-}
+    revalidatePath("/home/my-activity/my-bids");
+    revalidatePath("/home/my-activity/jobs-in-progress");
+  },
+  {
+    actionName: "acceptOfferAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "high",
+  },
+);
 
 /* =========================================================
    DECLINE OFFER
 ========================================================= */
 
-export async function declineOfferAction(formData: FormData) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+export const declineOfferAction = withErrorHandling(
+  async (formData: FormData) => {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Unauthorized");
 
-  const listingId = Number(formData.get("listingId"));
-  const bidId = Number(formData.get("bidId"));
+    const listingId = Number(formData.get("listingId"));
+    const bidId = Number(formData.get("bidId"));
 
-  if (!listingId || !bidId) throw new Error("Missing IDs");
+    if (!listingId || !bidId) throw new Error("Missing IDs");
 
-  await database
-    .update(wasteListings)
-    .set({
-      assigned: false,
-      winningBidId: null,
-      winningOrganisationId: null,
-      offerAccepted: false,
-    })
-    .where(eq(wasteListings.id, listingId));
+    await database
+      .update(wasteListings)
+      .set({
+        assigned: false,
+        winningBidId: null,
+        winningOrganisationId: null,
+        offerAccepted: false,
+      })
+      .where(eq(wasteListings.id, listingId));
 
-  await database
-    .update(bids)
-    .set({ declinedOffer: true })
-    .where(eq(bids.id, bidId));
+    await database
+      .update(bids)
+      .set({ declinedOffer: true })
+      .where(eq(bids.id, bidId));
 
-  const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
-  });
+    const listing = await database.query.wasteListings.findFirst({
+      where: eq(wasteListings.id, listingId),
+    });
 
-  if (listing?.userId) {
-    await createNotification(
-      listing.userId,
-      "Offer Declined ❌",
-      `The offer for "${listing.name}" was declined.`,
-      `/home/waste-listings/${listingId}`,
-    );
-  }
+    if (listing?.userId) {
+      await createNotification(
+        listing.userId,
+        "Offer Declined ❌",
+        `The offer for "${listing.name}" was declined.`,
+        `/home/waste-listings/${listingId}`,
+      );
+    }
 
-  revalidatePath("/home/my-activity/my-bids");
-}
+    revalidatePath("/home/my-activity/my-bids");
+  },
+  {
+    actionName: "declineOfferAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "medium",
+  },
+);
 
 /* =========================================================
    CANCEL JOB (Relist Listing)
 ========================================================= */
 
-export async function cancelJobAction({
-  listingId,
-  bidId,
-  cancellationReason,
-}: {
-  listingId: number;
-  bidId: number;
-  cancellationReason: string;
-}) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return { success: false, message: "Unauthorized." };
-  }
+export const cancelJobAction = withErrorHandling(
+  async ({
+    listingId,
+    bidId,
+    cancellationReason,
+  }: {
+    listingId: number;
+    bidId: number;
+    cancellationReason: string;
+  }) => {
+    const session = await auth();
 
-  if (!cancellationReason.trim()) {
-    return { success: false, message: "Cancellation reason required." };
-  }
+    /* ===============================
+       USER-FACING VALIDATION
+    ============================== */
 
-  try {
+    if (!session?.user?.id) {
+      return { success: false, message: "Unauthorized." };
+    }
+
+    if (!cancellationReason.trim()) {
+      return { success: false, message: "Cancellation reason required." };
+    }
+
+    /* ===============================
+       VALIDATE BID OWNERSHIP
+    ============================== */
+
     const bid = await database.query.bids.findFirst({
       where: and(eq(bids.id, bidId), eq(bids.userId, session.user.id)),
     });
@@ -117,7 +143,10 @@ export async function cancelJobAction({
       return { success: false, message: "Bid not found." };
     }
 
-    // 1️⃣ Mark bid as cancelled
+    /* ===============================
+       CANCEL BID
+    ============================== */
+
     await database
       .update(bids)
       .set({
@@ -126,7 +155,10 @@ export async function cancelJobAction({
       })
       .where(eq(bids.id, bidId));
 
-    // 2️⃣ Reset listing so it returns to marketplace
+    /* ===============================
+       RESET LISTING
+    ============================== */
+
     await database
       .update(wasteListings)
       .set({
@@ -139,7 +171,10 @@ export async function cancelJobAction({
       })
       .where(eq(wasteListings.id, listingId));
 
-    // 3️⃣ Notify listing owner
+    /* ===============================
+       NOTIFY OWNER
+    ============================== */
+
     const listing = await database.query.wasteListings.findFirst({
       where: eq(wasteListings.id, listingId),
     });
@@ -160,8 +195,10 @@ export async function cancelJobAction({
       success: true,
       message: "Job successfully cancelled and relisted.",
     };
-  } catch (error) {
-    console.error(error);
-    return { success: false, message: "Something went wrong." };
-  }
-}
+  },
+  {
+    actionName: "cancelJobAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "high",
+  },
+);

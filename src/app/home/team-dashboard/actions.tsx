@@ -8,11 +8,15 @@ import crypto from "crypto";
 import { z } from "zod";
 import { sendRegEmail } from "@/util/sendRegEmail";
 
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
+
 /* =========================================================
    TYPES
 ========================================================= */
 
 export type UserRole = "administrator" | "employee" | "seniorManagement";
+
 type ActionResponse = { success: true } | { success: false; message: string };
 
 export type InviteFormData = {
@@ -36,56 +40,47 @@ const InviteSchema = z.object({
 });
 
 /* =========================================================
-   GET USER
+   GET USER (UTILITY — NOT WRAPPED)
 ========================================================= */
 
 export async function getUserFromDb(email: string) {
-  try {
-    const existedUser = await database.query.users.findFirst({
-      where: eq(users.email, email),
-      columns: {
-        id: true,
-        email: true,
-        name: true,
-      },
-    });
+  const existedUser = await database.query.users.findFirst({
+    where: eq(users.email, email),
+    columns: {
+      id: true,
+      email: true,
+      name: true,
+    },
+  });
 
-    if (!existedUser) {
-      return { success: false, message: "User not found." };
-    }
-
-    return { success: true, data: existedUser };
-  } catch (error: any) {
-    return { success: false, message: error.message };
+  if (!existedUser) {
+    return { success: false, message: "User not found." };
   }
+
+  return { success: true, data: existedUser };
 }
 
 /* =========================================================
    INVITE TEAM USER
 ========================================================= */
 
-export async function registerTeamUser(
-  data: InviteFormData,
-): Promise<RegisterTeamUserResponse> {
-  try {
+export const registerTeamUser = withErrorHandling(
+  async (data: InviteFormData): Promise<RegisterTeamUserResponse> => {
     const { name, email, role } = data;
 
-    /* ---------------- AUTH ---------------- */
     const session = await auth();
     if (!session?.user) throw new Error("Unauthorized");
 
-    /* ---------------- VALIDATION ---------------- */
     InviteSchema.parse({ name, email, role });
-
-    /* ---------------- EXISTING USER ---------------- */
-    const existingUser = await database.query.users.findFirst({
-      where: eq(users.email, email),
-    });
 
     if (session.user.role !== "administrator") {
       throw new Error("Unauthorized");
     }
-    // If user exists AND is already active → block
+
+    const existingUser = await database.query.users.findFirst({
+      where: eq(users.email, email),
+    });
+
     if (existingUser?.passwordHash) {
       return {
         success: false,
@@ -93,7 +88,6 @@ export async function registerTeamUser(
       };
     }
 
-    /* ---------------- ADMIN ORG ---------------- */
     const adminUser = await database.query.users.findFirst({
       where: eq(users.id, session.user.id),
       columns: { organisationId: true },
@@ -106,7 +100,8 @@ export async function registerTeamUser(
       };
     }
 
-    /* ---------------- TOKEN ---------------- */
+    /* ================= TOKEN ================= */
+
     const rawToken = crypto.randomBytes(32).toString("hex");
 
     const hashedToken = crypto
@@ -114,13 +109,11 @@ export async function registerTeamUser(
       .update(rawToken)
       .digest("hex");
 
-    const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
+    const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24);
 
-    /* ---------------- UPSERT ---------------- */
     let userRecord;
 
     if (existingUser) {
-      // Re-invite existing pending user
       const [updated] = await database
         .update(users)
         .set({
@@ -136,7 +129,6 @@ export async function registerTeamUser(
 
       userRecord = updated;
     } else {
-      // Create new invited user
       const [created] = await database
         .insert(users)
         .values({
@@ -144,9 +136,7 @@ export async function registerTeamUser(
           email,
           role,
           organisationId: adminUser.organisationId,
-
           passwordHash: null,
-
           inviteToken: hashedToken,
           inviteExpiry: expiry,
           status: "INVITED",
@@ -156,43 +146,48 @@ export async function registerTeamUser(
       userRecord = created;
     }
 
-    /* ---------------- RETURN ---------------- */
     return {
       success: true,
-      token: rawToken, // raw token ONLY returned here
+      token: rawToken,
     };
-  } catch (error: any) {
-    return {
-      success: false,
-      message: error.message || "Failed to invite user",
-    };
-  }
-}
+  },
+  {
+    actionName: "registerTeamUser",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high",
+  },
+);
 
-export async function revokeInvite(userId: string) {
-  try {
+/* =========================================================
+   REVOKE INVITE
+========================================================= */
+
+export const revokeInvite = withErrorHandling(
+  async (userId: string): Promise<ActionResponse> => {
     await database
       .update(users)
       .set({
         inviteToken: null,
         inviteExpiry: null,
-        status: "SUSPENDED", // or keep INVITED but revoked
+        status: "SUSPENDED",
       })
       .where(eq(users.id, userId));
 
     return { success: true };
-  } catch (err: any) {
-    return { success: false, message: err.message };
-  }
-}
+  },
+  {
+    actionName: "revokeInvite",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high",
+  },
+);
 
 /* =========================================================
    RESEND INVITE
 ========================================================= */
 
-export async function resendInvite(userId: string): Promise<ActionResponse> {
-  try {
-    /* ---------------- FIND USER ---------------- */
+export const resendInvite = withErrorHandling(
+  async (userId: string): Promise<ActionResponse> => {
     const user = await database.query.users.findFirst({
       where: eq(users.id, userId),
     });
@@ -208,7 +203,8 @@ export async function resendInvite(userId: string): Promise<ActionResponse> {
       };
     }
 
-    /* ---------------- GENERATE TOKEN ---------------- */
+    /* ================= TOKEN ================= */
+
     const rawToken = crypto.randomBytes(32).toString("hex");
 
     const hashedToken = crypto
@@ -216,11 +212,8 @@ export async function resendInvite(userId: string): Promise<ActionResponse> {
       .update(rawToken)
       .digest("hex");
 
-    const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
+    const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24);
 
-    console.log("📨 RESEND TOKEN:", rawToken);
-
-    /* ---------------- UPDATE USER ---------------- */
     await database
       .update(users)
       .set({
@@ -229,7 +222,8 @@ export async function resendInvite(userId: string): Promise<ActionResponse> {
       })
       .where(eq(users.id, userId));
 
-    /* ---------------- SEND EMAIL ---------------- */
+    /* ================= EMAIL ================= */
+
     const emailRes = await sendRegEmail({
       name: user.name,
       email: user.email,
@@ -243,14 +237,11 @@ export async function resendInvite(userId: string): Promise<ActionResponse> {
       };
     }
 
-    console.log("✅ INVITE RESENT:", user.email);
-
     return { success: true };
-  } catch (err: any) {
-    console.error("❌ resendInvite error:", err);
-    return {
-      success: false,
-      message: err.message || "Failed to resend invite.",
-    };
-  }
-}
+  },
+  {
+    actionName: "resendInvite",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "medium",
+  },
+);

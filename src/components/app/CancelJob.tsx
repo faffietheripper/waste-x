@@ -23,8 +23,24 @@ export default function CancelJobPage({
   const y = useMotionValue(0);
   const controls = useDragControls();
 
-  const handleCancel = async (e: React.FormEvent) => {
+  /* =========================================================
+     CLOSE DRAWER (SAFE RESET)
+  ========================================================= */
+
+  function closeDrawer() {
+    if (loading) return; // prevent closing mid-request
+    setOpen(false);
+    setReason("");
+  }
+
+  /* =========================================================
+     SUBMIT
+  ========================================================= */
+
+  async function handleCancel(e: React.FormEvent) {
     e.preventDefault();
+
+    if (loading) return;
 
     if (!reason.trim()) {
       toast({
@@ -37,30 +53,36 @@ export default function CancelJobPage({
 
     setLoading(true);
 
-    const result = await cancelJobAction({
-      listingId,
-      bidId,
-      cancellationReason: reason,
-    });
+    try {
+      const result = await cancelJobAction({
+        listingId,
+        bidId,
+        cancellationReason: reason,
+      });
 
-    setLoading(false);
+      toast({
+        title: result.success ? "Job Cancelled" : "Cancellation Failed",
+        description: result.message,
+        variant: result.success ? "default" : "destructive",
+      });
 
-    toast({
-      title: result.success ? "Success" : "Error",
-      description: result.message,
-      variant: result.success ? "default" : "destructive",
-    });
-
-    if (result.success) {
-      setOpen(false);
-      setReason("");
+      if (result.success) {
+        closeDrawer();
+      }
+    } catch (error) {
+      toast({
+        title: "System Error",
+        description: "Something went wrong. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
     }
-  };
+  }
 
-  const closeDrawer = () => {
-    setOpen(false);
-    setReason("");
-  };
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <div className="relative">
@@ -94,6 +116,7 @@ export default function CancelJobPage({
             onClick={(e) => e.stopPropagation()}
             className="absolute bottom-0 w-full h-[75vh] rounded-t-3xl bg-neutral-900 border-t border-neutral-800 shadow-2xl"
           >
+            {/* DRAG HANDLE */}
             <div className="flex justify-center pt-4">
               <button
                 onPointerDown={(e) => controls.start(e)}
@@ -101,6 +124,7 @@ export default function CancelJobPage({
               />
             </div>
 
+            {/* CONTENT */}
             <div className="max-w-2xl mx-auto px-6 pt-8 pb-12 overflow-y-auto h-full">
               <div className="text-center mb-8">
                 <h2 className="text-2xl font-bold text-white mb-2">
@@ -135,7 +159,8 @@ export default function CancelJobPage({
                   <button
                     type="button"
                     onClick={closeDrawer}
-                    className="px-4 py-2 rounded-lg bg-neutral-700 text-neutral-200 hover:bg-neutral-600 transition"
+                    disabled={loading}
+                    className="px-4 py-2 rounded-lg bg-neutral-700 text-neutral-200 hover:bg-neutral-600 transition disabled:opacity-50"
                   >
                     Keep Job
                   </button>

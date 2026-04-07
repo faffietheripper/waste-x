@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { resolveIncidentAction } from "@/app/home/carrier-hub/carrier-manager/incident-management/actions";
+import { useAction } from "@/lib/actions/useAction";
 
 interface Props {
   incidentId: string;
@@ -26,8 +27,9 @@ export default function IncidentResolutionForm({
     dateClosed: "",
   });
 
-  const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  const run = useAction();
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
@@ -37,7 +39,6 @@ export default function IncidentResolutionForm({
 
   const buildResolutionNotes = () => {
     return `
-
 
 Date of Incident
 ${form.dateOfIncident}
@@ -77,7 +78,7 @@ ${form.dateClosed}
   const validate = () => {
     for (const key in form) {
       if (!form[key as keyof typeof form]) {
-        setError("All fields must be completed.");
+        // ⚠️ validation = local (no global error)
         return false;
       }
     }
@@ -85,26 +86,23 @@ ${form.dateClosed}
   };
 
   const handleResolve = () => {
-    setError(null);
-
     if (!validate()) return;
 
     const compiledNotes = buildResolutionNotes();
 
     startTransition(async () => {
-      try {
-        await resolveIncidentAction(incidentId, assignmentId, compiledNotes);
-      } catch (err: any) {
-        setError(err.message);
-      }
+      const result = await run(() =>
+        resolveIncidentAction(incidentId, assignmentId, compiledNotes),
+      );
+
+      // no need to handle error here — global system handles it
+      // you could add success UX here later if needed
     });
   };
 
   return (
     <div className="mt-6 border-t pt-6 space-y-4">
       <h3 className="font-semibold text-lg">Incident Resolution Report</h3>
-
-      {error && <div className="text-red-600 text-sm">{error}</div>}
 
       <input
         type="date"

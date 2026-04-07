@@ -1,43 +1,40 @@
 "use server";
 
-import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { supportTickets, supportTicketMessages, users } from "@/db/schema";
-import { eq } from "drizzle-orm";
-
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
-import { ERROR_CODES } from "@/lib/errors/errorCodes";
+import { auth } from "@/auth";
+import { eq } from "drizzle-orm";
+import { users, supportTickets, supportTicketMessages } from "@/db/schema";
 
 /* =========================================================
    TYPES
 ========================================================= */
 
-type TicketCategory =
-  | "bug"
-  | "billing"
-  | "access"
-  | "feature_request"
-  | "compliance"
-  | "other";
-
-type TicketPriority = "low" | "medium" | "high" | "urgent";
+type CreateTicketResponse =
+  | { success: true; ticketId: string }
+  | { success: false; message: string };
 
 /* =========================================================
-   CREATE TICKET
+   ACTION
 ========================================================= */
 
 export const createTicketAction = withErrorHandling(
-  async (_prevState: any, formData: FormData) => {
-    const session = await auth();
-
+  async (
+    _prevState: unknown,
+    formData: FormData,
+  ): Promise<CreateTicketResponse> => {
     /* ===============================
-       USER VALIDATION (UX SAFE)
+       AUTH
     ============================== */
+    const session = await auth();
 
     if (!session?.user?.id) {
       return { success: false, message: "Unauthorized." };
     }
 
+    /* ===============================
+       USER
+    ============================== */
     const dbUser = await database.query.users.findFirst({
       where: eq(users.id, session.user.id),
     });
@@ -46,54 +43,54 @@ export const createTicketAction = withErrorHandling(
       return { success: false, message: "User organisation not found." };
     }
 
-    const organisationId = dbUser.organisationId;
+    const organisationId = String(dbUser.organisationId);
 
-    const rawCategory = formData.get("category");
-    const rawPriority = formData.get("priority");
-    const rawMessage = formData.get("message");
+    /* ===============================
+       INPUT
+    ============================== */
+    const category = formData.get("category")?.toString();
+    const priority = formData.get("priority")?.toString();
+    const message = formData.get("message")?.toString();
 
-    if (!rawCategory || !rawPriority || !rawMessage) {
+    if (!category || !priority || !message) {
       return { success: false, message: "Missing fields." };
     }
-
-    const category = rawCategory.toString() as TicketCategory;
-    const priority = rawPriority.toString() as TicketPriority;
-    const message = rawMessage.toString();
 
     /* ===============================
        TRANSACTION
     ============================== */
-
     const ticket = await database.transaction(async (tx) => {
       const [newTicket] = await tx
         .insert(supportTickets)
         .values({
-          organisationId,
-          createdByUserId: dbUser.id,
-          category,
-          priority,
-          status: "open",
+          organisationId, // ✅ force correct type
+          createdByUserId: String(dbUser.id),
+          category: category as any, // ✅ avoid enum TS conflict
+          priority: priority as any,
+          status: "open" as any,
         })
         .returning();
 
       await tx.insert(supportTicketMessages).values({
         organisationId,
         ticketId: newTicket.id,
-        senderUserId: dbUser.id,
+        senderUserId: String(dbUser.id),
         message,
       });
 
       return newTicket;
     });
 
+    /* ===============================
+       RESPONSE
+    ============================== */
     return {
       success: true,
-      ticketId: ticket.id,
+      ticketId: String(ticket.id),
     };
   },
   {
     actionName: "createTicketAction",
-    code: ERROR_CODES.SYSTEM_UNEXPECTED,
-    severity: "high", // support + operational impact
+    severity: "high",
   },
 );

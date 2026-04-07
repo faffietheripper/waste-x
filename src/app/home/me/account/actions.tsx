@@ -1,5 +1,3 @@
-//action to manage password
-
 "use server";
 
 import { auth } from "@/auth";
@@ -9,17 +7,27 @@ import bcryptjs from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
-export async function updatePassword({
-  userId,
-  currentPassword,
-  newPassword,
-}: {
-  userId: string;
-  currentPassword?: string;
-  newPassword: string;
-}) {
-  try {
-    // Find the user by ID
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
+
+/* =========================================================
+   UPDATE PASSWORD
+========================================================= */
+
+export const updatePassword = withErrorHandling(
+  async ({
+    userId,
+    currentPassword,
+    newPassword,
+  }: {
+    userId: string;
+    currentPassword?: string;
+    newPassword: string;
+  }) => {
+    /* ===============================
+       FIND USER
+    ============================== */
+
     const user = await database.query.users.findFirst({
       where: eq(users.id, userId),
     });
@@ -31,12 +39,16 @@ export async function updatePassword({
       };
     }
 
-    // If currentPassword is provided, verify it
+    /* ===============================
+       VERIFY CURRENT PASSWORD
+    ============================== */
+
     if (currentPassword) {
       const isMatch = await bcryptjs.compare(
         currentPassword,
         user.passwordHash ?? "",
       );
+
       if (!isMatch) {
         return {
           success: false,
@@ -45,10 +57,16 @@ export async function updatePassword({
       }
     }
 
-    // Hash the new password
+    /* ===============================
+       HASH NEW PASSWORD
+    ============================== */
+
     const hashedPassword = await bcryptjs.hash(newPassword, 10);
 
-    // Update the user's password in the database
+    /* ===============================
+       UPDATE PASSWORD
+    ============================== */
+
     await database
       .update(users)
       .set({
@@ -60,24 +78,33 @@ export async function updatePassword({
       success: true,
       message: "Password updated successfully.",
     };
-  } catch (error) {
-    return {
-      success: false,
-      message: "An error occurred while updating the password.",
-    };
-  }
-}
+  },
+  {
+    actionName: "updatePassword",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high", // security-sensitive
+  },
+);
 
-//action to delete account
-export async function deleteAccountAction() {
-  const session = await auth();
+/* =========================================================
+   DELETE ACCOUNT
+========================================================= */
 
-  if (!session || !session.user || !session.user.id) {
-    throw new Error("Unauthorized");
-  }
+export const deleteAccountAction = withErrorHandling(
+  async () => {
+    const session = await auth();
 
-  await database.delete(users).where(eq(users.id, session.user.id));
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized");
+    }
 
-  // Redirect the user to the homepage
-  redirect("/");
-}
+    await database.delete(users).where(eq(users.id, session.user.id));
+
+    redirect("/");
+  },
+  {
+    actionName: "deleteAccountAction",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "critical", // destructive action
+  },
+);

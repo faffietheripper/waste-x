@@ -2,64 +2,90 @@
 
 import { useState } from "react";
 import { resendInvite, revokeInvite } from "@/app/home/team-dashboard/actions";
+import { useAction } from "@/lib/actions/useAction";
 
-export default function TeamInvitesTable({ users }: { users: any[] }) {
+/* =========================================================
+   TYPES
+========================================================= */
+
+type UserInvite = {
+  id: string;
+  name: string;
+  email: string;
+  status: string;
+  inviteExpiry?: Date | string | null;
+};
+
+type ActionResponse = { success: true } | { success: false; message: string };
+
+/* =========================================================
+   COMPONENT
+========================================================= */
+
+export default function TeamInvitesTable({ users }: { users: UserInvite[] }) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [actionType, setActionType] = useState<"resend" | "revoke" | null>(
     null,
   );
-  const [message, setMessage] = useState<string | null>(null);
   const [localUsers, setLocalUsers] = useState(users);
 
+  const run = useAction();
+
   const invites = localUsers.filter((u) => u.status === "INVITED");
+
+  /* =========================================================
+     RESEND
+  ========================================================= */
 
   const handleResend = async (userId: string) => {
     setLoadingId(userId);
     setActionType("resend");
-    setMessage(null);
 
-    const res = await resendInvite(userId);
+    const res = await run<ActionResponse>(() => resendInvite(userId));
 
     setLoadingId(null);
 
-    if (res.success) {
-      setMessage("Invite resent successfully.");
-    } else {
-      setMessage(res.message);
+    // ✅ success handled silently (toast/global UI can handle if needed)
+    if (res && res.success === false) {
+      // error handled globally via useAction
     }
   };
+
+  /* =========================================================
+     REVOKE
+  ========================================================= */
 
   const handleRevoke = async (userId: string) => {
     setLoadingId(userId);
     setActionType("revoke");
-    setMessage(null);
 
-    const res = await revokeInvite(userId);
+    const res = await run<ActionResponse>(() => revokeInvite(userId));
 
     setLoadingId(null);
 
-    if (res.success) {
-      setMessage("Invite revoked.");
-
-      // 🔥 remove from UI instantly
+    if (res && res.success === true) {
+      // ✅ instant UI update
       setLocalUsers((prev) => prev.filter((u) => u.id !== userId));
-    } else {
-      setMessage(res.message);
     }
   };
 
+  /* =========================================================
+     UI
+  ========================================================= */
+
   return (
-    <div className="border border-neutral-800">
-      {/* GLOBAL MESSAGE */}
-      {message && (
-        <div className="p-3 text-sm text-green-400 border-b border-neutral-800">
-          {message}
-        </div>
+    <div className="border border-neutral-800 rounded-xl overflow-hidden">
+      {invites.length === 0 && (
+        <div className="p-4 text-sm text-neutral-500">No pending invites.</div>
       )}
 
       {invites.map((user) => {
+        const expiryDate = user.inviteExpiry
+          ? new Date(user.inviteExpiry)
+          : null;
+
         const isExpired =
-          user.inviteExpiry && new Date(user.inviteExpiry) < new Date();
+          expiryDate && expiryDate.getTime() < new Date().getTime();
 
         const isLoading = loadingId === user.id;
 
@@ -69,33 +95,27 @@ export default function TeamInvitesTable({ users }: { users: any[] }) {
             className="flex justify-between items-center p-4 border-b border-neutral-800"
           >
             <div>
-              <p>{user.name}</p>
+              <p className="font-medium">{user.name}</p>
               <p className="text-sm text-neutral-500">{user.email}</p>
 
-              <p
-                className={`text-xs mt-1 ${
-                  isExpired ? "text-red-500" : "text-yellow-500"
-                }`}
-              >
-                {isExpired
-                  ? "Invite expired"
-                  : user.inviteExpiry &&
-                    `Expires: ${new Date(user.inviteExpiry).toLocaleDateString(
-                      "en-GB",
-                      {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                      },
-                    )}`}
-              </p>
+              {expiryDate && (
+                <p
+                  className={`text-xs mt-1 ${
+                    isExpired ? "text-red-500" : "text-yellow-500"
+                  }`}
+                >
+                  {isExpired
+                    ? "Invite expired"
+                    : `Expires: ${expiryDate.toLocaleDateString("en-GB")}`}
+                </p>
+              )}
             </div>
 
             <div className="flex gap-2">
               <button
                 disabled={isLoading}
                 onClick={() => handleResend(user.id)}
-                className="bg-orange-500 text-black px-3 py-1 text-xs disabled:opacity-50"
+                className="bg-orange-500 text-black px-3 py-1 text-xs rounded disabled:opacity-50"
               >
                 {isLoading && actionType === "resend" ? "Sending..." : "Resend"}
               </button>
@@ -103,7 +123,7 @@ export default function TeamInvitesTable({ users }: { users: any[] }) {
               <button
                 disabled={isLoading}
                 onClick={() => handleRevoke(user.id)}
-                className="border border-red-500 text-red-500 px-3 py-1 text-xs disabled:opacity-50"
+                className="border border-red-500 text-red-500 px-3 py-1 text-xs rounded disabled:opacity-50"
               >
                 {isLoading && actionType === "revoke"
                   ? "Revoking..."

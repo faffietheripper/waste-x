@@ -3,8 +3,24 @@
 import { useState, useTransition } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FiTruck } from "react-icons/fi";
-import { assignCarrierAction } from "@/app/home/organisations/[organisationId]/actions";
-import { getWinningJobsAction } from "@/app/home/organisations/[organisationId]/actions";
+import {
+  assignCarrierAction,
+  getWinningJobsAction,
+} from "@/app/home/organisations/[organisationId]/actions";
+import { useAction } from "@/lib/actions/useAction";
+
+/* =========================================================
+   TYPES
+========================================================= */
+
+interface Job {
+  id: number;
+  name: string;
+}
+
+/* =========================================================
+   COMPONENT
+========================================================= */
 
 export default function AssignCarrierModal({
   carrierOrgId,
@@ -12,33 +28,60 @@ export default function AssignCarrierModal({
   carrierOrgId: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [jobs, setJobs] = useState<any[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState("");
+  const [loadingJobs, setLoadingJobs] = useState(false);
+
   const [isPending, startTransition] = useTransition();
+  const run = useAction();
+
+  /* =========================================================
+     OPEN MODAL
+  ========================================================= */
 
   async function openModal() {
-    const res = await getWinningJobsAction();
-    setJobs(res);
-    setIsOpen(true);
+    setLoadingJobs(true);
+
+    try {
+      const res = await run(() => getWinningJobsAction());
+
+      if (res) {
+        setJobs(res);
+      }
+
+      setIsOpen(true);
+    } finally {
+      setLoadingJobs(false);
+    }
   }
+
+  /* =========================================================
+     ASSIGN
+  ========================================================= */
 
   function handleAssign() {
     if (!selectedJob) return;
 
     startTransition(async () => {
-      await assignCarrierAction(Number(selectedJob), carrierOrgId);
+      await run(() => assignCarrierAction(Number(selectedJob), carrierOrgId));
+
       setIsOpen(false);
     });
   }
+
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <>
       {/* OPEN BUTTON */}
       <button
         onClick={openModal}
-        className=" bg-blue-600 text-white text-sm px-4 py-2 rounded hover:opacity-90 transition-opacity"
+        disabled={loadingJobs}
+        className="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:opacity-90 transition-opacity disabled:opacity-50"
       >
-        Assign Carrier Job
+        {loadingJobs ? "Loading..." : "Assign Carrier Job"}
       </button>
 
       {/* MODAL */}
@@ -57,10 +100,10 @@ export default function AssignCarrierModal({
               exit={{ scale: 0, rotate: "0deg" }}
               transition={{ type: "spring", stiffness: 120, damping: 12 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-lg w-full max-w-lg shadow-xl cursor-default relative overflow-hidden"
+              className="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-lg w-full max-w-lg shadow-xl relative overflow-hidden"
             >
-              {/* BIG ICON BACKDROP */}
-              <FiTruck className="text-white/10 rotate-12 text-[250px] absolute z-0 -top-24 -left-24" />
+              {/* BACK ICON */}
+              <FiTruck className="text-white/10 rotate-12 text-[250px] absolute -top-24 -left-24" />
 
               <div className="relative z-10">
                 {/* ICON */}
@@ -73,17 +116,17 @@ export default function AssignCarrierModal({
                 </h3>
 
                 <p className="text-center mb-6 text-sm text-white/80">
-                  Select one of your winning jobs below to assign it to this
-                  carrier.
+                  Select a winning job to assign to this carrier.
                 </p>
 
-                {/* JOB SELECT */}
+                {/* SELECT */}
                 <div className="mb-4 text-black">
                   <label className="text-white text-sm">Select Job</label>
+
                   <select
                     value={selectedJob}
                     onChange={(e) => setSelectedJob(e.target.value)}
-                    className="mt-1 w-full h-10 p-2 rounded-md border border-gray-300 text-sm"
+                    className="mt-1 w-full h-10 p-2 rounded-md border text-sm"
                   >
                     <option value="">-- Select Job --</option>
 
@@ -94,7 +137,7 @@ export default function AssignCarrierModal({
                     ))}
 
                     {jobs.length === 0 && (
-                      <option>No winning jobs available</option>
+                      <option disabled>No jobs available</option>
                     )}
                   </select>
                 </div>
@@ -103,15 +146,15 @@ export default function AssignCarrierModal({
                 <div className="flex gap-2 mt-4">
                   <button
                     onClick={() => setIsOpen(false)}
-                    className="bg-transparent hover:bg-white/10 transition-colors text-white font-semibold w-full py-2 rounded"
+                    className="bg-transparent hover:bg-white/10 text-white font-semibold w-full py-2 rounded"
                   >
                     Cancel
                   </button>
 
                   <button
                     onClick={handleAssign}
-                    disabled={isPending}
-                    className="bg-white text-blue-700 font-semibold w-full py-2 rounded hover:bg-transparent hover:text-white border border-white transition"
+                    disabled={isPending || !selectedJob}
+                    className="bg-white text-blue-700 font-semibold w-full py-2 rounded hover:bg-transparent hover:text-white border border-white disabled:opacity-50"
                   >
                     {isPending ? "Assigning..." : "Assign"}
                   </button>

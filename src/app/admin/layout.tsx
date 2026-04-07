@@ -60,6 +60,7 @@ export default async function AdminLayout({
           <AdminLink href="/admin/organisations">Organisations</AdminLink>
           <AdminLink href="/admin/incidents">Incidents</AdminLink>
           <AdminLink href="/admin/reviews">Reviews</AdminLink>
+          <AdminLink href="/admin/errors">Errors</AdminLink>
 
           <AdminLink href="/admin/support">
             <div className="flex justify-between items-center">

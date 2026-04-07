@@ -6,18 +6,25 @@ import { eq } from "drizzle-orm";
 import Image from "next/image";
 import { getImageUrl } from "@/util/files";
 import Link from "next/link";
-import { redirect } from "next/navigation"; // ✅ Import redirect
+import { redirect } from "next/navigation";
 
 export default async function CompanyOverview() {
   const session = await auth();
 
-  if (!session || !session.user) {
-    throw new Error("Unauthorized");
+  /* ===============================
+     AUTH GUARD (NO THROW)
+  ============================== */
+
+  if (!session?.user?.id) {
+    redirect("/login"); // ✅ never throw in UI layer
   }
 
   const userId = session.user.id;
 
-  // Get the user's organisation via join
+  /* ===============================
+     FETCH ORGANISATION
+  ============================== */
+
   const result = await database
     .select({
       organisation: organisations,
@@ -28,13 +35,20 @@ export default async function CompanyOverview() {
 
   const organisation = result[0]?.organisation;
 
-  // ✅ Redirect if no organisation data
+  /* ===============================
+     NO ORG → REDIRECT
+  ============================== */
+
   if (!organisation) {
     redirect("/home/team-dashboard/team-profile?reason=no-organisation");
   }
 
+  /* ===============================
+     UI
+  ============================== */
+
   return (
-    <main className="p-8 bg-white shadow-lg rounded-lg mx-auto">
+    <main className="p-8 bg-white shadow-lg rounded-lg mx-auto max-w-5xl">
       <div className="flex items-center justify-between mb-8">
         <section className="flex items-center">
           {organisation.profilePicture && (
@@ -43,13 +57,17 @@ export default async function CompanyOverview() {
                 height={100}
                 width={100}
                 src={getImageUrl(organisation.profilePicture)}
-                alt="Profile"
+                alt="Organisation Profile"
                 className="w-32 h-32 rounded-full object-cover"
               />
             </div>
           )}
-          <p className="text-4xl font-semibold">{organisation.teamName}</p>
+
+          <p className="text-4xl font-semibold">
+            {organisation.teamName ?? "Unnamed Organisation"}
+          </p>
         </section>
+
         <Link href="/home/team-dashboard/team-profile">
           <button className="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md">
             Edit Profile
@@ -58,40 +76,52 @@ export default async function CompanyOverview() {
       </div>
 
       <section className="space-y-8">
+        {/* ===============================
+            COMPANY OVERVIEW
+        ============================== */}
         <div className="p-6 bg-gray-100 rounded-lg">
           <h2 className="text-2xl font-semibold mb-4">Company Overview</h2>
-          <p className="text-md">{organisation.industry}</p>
+          <p className="text-md">
+            {organisation.industry ?? "No industry specified"}
+          </p>
         </div>
 
+        {/* ===============================
+            CONTACT INFO
+        ============================== */}
         <div className="p-6 bg-gray-100 rounded-lg">
           <h2 className="text-2xl font-semibold mb-4">Contact Information</h2>
-          <p className="text-lg">
-            <strong>Telephone:</strong> {organisation.telephone}
+
+          <p>
+            <strong>Telephone:</strong> {organisation.telephone ?? "-"}
           </p>
-          <p className="text-lg">
-            <strong>Email Address:</strong> {organisation.emailAddress}
+          <p>
+            <strong>Email Address:</strong> {organisation.emailAddress ?? "-"}
           </p>
-          <p className="text-lg">
-            <strong>Country:</strong> {organisation.country}
+          <p>
+            <strong>Country:</strong> {organisation.country ?? "-"}
           </p>
-          <p className="text-lg">
-            <strong>Street Address:</strong> {organisation.streetAddress}
+          <p>
+            <strong>Street Address:</strong> {organisation.streetAddress ?? "-"}
           </p>
-          <p className="text-lg">
-            <strong>City:</strong> {organisation.city}
+          <p>
+            <strong>City:</strong> {organisation.city ?? "-"}
           </p>
-          <p className="text-lg">
-            <strong>Region:</strong> {organisation.region}
+          <p>
+            <strong>Region:</strong> {organisation.region ?? "-"}
           </p>
-          <p className="text-lg">
-            <strong>Post Code:</strong> {organisation.postCode}
+          <p>
+            <strong>Post Code:</strong> {organisation.postCode ?? "-"}
           </p>
         </div>
 
+        {/* ===============================
+            CHAIN OF CUSTODY
+        ============================== */}
         {organisation.chainOfCustody && (
           <div className="p-6 bg-gray-100 rounded-lg">
             <h2 className="text-2xl font-semibold mb-4">Chain of Custody</h2>
-            <p className="text-lg">{organisation.chainOfCustody}</p>
+            <p>{organisation.chainOfCustody}</p>
           </div>
         )}
       </section>

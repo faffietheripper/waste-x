@@ -7,52 +7,69 @@ import { RegisterSchema } from "@/util/authSchema";
 import { eq } from "drizzle-orm";
 import bcryptjs from "bcryptjs";
 
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
+
+/* =========================================================
+   GET USER (UTILITY)
+========================================================= */
+
 export async function getUserFromDb(email: string) {
-  try {
-    const existedUser = await database.query.users.findFirst({
-      where: eq(users.email, email),
-    });
+  const existedUser = await database.query.users.findFirst({
+    where: eq(users.email, email),
+  });
 
-    if (!existedUser) {
-      return {
-        success: false,
-        message: "User not found.",
-      };
-    }
-
-    return {
-      success: true,
-      data: existedUser,
-    };
-  } catch (error: any) {
+  if (!existedUser) {
     return {
       success: false,
-      message: error.message,
+      message: "User not found.",
     };
   }
+
+  return {
+    success: true,
+    data: existedUser,
+  };
 }
 
-export async function registerUser({
-  name,
-  email,
-  password,
-  confirmPassword,
-}: {
-  name: string;
-  email: string;
-  password: string;
-  confirmPassword: string;
-}) {
-  try {
-    // Validate input
-    RegisterSchema.parse({
+/* =========================================================
+   REGISTER USER
+========================================================= */
+
+export const registerUser = withErrorHandling(
+  async ({
+    name,
+    email,
+    password,
+    confirmPassword,
+  }: {
+    name: string;
+    email: string;
+    password: string;
+    confirmPassword: string;
+  }) => {
+    /* ===============================
+       VALIDATION (UX SAFE)
+    ============================== */
+
+    const parsed = RegisterSchema.safeParse({
       name,
       email,
       password,
       confirmPassword,
     });
 
-    // Check if user exists
+    if (!parsed.success) {
+      return {
+        success: false,
+        message: "Invalid registration details.",
+      };
+    }
+
+    /* ===============================
+       CHECK EXISTING USER
+    ============================== */
+
     const existingUser = await database.query.users.findFirst({
       where: eq(users.email, email),
     });
@@ -64,16 +81,22 @@ export async function registerUser({
       };
     }
 
-    // Hash password
+    /* ===============================
+       HASH PASSWORD
+    ============================== */
+
     const passwordHash = await bcryptjs.hash(password, 10);
 
-    // Insert user
+    /* ===============================
+       CREATE USER
+    ============================== */
+
     const [user] = await database
       .insert(users)
       .values({
         name,
         email,
-        passwordHash, // ✅ FIXED
+        passwordHash,
         role: "employee",
         isActive: true,
         isSuspended: false,
@@ -89,10 +112,10 @@ export async function registerUser({
       success: true,
       data: user,
     };
-  } catch (error: any) {
-    return {
-      success: false,
-      message: error.message || "Registration failed.",
-    };
-  }
-}
+  },
+  {
+    actionName: "registerUser",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high", // auth system critical
+  },
+);

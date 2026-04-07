@@ -11,15 +11,24 @@ import {
 import { createReviewAction } from "@/app/home/my-activity/completed-jobs/actions";
 import { useToast } from "@/components/ui/use-toast";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
 interface JobReviewProps {
   listingId: number;
   reviewedOrganisationId: string;
 }
 
-export default function JobReview({
-  listingId,
-  reviewedOrganisationId,
-}: JobReviewProps) {
+type ReviewResponse =
+  | { success: true; message: string }
+  | { success: false; error: string };
+
+/* =========================================================
+   MAIN COMPONENT
+========================================================= */
+
+export default function JobReview({ listingId }: JobReviewProps) {
   const { toast } = useToast();
 
   const [open, setOpen] = useState(false);
@@ -27,8 +36,10 @@ export default function JobReview({
   const [rating, setRating] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (loading) return;
 
     if (!comment.trim()) {
       toast({
@@ -51,34 +62,44 @@ export default function JobReview({
     setLoading(true);
 
     try {
-      const result = await createReviewAction({
+      const result = (await createReviewAction({
         listingId,
         rating,
         reviewText: comment,
-      });
-
-      toast({
-        title: result.success ? "Success" : "Error",
-        description: result.message || result.error,
-        variant: result.success ? "default" : "destructive",
-      });
+      })) as ReviewResponse;
 
       if (result.success) {
+        toast({
+          title: "Review Submitted",
+          description: result.message,
+        });
+
+        // reset + close
         setOpen(false);
         setComment("");
         setRating(null);
+      } else {
+        toast({
+          title: "Submission Failed",
+          description: result.error,
+          variant: "destructive",
+        });
       }
     } catch (error) {
-      console.error("Error submitting review:", error);
       toast({
-        title: "Error",
-        description: "Something went wrong.",
+        title: "System Error",
+        description: "Something went wrong. Please try again.",
         variant: "destructive",
       });
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  function closeDrawer() {
+    if (loading) return;
+    setOpen(false);
+  }
 
   return (
     <div>
@@ -89,7 +110,7 @@ export default function JobReview({
         Leave a Review
       </button>
 
-      <DragCloseDrawer open={open} setOpen={setOpen}>
+      <DragCloseDrawer open={open} setOpen={closeDrawer}>
         <div className="mx-auto text-center space-y-6 text-neutral-400">
           <h2 className="text-xl font-bold text-neutral-200">
             Your feedback is important to us
@@ -132,9 +153,13 @@ export default function JobReview({
   );
 }
 
+/* =========================================================
+   DRAWER
+========================================================= */
+
 interface DrawerProps {
   open: boolean;
-  setOpen: (open: boolean) => void;
+  setOpen: () => void;
   children: React.ReactNode;
 }
 
@@ -144,10 +169,10 @@ function DragCloseDrawer({ open, setOpen, children }: DrawerProps) {
   const controls = useDragControls();
   const [ref, { height }] = useMeasure();
 
-  const handleClose = async () => {
+  async function handleClose() {
     await animate(scope.current, { opacity: [1, 0] });
-    setOpen(false);
-  };
+    setOpen();
+  }
 
   if (!open) return null;
 
@@ -157,6 +182,7 @@ function DragCloseDrawer({ open, setOpen, children }: DrawerProps) {
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/50"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
+      onClick={handleClose}
     >
       <motion.div
         ref={ref}
@@ -167,6 +193,7 @@ function DragCloseDrawer({ open, setOpen, children }: DrawerProps) {
           if (info.offset.y > 100) handleClose();
         }}
         style={{ y }}
+        onClick={(e) => e.stopPropagation()}
         className="bg-neutral-900 w-full max-w-xl rounded-t-2xl p-8"
       >
         {children}

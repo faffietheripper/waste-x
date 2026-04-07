@@ -14,7 +14,10 @@ import { eq } from "drizzle-orm";
 import { requireOrgUser } from "@/lib/access/require-org-user";
 import { ratelimit } from "@/lib/rate-limit";
 import { z } from "zod";
-import { logRequest, logError } from "@/lib/logger";
+import { logRequest } from "@/lib/logger";
+
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
 /* =========================================================
    CONSTANTS
@@ -42,120 +45,119 @@ const createListingSchema = z.object({
    GENERATE S3 UPLOAD URLS
 ========================================================= */
 
-export async function createUploadUrlAction(keys: string[], types: string[]) {
-  if (keys.length !== types.length) {
-    throw new Error("Keys and types must match.");
-  }
-
-  if (keys.length > MAX_FILES) {
-    throw new Error(`Maximum ${MAX_FILES} files allowed.`);
-  }
-
-  types.forEach((type) => {
-    if (!allowedFileTypes.includes(type)) {
-      throw new Error(`Invalid file type: ${type}`);
+export const createUploadUrlAction = withErrorHandling(
+  async (keys: string[], types: string[]) => {
+    if (keys.length !== types.length) {
+      throw new Error("Keys and types must match.");
     }
-  });
 
-  const signedUrls = await Promise.all(
-    keys.map((key, i) => getSignedUrlForS3Object(key, types[i])),
-  );
+    if (keys.length > MAX_FILES) {
+      throw new Error(`Maximum ${MAX_FILES} files allowed.`);
+    }
 
-  return signedUrls;
-}
+    types.forEach((type) => {
+      if (!allowedFileTypes.includes(type)) {
+        throw new Error(`Invalid file type: ${type}`);
+      }
+    });
+
+    const signedUrls = await Promise.all(
+      keys.map((key, i) => getSignedUrlForS3Object(key, types[i])),
+    );
+
+    return signedUrls;
+  },
+  {
+    actionName: "createUploadUrlAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "low",
+  },
+);
 
 /* =========================================================
    CREATE LISTING
 ========================================================= */
 
-export async function createListingAction(input: {
-  templateId: string;
-  templateData: Record<string, any>;
-  fileName: string[];
-  startingPrice: number;
-  endDate: Date;
-  name: string;
-  location: string;
-}) {
-  const session = await auth();
+export const createListingAction = withErrorHandling(
+  async (input: {
+    templateId: string;
+    templateData: Record<string, any>;
+    fileName: string[];
+    startingPrice: number;
+    endDate: Date;
+    name: string;
+    location: string;
+  }) => {
+    const session = await auth();
 
-  if (!session?.user?.id || !session?.user?.organisationId) {
-    throw new Error("Unauthorized");
-  }
-
-  const organisationId = session.user.organisationId;
-  const userId = session.user.id;
-
-  /* ================= RATE LIMIT ================= */
-
-  if (ratelimit) {
-    const { success } = await ratelimit.limit(userId);
-
-    if (!success) {
-      throw new Error("Too many requests. Please slow down.");
+    if (!session?.user?.id || !session?.user?.organisationId) {
+      throw new Error("Unauthorized");
     }
-  }
 
-  /* ================= VALIDATION ================= */
+    const organisationId = session.user.organisationId;
+    const userId = session.user.id;
 
-  const parsed = createListingSchema.safeParse(input);
+    /* ================= RATE LIMIT ================= */
 
-  if (!parsed.success) {
-    throw new Error("Invalid listing data.");
-  }
+    if (ratelimit) {
+      const { success } = await ratelimit.limit(userId);
 
-  const {
-    templateId,
-    templateData,
-    fileName,
-    startingPrice,
-    endDate,
-    name,
-    location,
-  } = parsed.data;
+      if (!success) {
+        throw new Error("Too many requests. Please slow down.");
+      }
+    }
 
-  if (fileName.length > MAX_FILES) {
-    throw new Error(`Maximum ${MAX_FILES} files allowed.`);
-  }
+    /* ================= VALIDATION ================= */
 
-  /* ================= TEMPLATE CHECK ================= */
+    const parsed = createListingSchema.safeParse(input);
 
-  const template = await database.query.listingTemplates.findFirst({
-    where: eq(listingTemplates.id, templateId),
-  });
+    if (!parsed.success) {
+      throw new Error("Invalid listing data.");
+    }
 
-  if (!template) {
-    throw new Error("Template not found.");
-  }
+    const {
+      templateId,
+      templateData,
+      fileName,
+      startingPrice,
+      endDate,
+      name,
+      location,
+    } = parsed.data;
 
-  try {
+    if (fileName.length > MAX_FILES) {
+      throw new Error(`Maximum ${MAX_FILES} files allowed.`);
+    }
+
+    /* ================= TEMPLATE CHECK ================= */
+
+    const template = await database.query.listingTemplates.findFirst({
+      where: eq(listingTemplates.id, templateId),
+    });
+
+    if (!template) {
+      throw new Error("Template not found.");
+    }
+
+    /* ================= TRANSACTION ================= */
+
     await database.transaction(async (tx) => {
-      /* ================= CREATE LISTING ================= */
-
       const [listing] = await tx
         .insert(wasteListings)
         .values({
           name,
           location,
-
           startingPrice,
           currentBid: startingPrice,
-
           fileKey: fileName.join(","),
-
           userId,
           organisationId,
-
           templateId: template.id,
           templateVersion: template.version,
-
           status: "open",
-
           endDate,
         })
         .returning();
-
-      /* ================= SAVE TEMPLATE DATA ================= */
 
       await tx.insert(listingTemplateData).values({
         organisationId,
@@ -175,46 +177,52 @@ export async function createListingAction(input: {
         listing.id.toString(),
       );
     });
-  } catch (error) {
-    logError("create_listing", error);
-    console.error("Create listing failed:", error);
-    throw new Error("Failed to create listing.");
-  }
 
-  revalidatePath("/home/waste-listings");
-  redirect("/home/waste-listings");
-}
+    revalidatePath("/home/waste-listings");
+    redirect("/home/waste-listings");
+  },
+  {
+    actionName: "createListingAction",
+    code: ERROR_CODES.WASTE_INVALID_DATA,
+    severity: "high",
+  },
+);
 
 /* =========================================================
    LOAD TEMPLATE STRUCTURE
 ========================================================= */
 
-export async function getTemplateWithStructure(templateId: string) {
-  await requireOrgUser();
+export const getTemplateWithStructure = withErrorHandling(
+  async (templateId: string) => {
+    await requireOrgUser();
 
-  if (!templateId) {
-    throw new Error("Template ID required.");
-  }
+    if (!templateId) {
+      throw new Error("Template ID required.");
+    }
 
-  const template = await database.query.listingTemplates.findFirst({
-    where: eq(listingTemplates.id, templateId),
-
-    with: {
-      sections: {
-        orderBy: (sections, { asc }) => [asc(sections.orderIndex)],
-
-        with: {
-          fields: {
-            orderBy: (fields, { asc }) => [asc(fields.orderIndex)],
+    const template = await database.query.listingTemplates.findFirst({
+      where: eq(listingTemplates.id, templateId),
+      with: {
+        sections: {
+          orderBy: (sections, { asc }) => [asc(sections.orderIndex)],
+          with: {
+            fields: {
+              orderBy: (fields, { asc }) => [asc(fields.orderIndex)],
+            },
           },
         },
       },
-    },
-  });
+    });
 
-  if (!template) {
-    throw new Error("Template not found.");
-  }
+    if (!template) {
+      throw new Error("Template not found.");
+    }
 
-  return template;
-}
+    return template;
+  },
+  {
+    actionName: "getTemplateWithStructure",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "low",
+  },
+);

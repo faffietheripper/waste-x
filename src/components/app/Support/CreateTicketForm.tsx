@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createTicketAction } from "@/app/home/support/action";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
+import { useAction } from "@/lib/actions/useAction";
 
 export default function CreateTicketForm({
   organisationId,
@@ -12,6 +13,7 @@ export default function CreateTicketForm({
 }) {
   const { toast } = useToast();
   const router = useRouter();
+  const run = useAction();
 
   const [category, setCategory] = useState("technical");
   const [priority, setPriority] = useState("medium");
@@ -21,7 +23,7 @@ export default function CreateTicketForm({
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!message.trim()) return;
+    if (!message.trim() || isSubmitting) return;
 
     setIsSubmitting(true);
 
@@ -30,20 +32,16 @@ export default function CreateTicketForm({
     formData.append("priority", priority);
     formData.append("message", message);
 
-    const result = await createTicketAction(null, formData);
+    const result = await run(() => createTicketAction(null, formData));
+
+    setIsSubmitting(false);
+
+    if (!result) return; // error handled globally
 
     if (result.success) {
       toast({ title: "Ticket created" });
       router.push(`/home/support/${result.ticketId}`);
-    } else {
-      toast({
-        title: "Error",
-        description: result.message,
-        variant: "destructive",
-      });
     }
-
-    setIsSubmitting(false);
   }
 
   return (
@@ -51,7 +49,6 @@ export default function CreateTicketForm({
       onSubmit={handleSubmit}
       className="bg-white p-6 rounded-2xl shadow border space-y-6 max-w-2xl"
     >
-      {/* CATEGORY */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Category</label>
         <select
@@ -67,7 +64,6 @@ export default function CreateTicketForm({
         </select>
       </div>
 
-      {/* PRIORITY */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Priority</label>
         <select
@@ -82,7 +78,6 @@ export default function CreateTicketForm({
         </select>
       </div>
 
-      {/* MESSAGE */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Describe the issue</label>
         <textarea

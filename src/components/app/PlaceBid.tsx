@@ -43,6 +43,10 @@ export default function PlaceBid({ listingId, currentBid }: PlaceBidProps) {
   );
 }
 
+/* =========================================================
+   BID FORM
+========================================================= */
+
 function BidForm({
   listingId,
   currentBid,
@@ -53,49 +57,60 @@ function BidForm({
   close: () => void;
 }) {
   const { toast } = useToast();
+
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const numericAmount = Number(amount);
+  const isInvalid = !numericAmount || numericAmount <= currentBid || loading;
+
+  /* =========================================================
+     SUBMIT
+  ========================================================= */
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const numericAmount = Number(amount);
-
-    if (!numericAmount || numericAmount <= currentBid) {
-      toast({
-        title: "Invalid Bid",
-        description: `Bid must be higher than £${currentBid}`,
-        variant: "destructive",
-      });
-      return;
-    }
+    if (isInvalid) return;
 
     setLoading(true);
 
-    const result = await createBidAction({
-      listingId,
-      amount: numericAmount,
-    });
+    try {
+      const result = await createBidAction({
+        listingId,
+        amount: numericAmount,
+      });
 
-    setLoading(false);
+      if (!result.success) {
+        toast({
+          title: "Bid Failed",
+          description: result.message,
+          variant: "destructive",
+        });
+        return;
+      }
 
-    if (!result.success) {
+      toast({
+        title: "Bid placed",
+        description: `You are now bidding £${numericAmount}`,
+      });
+
+      setAmount("");
+      close();
+    } catch (error) {
       toast({
         title: "Error",
-        description: result.message,
+        description: "Something went wrong while placing your bid.",
         variant: "destructive",
       });
-      return;
+    } finally {
+      setLoading(false);
     }
-
-    toast({
-      title: "Bid placed",
-      description: "Your bid has been submitted.",
-    });
-
-    setAmount("");
-    close();
   };
+
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <div className="mt-4 bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
@@ -106,6 +121,7 @@ function BidForm({
       <form onSubmit={handleSubmit} className="space-y-3">
         <input
           type="number"
+          min={currentBid + 1}
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           placeholder={`Minimum £${currentBid + 1}`}
@@ -115,7 +131,7 @@ function BidForm({
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={isInvalid}
           className="w-full bg-blue-600 hover:bg-blue-700 transition text-white font-medium py-2 rounded-lg disabled:opacity-50"
         >
           {loading ? "Submitting..." : "Submit Bid"}

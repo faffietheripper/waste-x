@@ -1,11 +1,13 @@
 "use server";
 
-import { sendRegEmail } from "@/util/sendRegEmail";
 import { database } from "@/db/database";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import crypto from "crypto";
 import bcryptjs from "bcryptjs";
+
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
 /* =========================================================
    TYPES
@@ -17,54 +19,68 @@ type ActionResponse = { success: true } | { success: false; message: string };
    COMPLETE INVITE
 ========================================================= */
 
-export async function completeInvite({
-  token,
-  password,
-}: {
-  token: string;
-  password: string;
-}): Promise<ActionResponse> {
-  try {
+export const completeInvite = withErrorHandling(
+  async ({
+    token,
+    password,
+  }: {
+    token: string;
+    password: string;
+  }): Promise<ActionResponse> => {
+    /* ===============================
+       VALIDATION (UX SAFE)
+    ============================== */
+
     if (!token) {
       return { success: false, message: "Invalid invite link." };
     }
 
-    /* ---------------- HASH TOKEN ---------------- */
+    if (!password || password.length < 8) {
+      return {
+        success: false,
+        message: "Password must be at least 8 characters.",
+      };
+    }
+
+    /* ===============================
+       HASH TOKEN (SECURE MATCH)
+    ============================== */
+
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
-    console.log("🔐 RAW TOKEN:", token);
-    console.log("🔐 HASHED TOKEN:", hashedToken);
+    /* ===============================
+       FIND USER
+    ============================== */
 
-    /* ---------------- FIND USER ---------------- */
     const user = await database.query.users.findFirst({
       where: eq(users.inviteToken, hashedToken),
     });
-
-    console.log("👤 USER FOUND:", user?.email ?? "NONE");
 
     if (!user) {
       return { success: false, message: "Invalid invite link." };
     }
 
-    /* ---------------- EXPIRY CHECK ---------------- */
-    if (!user.inviteExpiry) {
-      return {
-        success: false,
-        message: "Invite not configured properly.",
-      };
-    }
+    /* ===============================
+       EXPIRY CHECK
+    ============================== */
 
-    if (user.inviteExpiry < new Date()) {
+    if (!user.inviteExpiry || user.inviteExpiry < new Date()) {
       return {
         success: false,
         message: "Invite link has expired.",
       };
     }
 
-    /* ---------------- PASSWORD ---------------- */
+    /* ===============================
+       HASH PASSWORD
+    ============================== */
+
     const passwordHash = await bcryptjs.hash(password, 10);
 
-    /* ---------------- ACTIVATE USER ---------------- */
+    /* ===============================
+       ACTIVATE USER
+    ============================== */
+
     await database
       .update(users)
       .set({
@@ -75,14 +91,11 @@ export async function completeInvite({
       })
       .where(eq(users.id, user.id));
 
-    console.log("✅ USER ACTIVATED:", user.email);
-
     return { success: true };
-  } catch (err: any) {
-    console.error("❌ completeInvite error:", err);
-    return {
-      success: false,
-      message: err.message || "Failed to complete invite.",
-    };
-  }
-}
+  },
+  {
+    actionName: "completeInvite",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high", // onboarding + auth critical
+  },
+);

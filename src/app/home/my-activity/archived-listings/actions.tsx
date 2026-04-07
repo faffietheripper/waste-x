@@ -6,30 +6,55 @@ import { auth } from "@/auth";
 import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function deleteListingAction(formData: FormData) {
-  const session = await auth();
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
+export const deleteListingAction = withErrorHandling(
+  async (formData: FormData) => {
+    /* ===============================
+       AUTH
+    ============================== */
 
-  const listingIdRaw = formData.get("listingId");
+    const session = await auth();
 
-  if (typeof listingIdRaw !== "string" || isNaN(parseInt(listingIdRaw))) {
-    throw new Error("Invalid listing ID");
-  }
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized");
+    }
 
-  const listingId = parseInt(listingIdRaw);
+    /* ===============================
+       VALIDATION
+    ============================== */
 
-  // Delete only if it belongs to authenticated user
-  await database
-    .delete(wasteListings)
-    .where(
-      and(
-        eq(wasteListings.id, listingId),
-        eq(wasteListings.userId, session.user.id),
-      ),
-    );
+    const listingIdRaw = formData.get("listingId");
 
-  revalidatePath("/home/my-activity/archived-listings");
-}
+    if (typeof listingIdRaw !== "string" || isNaN(parseInt(listingIdRaw))) {
+      throw new Error("Invalid listing ID");
+    }
+
+    const listingId = parseInt(listingIdRaw);
+
+    /* ===============================
+       DELETE (SCOPED TO USER)
+    ============================== */
+
+    await database
+      .delete(wasteListings)
+      .where(
+        and(
+          eq(wasteListings.id, listingId),
+          eq(wasteListings.userId, session.user.id),
+        ),
+      );
+
+    /* ===============================
+       REVALIDATE
+    ============================== */
+
+    revalidatePath("/home/my-activity/archived-listings");
+  },
+  {
+    actionName: "deleteListingAction",
+    code: ERROR_CODES.WASTE_INVALID_DATA,
+    severity: "high", // destructive + user-owned data
+  },
+);

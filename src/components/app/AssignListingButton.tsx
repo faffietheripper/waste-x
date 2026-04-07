@@ -25,16 +25,19 @@ export default function AssignListingButton({
   handleAssignWinningBid,
 }: AssignListingButtonProps) {
   const { toast } = useToast();
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const disableAssign =
+  const isDisabled =
+    loading ||
     declinedOffer ||
     cancelledJob ||
     offerAccepted ||
     assignedCarrierOrganisationId !== null;
 
-  const handleAssign = async () => {
-    setIsSubmitting(true);
+  async function handleAssign() {
+    if (loading) return;
+
+    setLoading(true);
 
     const formData = new FormData();
     formData.append("listingId", listingId.toString());
@@ -44,40 +47,44 @@ export default function AssignListingButton({
       const result = await handleAssignWinningBid(formData);
 
       toast({
-        title: result.success ? "Success" : "Error",
+        title: result.success ? "Listing Assigned" : "Assignment Failed",
         description: result.message,
         variant: result.success ? "default" : "destructive",
       });
-    } catch {
+    } catch (error) {
       toast({
-        title: "Error",
-        description: "An error occurred while assigning the listing.",
+        title: "System Error",
+        description: "Something went wrong. Please try again.",
         variant: "destructive",
       });
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
-  };
+  }
 
-  return disableAssign ? (
-    <button disabled className="bg-gray-400 text-white py-2 px-4 rounded-md">
-      {declinedOffer
-        ? "Offer Declined"
-        : cancelledJob
-          ? "Job Cancelled"
-          : offerAccepted
-            ? "Offer Accepted"
-            : assignedCarrierOrganisationId
-              ? "Carrier Assigned"
-              : "Unavailable"}
-    </button>
-  ) : (
+  /* =========================================================
+     DISABLED LABEL LOGIC
+  ========================================================= */
+
+  function getLabel() {
+    if (declinedOffer) return "Offer Declined";
+    if (cancelledJob) return "Job Cancelled";
+    if (offerAccepted) return "Offer Accepted";
+    if (assignedCarrierOrganisationId) return "Carrier Assigned";
+    return "Unavailable";
+  }
+
+  return (
     <button
-      onClick={handleAssign}
-      disabled={isSubmitting}
-      className="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition"
+      onClick={!isDisabled ? handleAssign : undefined}
+      disabled={isDisabled}
+      className={`py-2 px-4 rounded-md text-white transition ${
+        isDisabled
+          ? "bg-gray-400 cursor-not-allowed"
+          : "bg-blue-600 hover:bg-blue-700"
+      }`}
     >
-      {isSubmitting ? "Assigning..." : "Assign Listing"}
+      {loading ? "Assigning..." : isDisabled ? getLabel() : "Assign Listing"}
     </button>
   );
 }

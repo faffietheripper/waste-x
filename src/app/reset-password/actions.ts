@@ -5,68 +5,96 @@ import { passwordResetTokens, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
-export async function validateTokenAndResetPassword(
-  url: string,
-  newPassword: string,
-  confirmPassword: string,
-) {
-  if (!url || !newPassword || !confirmPassword) {
-    return {
-      success: false,
-      message: "URL, new password, and confirm password are required.",
-    };
-  }
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-  if (newPassword !== confirmPassword) {
-    return {
-      success: false,
-      message: "Password and confirm password do not match.",
-    };
-  }
+/* =========================================================
+   RESET PASSWORD
+========================================================= */
 
-  if (newPassword.length < 8) {
-    return {
-      success: false,
-      message: "Password must be at least 8 characters long.",
-    };
-  }
+export const validateTokenAndResetPassword = withErrorHandling(
+  async (url: string, newPassword: string, confirmPassword: string) => {
+    /* ===============================
+       VALIDATION (UX SAFE)
+    ============================== */
 
-  // Extract token
-  const urlObject = new URL(url);
-  const token = urlObject.searchParams.get("token");
+    if (!url || !newPassword || !confirmPassword) {
+      return {
+        success: false,
+        message: "URL, new password, and confirm password are required.",
+      };
+    }
 
-  if (!token) {
-    return {
-      success: false,
-      message: "Invalid reset link. Token is missing.",
-    };
-  }
+    if (newPassword !== confirmPassword) {
+      return {
+        success: false,
+        message: "Password and confirm password do not match.",
+      };
+    }
 
-  // Fetch token record
-  const tokenRecord = await database
-    .select()
-    .from(passwordResetTokens)
-    .where(eq(passwordResetTokens.token, token))
-    .limit(1);
+    if (newPassword.length < 8) {
+      return {
+        success: false,
+        message: "Password must be at least 8 characters long.",
+      };
+    }
 
-  if (
-    !tokenRecord.length ||
-    tokenRecord[0].expires < new Date() ||
-    tokenRecord[0].used
-  ) {
-    return {
-      success: false,
-      message: "Invalid or expired token.",
-    };
-  }
+    /* ===============================
+       EXTRACT TOKEN
+    ============================== */
 
-  const email = tokenRecord[0].email;
+    let token: string | null = null;
 
-  try {
-    // Hash password
+    try {
+      const urlObject = new URL(url);
+      token = urlObject.searchParams.get("token");
+    } catch {
+      return {
+        success: false,
+        message: "Invalid reset link.",
+      };
+    }
+
+    if (!token) {
+      return {
+        success: false,
+        message: "Invalid reset link.",
+      };
+    }
+
+    /* ===============================
+       FETCH TOKEN
+    ============================== */
+
+    const tokenRecord = await database
+      .select()
+      .from(passwordResetTokens)
+      .where(eq(passwordResetTokens.token, token))
+      .limit(1);
+
+    if (
+      !tokenRecord.length ||
+      tokenRecord[0].expires < new Date() ||
+      tokenRecord[0].used
+    ) {
+      return {
+        success: false,
+        message: "Invalid or expired token.",
+      };
+    }
+
+    const email = tokenRecord[0].email;
+
+    /* ===============================
+       HASH PASSWORD
+    ============================== */
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // ✅ Correct field: passwordHash
+    /* ===============================
+       UPDATE USER
+    ============================== */
+
     const result = await database
       .update(users)
       .set({
@@ -77,11 +105,14 @@ export async function validateTokenAndResetPassword(
     if (!result) {
       return {
         success: false,
-        message: "Failed to update password. User not found.",
+        message: "Failed to update password.",
       };
     }
 
-    // Mark token as used
+    /* ===============================
+       MARK TOKEN USED
+    ============================== */
+
     await database
       .update(passwordResetTokens)
       .set({ used: true })
@@ -91,11 +122,10 @@ export async function validateTokenAndResetPassword(
       success: true,
       message: "Password reset successfully.",
     };
-  } catch (error) {
-    console.error("Error resetting password:", error);
-    return {
-      success: false,
-      message: "An error occurred while resetting the password.",
-    };
-  }
-}
+  },
+  {
+    actionName: "resetPassword",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high", // auth + security critical
+  },
+);

@@ -6,19 +6,38 @@ import { auth } from "@/auth";
 import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-// Delete a bid by ID
-export async function deleteBidAction(bidId: number) {
-  const session = await auth();
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-  if (!session || !session.user) {
-    throw new Error("Unauthorized");
-  }
+/* =========================================================
+   DELETE BID
+========================================================= */
 
-  await database
-    .delete(bids)
-    .where(and(eq(bids.id, bidId), eq(bids.userId, session.user.id!)));
+export const deleteBidAction = withErrorHandling(
+  async (bidId: number) => {
+    const session = await auth();
 
-  revalidatePath("/home/my-activity/my-bids");
-}
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized");
+    }
 
-//not using this for now because you can always decline the offer or make another bid but they need to be told !!
+    await database
+      .delete(bids)
+      .where(and(eq(bids.id, bidId), eq(bids.userId, session.user.id)));
+
+    revalidatePath("/home/my-activity/my-bids");
+  },
+  {
+    actionName: "deleteBidAction",
+    code: ERROR_CODES.SYSTEM_UNEXPECTED,
+    severity: "medium", // destructive but limited scope
+  },
+);
+
+/*
+NOTE:
+Not currently used — users can decline offers or place new bids instead.
+If reintroduced later, consider:
+- soft delete (archived flag)
+- audit event logging
+*/

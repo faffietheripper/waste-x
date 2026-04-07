@@ -2,9 +2,12 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { FiAlertCircle } from "react-icons/fi";
-import { useForm, SubmitHandler } from "react-hook-form";
+import { useForm } from "react-hook-form";
+import { useState } from "react";
+
 import { registerTeamUser } from "@/app/home/team-dashboard/actions";
 import { sendRegEmail } from "@/util/sendRegEmail";
+import { useAction } from "@/lib/actions/useAction";
 
 /* =========================================================
    TYPES
@@ -20,6 +23,10 @@ interface InviteFormData {
   email: string;
   role: "employee" | "seniorManagement" | "administrator";
 }
+
+type InviteResponse =
+  | { success: true; token: string }
+  | { success: false; message: string };
 
 /* =========================================================
    MODAL COMPONENT
@@ -57,12 +64,12 @@ export default function NewMemberModal({
                 Invite Team Member
               </h3>
 
-              <p className="text-center mb-6 text-sm text-neutral-400">
+              <p className="text-center mb-6 text-sm text-neutral-300">
                 An invitation link will be sent to the user to complete their
                 account setup.
               </p>
 
-              <RegisterForm />
+              <RegisterForm onSuccess={() => setIsOpen(false)} />
 
               <div className="flex gap-2 mt-4">
                 <button
@@ -84,24 +91,30 @@ export default function NewMemberModal({
    REGISTER FORM
 ========================================================= */
 
-const RegisterForm = () => {
+const RegisterForm = ({ onSuccess }: { onSuccess: () => void }) => {
   const { register, handleSubmit, reset } = useForm<InviteFormData>();
+  const [loading, setLoading] = useState(false);
+
+  const run = useAction();
 
   const onSubmit = async (data: InviteFormData) => {
-    const response = await registerTeamUser(data); // now creates invite
+    setLoading(true);
 
-    if (response.success) {
+    const response = await run<InviteResponse>(() => registerTeamUser(data));
+
+    if (response && response.success === true) {
+      // ✅ send email AFTER successful invite
       await sendRegEmail({
         name: data.name,
         email: data.email,
-        token: response.token, // IMPORTANT
+        token: response.token,
       });
 
-      alert("Invitation sent successfully.");
       reset();
-    } else {
-      alert(`Error: ${response.message}`);
+      onSuccess();
     }
+
+    setLoading(false);
   };
 
   return (
@@ -140,9 +153,10 @@ const RegisterForm = () => {
       <div className="col-span-6">
         <button
           type="submit"
-          className="w-full bg-orange-500 text-black py-2 text-sm font-medium hover:bg-orange-600 transition"
+          disabled={loading}
+          className="w-full bg-orange-500 text-black py-2 text-sm font-medium hover:bg-orange-600 transition disabled:opacity-50"
         >
-          Send Invitation
+          {loading ? "Sending..." : "Send Invitation"}
         </button>
       </div>
     </form>

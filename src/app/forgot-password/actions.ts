@@ -5,25 +5,44 @@ import { add } from "date-fns";
 import { database } from "@/db/database";
 import { passwordResetTokens } from "@/db/schema";
 
-export async function submitForgotPassword(formData: FormData) {
-  const email = formData.get("email")?.toString();
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-  if (!email) {
-    return { success: false, message: "Email is required." };
-  }
+/* =========================================================
+   SUBMIT FORGOT PASSWORD
+========================================================= */
 
-  const resetToken = randomUUID();
+export const submitForgotPassword = withErrorHandling(
+  async (formData: FormData) => {
+    const email = formData.get("email")?.toString();
 
-  const baseUrl =
-    process.env.APP_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    "http://localhost:3000";
+    /* ===============================
+       VALIDATION (UX SAFE)
+    ============================== */
 
-  const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+    if (!email) {
+      return { success: false, message: "Email is required." };
+    }
 
-  const tokenExpiration = add(new Date(), { hours: 1 });
+    /* ===============================
+       GENERATE TOKEN
+    ============================== */
 
-  try {
+    const resetToken = randomUUID();
+
+    const baseUrl =
+      process.env.APP_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      "http://localhost:3000";
+
+    const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+
+    const tokenExpiration = add(new Date(), { hours: 1 });
+
+    /* ===============================
+       STORE TOKEN
+    ============================== */
+
     await database.insert(passwordResetTokens).values({
       email,
       token: resetToken,
@@ -31,17 +50,19 @@ export async function submitForgotPassword(formData: FormData) {
       used: false,
     });
 
-    return {
-      success: true,
-      resetLink,
-      message: "If the email exists, a reset link has been generated.",
-    };
-  } catch (error) {
-    console.error("Error storing reset token:", error);
+    /* ===============================
+       RESPONSE (GENERIC)
+    ============================== */
 
     return {
-      success: false,
-      message: "An error occurred while processing your request.",
+      success: true,
+      resetLink, // ⚠️ in production you’ll email this instead
+      message: "If the email exists, a reset link has been generated.",
     };
-  }
-}
+  },
+  {
+    actionName: "submitForgotPassword",
+    code: ERROR_CODES.AUTH_INVALID_TOKEN,
+    severity: "high", // auth flow
+  },
+);
