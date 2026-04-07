@@ -142,10 +142,13 @@ export const createIncident = withErrorHandling(
     });
 
     revalidatePath("/home/carrier-hub/waste-carriers/incidents-&-reports");
+
+    // ✅ IMPORTANT: return something (prevents void typing issues)
+    return true;
   },
   {
     actionName: "createIncident",
     code: ERROR_CODES.SYSTEM_UNEXPECTED,
-    severity: "high", // this is important (compliance-related)
+    severity: "high",
   },
 );

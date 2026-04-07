@@ -3,10 +3,12 @@ import { Toaster } from "@/components/ui/toaster";
 
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 import { database } from "@/db/database";
-import { userProfiles, users, organisations } from "@/db/schema";
+import { userProfiles, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
+
 import AppNav from "@/components/app/AppNav";
 
 export default async function Layout({
@@ -23,7 +25,17 @@ export default async function Layout({
   }
 
   /* ===============================
-     USER + ORG FETCH (NEW)
+     🔥 PLATFORM ADMIN REDIRECT
+  ============================== */
+
+  const url = headers().get("x-url") || "";
+
+  if (session.user.role === "platform_admin" && !url.includes("/admin")) {
+    redirect("/admin");
+  }
+
+  /* ===============================
+     USER + ORG FETCH
   ============================== */
 
   const dbUser = await database.query.users.findFirst({
@@ -38,7 +50,7 @@ export default async function Layout({
   }
 
   /* ===============================
-     🔥 GLOBAL GATING (NEW)
+     GLOBAL GATING
   ============================== */
 
   // No organisation → force setup
@@ -46,17 +58,18 @@ export default async function Layout({
     redirect("/home/team-dashboard?reason=no-organisation");
   }
 
-  // Organisation exists but NOT approved
+  // Organisation pending
   if (dbUser.organisation?.status === "PENDING") {
     redirect("/onboarding/pending");
   }
 
+  // Organisation rejected
   if (dbUser.organisation?.status === "REJECTED") {
     redirect("/onboarding/rejected");
   }
 
   /* ===============================
-     PROFILE CHECK (EXISTING)
+     PROFILE CHECK
   ============================== */
 
   const profile = await database.query.userProfiles.findFirst({
@@ -73,9 +86,6 @@ export default async function Layout({
     profile?.region &&
     profile?.postCode
   );
-
-  console.log("🧩 session.user.role:", session.user.role);
-  console.log("🧩 profileCompleted:", profileCompleted);
 
   /* ===============================
      RENDER
