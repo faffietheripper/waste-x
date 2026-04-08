@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { resolveErrorAction } from "./actions";
+
+/* ===============================
+   TYPES
+============================== */
 
 type ErrorLog = {
   id: string;
@@ -16,24 +21,108 @@ type ErrorLog = {
   resolved?: boolean | null;
 };
 
+type GroupedError = {
+  code: string;
+  message: string;
+  severity: "low" | "medium" | "high" | "critical";
+  count: number;
+  latest: string | null;
+};
+
+/* ===============================
+   DATE FORMAT (SAFE)
+============================== */
+
+function formatDate(dateString: string | null) {
+  if (!dateString) return "N/A";
+
+  return new Date(dateString).toLocaleString("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/* ===============================
+   TREND SIGNAL
+============================== */
+
+function getTrendStyle(count: number) {
+  if (count > 20) return "bg-red-100 text-red-700";
+  if (count > 5) return "bg-orange-100 text-orange-700";
+  return "bg-green-100 text-green-700";
+}
+
+/* ===============================
+   COMPONENT
+============================== */
+
 export default function ErrorsClient({
   initialErrors = [],
 }: {
   initialErrors: ErrorLog[];
 }) {
   const [selected, setSelected] = useState<ErrorLog | null>(null);
+  const [view, setView] = useState<"raw" | "grouped">("raw");
   const [isPending, startTransition] = useTransition();
 
-  // 🔗 Read current URL params (client-safe)
-  const params =
-    typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search)
-      : new URLSearchParams();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  const currentSeverity = params.get("severity") || "";
-  const currentCode = params.get("code") || "";
+  const currentSeverity = searchParams.get("severity") || "";
+  const currentCode = searchParams.get("code") || "";
+  const currentStatus = searchParams.get("status") || "active";
 
-  // 📊 Stats
+  /* ===============================
+     URL UPDATE
+  ============================== */
+
+  function updateParam(key: string, value: string | null) {
+    const params = new URLSearchParams(searchParams.toString());
+
+    if (value) params.set(key, value);
+    else params.delete(key);
+
+    router.replace(`?${params.toString()}`);
+  }
+
+  /* ===============================
+     GROUPING LOGIC (CLIENT SIDE)
+  ============================== */
+
+  const grouped: GroupedError[] = Object.values(
+    initialErrors.reduce((acc: any, err) => {
+      const key = `${err.code}-${err.severity}`;
+
+      if (!acc[key]) {
+        acc[key] = {
+          code: err.code,
+          message: err.message,
+          severity: err.severity,
+          count: 0,
+          latest: err.createdAt,
+        };
+      }
+
+      acc[key].count += 1;
+
+      if (
+        err.createdAt &&
+        (!acc[key].latest || err.createdAt > acc[key].latest)
+      ) {
+        acc[key].latest = err.createdAt;
+      }
+
+      return acc;
+    }, {}),
+  );
+
+  /* ===============================
+     STATS
+  ============================== */
+
   const stats = {
     total: initialErrors.length,
     critical: initialErrors.filter((e) => e.severity === "critical").length,
@@ -41,52 +130,68 @@ export default function ErrorsClient({
     unresolved: initialErrors.filter((e) => !e.resolved).length,
   };
 
+  /* ===============================
+     UI
+  ============================== */
+
   return (
     <div className="flex h-full">
       {/* LEFT PANEL */}
       <div className="w-1/2 border-r flex flex-col">
         {/* HEADER */}
-        <div className="p-4 border-b">
+        <div className="p-4 border-b flex justify-between items-center">
           <h1 className="text-xl font-bold">System Errors</h1>
+
+          {/* 🔥 TOGGLE */}
+          <div className="flex gap-2 text-xs">
+            <button
+              onClick={() => setView("raw")}
+              className={`px-2 py-1 rounded ${
+                view === "raw" ? "bg-black text-white" : "bg-gray-100"
+              }`}
+            >
+              Raw
+            </button>
+            <button
+              onClick={() => setView("grouped")}
+              className={`px-2 py-1 rounded ${
+                view === "grouped" ? "bg-black text-white" : "bg-gray-100"
+              }`}
+            >
+              Grouped
+            </button>
+          </div>
         </div>
 
         {/* FILTERS */}
         <div className="p-4 border-b space-y-2">
-          {/* CODE SEARCH */}
           <input
             placeholder="Search by code..."
             defaultValue={currentCode}
             className="w-full border px-3 py-2 rounded text-sm"
-            onChange={(e) => {
-              const value = e.target.value;
-              const url = new URL(window.location.href);
-
-              if (value) url.searchParams.set("code", value);
-              else url.searchParams.delete("code");
-
-              window.location.href = url.toString();
-            }}
+            onChange={(e) => updateParam("code", e.target.value || null)}
           />
 
-          {/* SEVERITY FILTER */}
           <select
-            value={currentSeverity} // ✅ FIXED
+            value={currentSeverity}
             className="w-full border px-3 py-2 rounded text-sm"
-            onChange={(e) => {
-              const value = e.target.value;
-              const url = new URL(window.location.href);
-
-              if (value) url.searchParams.set("severity", value);
-              else url.searchParams.delete("severity");
-
-              window.location.href = url.toString();
-            }}
+            onChange={(e) => updateParam("severity", e.target.value || null)}
           >
             <option value="">All Severities</option>
             <option value="low">Low</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>
             <option value="critical">Critical</option>
+          </select>
+
+          <select
+            value={currentStatus}
+            className="w-full border px-3 py-2 rounded text-sm"
+            onChange={(e) => updateParam("status", e.target.value)}
+          >
+            <option value="active">Active Only</option>
+            <option value="resolved">Resolved Only</option>
+            <option value="all">All Errors</option>
           </select>
         </div>
 
@@ -107,25 +212,18 @@ export default function ErrorsClient({
         {/* LIST */}
         <div className="overflow-y-auto flex-1">
           {initialErrors.length === 0 ? (
-            <div className="p-6 text-center text-gray-500">
-              <p className="text-sm">No errors logged 🎉</p>
-              <p className="text-xs mt-1">System is operating normally</p>
-            </div>
-          ) : (
+            <div className="p-6 text-center text-gray-500">No errors found</div>
+          ) : view === "raw" ? (
             initialErrors.map((err) => (
               <div
                 key={err.id}
                 onClick={() => setSelected(err)}
-                className={`p-4 border-b cursor-pointer hover:bg-gray-50 ${
-                  selected?.id === err.id ? "bg-gray-100" : ""
-                }`}
+                className="p-4 border-b cursor-pointer hover:bg-gray-50"
               >
                 <div className="flex justify-between">
                   <span className="font-semibold">{err.code}</span>
                   <span className="text-xs text-gray-400">
-                    {err.createdAt
-                      ? new Date(err.createdAt).toLocaleString()
-                      : "N/A"}
+                    {formatDate(err.createdAt)}
                   </span>
                 </div>
 
@@ -134,26 +232,36 @@ export default function ErrorsClient({
                 </div>
 
                 <div className="text-xs mt-1 flex gap-2">
-                  <span
-                    className={`px-2 py-1 rounded text-xs font-medium
-                      ${
-                        err.severity === "critical"
-                          ? "bg-red-100 text-red-700"
-                          : err.severity === "high"
-                            ? "bg-orange-100 text-orange-700"
-                            : err.severity === "medium"
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-gray-100 text-gray-700"
-                      }`}
-                  >
-                    {err.severity}
-                  </span>
-
+                  <span>{err.severity}</span>
                   {!err.resolved && (
-                    <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs">
-                      active
-                    </span>
+                    <span className="text-blue-600">active</span>
                   )}
+                  {err.resolved && (
+                    <span className="text-green-600">resolved</span>
+                  )}
+                </div>
+              </div>
+            ))
+          ) : (
+            grouped.map((err) => (
+              <div key={err.code} className="p-4 border-b hover:bg-gray-50">
+                <div className="flex justify-between">
+                  <span className="font-semibold">{err.code}</span>
+                  <span className="text-xs text-gray-400">
+                    {formatDate(err.latest)}
+                  </span>
+                </div>
+
+                <div className="text-sm text-gray-600">{err.message}</div>
+
+                <div className="mt-1 flex gap-2 items-center text-xs">
+                  <span>{err.severity}</span>
+
+                  <span
+                    className={`px-2 py-1 rounded ${getTrendStyle(err.count)}`}
+                  >
+                    {err.count} occurrences
+                  </span>
                 </div>
               </div>
             ))
@@ -163,79 +271,35 @@ export default function ErrorsClient({
 
       {/* RIGHT PANEL */}
       <div className="w-1/2 p-6 overflow-y-auto">
-        {initialErrors.length === 0 ? (
-          <div className="text-center text-gray-500 mt-20">
-            <p className="text-sm">No issues to inspect</p>
-            <p className="text-xs mt-1">
-              Errors will appear here when they occur
-            </p>
-          </div>
-        ) : !selected ? (
+        {!selected ? (
           <p className="text-gray-500">Select an error to inspect</p>
         ) : (
           <div className="space-y-4">
             <h2 className="text-xl font-bold">{selected.code}</h2>
 
-            <div>
-              <strong>Message:</strong>
-              <p>{selected.message}</p>
-            </div>
+            <p>{selected.message}</p>
 
-            <div>
-              <strong>Severity:</strong> {selected.severity}
-            </div>
-
-            <div>
-              <strong>Time:</strong>{" "}
-              {selected.createdAt
-                ? new Date(selected.createdAt).toLocaleString()
-                : "N/A"}
-            </div>
-
-            <div>
-              <strong>Route:</strong> {selected.route || "N/A"}
-            </div>
-
-            <div>
-              <strong>User ID:</strong> {selected.userId || "N/A"}
-            </div>
-
-            <div>
-              <strong>Organisation:</strong> {selected.organisationId || "N/A"}
-            </div>
-
-            <div>
-              <strong>Metadata:</strong>
-              <pre className="bg-gray-100 p-3 rounded text-xs overflow-auto">
-                {(() => {
-                  try {
-                    return selected.metadata
-                      ? JSON.stringify(JSON.parse(selected.metadata), null, 2)
-                      : "No metadata";
-                  } catch {
-                    return selected.metadata;
-                  }
-                })()}
-              </pre>
-            </div>
+            <div>Severity: {selected.severity}</div>
+            <div>Time: {formatDate(selected.createdAt)}</div>
+            <div>Route: {selected.route || "N/A"}</div>
 
             {!selected.resolved && (
               <button
                 disabled={isPending}
-                onClick={() => {
+                onClick={() =>
                   startTransition(async () => {
                     await resolveErrorAction(selected.id);
-                    window.location.reload();
-                  });
-                }}
-                className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                    router.refresh();
+                  })
+                }
+                className="bg-green-600 text-white px-4 py-2 rounded"
               >
-                {isPending ? "Resolving..." : "Mark as Resolved"}
+                Resolve
               </button>
             )}
 
             {selected.resolved && (
-              <div className="text-green-600 font-medium">✅ Resolved</div>
+              <div className="text-green-600">✅ Resolved</div>
             )}
           </div>
         )}
