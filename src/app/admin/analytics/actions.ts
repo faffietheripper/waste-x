@@ -9,59 +9,157 @@ import {
   carrierAssignments,
   incidents,
   reviews,
+  auditEvents,
 } from "@/db/schema";
-import { sql } from "drizzle-orm";
 
 export async function getPlatformAnalytics() {
   const [
-    totalOrgs,
-    totalUsers,
-    totalListings,
-    totalBids,
-    totalAssignments,
-    completedAssignments,
-    openIncidents,
-    avgRating,
-    totalMarketplaceValue,
+    orgs,
+    allUsers,
+    listings,
+    bidsData,
+    assignments,
+    incidentsData,
+    reviewsData,
+    events,
   ] = await Promise.all([
-    database.select({ value: sql<number>`count(*)` }).from(organisations),
-    database.select({ value: sql<number>`count(*)` }).from(users),
-    database.select({ value: sql<number>`count(*)` }).from(wasteListings),
-    database.select({ value: sql<number>`count(*)` }).from(bids),
-    database.select({ value: sql<number>`count(*)` }).from(carrierAssignments),
-    database
-      .select({ value: sql<number>`count(*)` })
-      .from(carrierAssignments)
-      .where(sql`status = 'completed'`),
-    database
-      .select({ value: sql<number>`count(*)` })
-      .from(incidents)
-      .where(sql`status = 'open'`),
-    database
-      .select({ value: sql<number>`avg(${reviews.rating})` })
-      .from(reviews),
-    database.select({ value: sql<number>`sum(${bids.amount})` }).from(bids),
+    database.select().from(organisations),
+    database.select().from(users),
+    database.select().from(wasteListings),
+    database.select().from(bids),
+    database.select().from(carrierAssignments),
+    database.select().from(incidents),
+    database.select().from(reviews),
+    database.select().from(auditEvents),
   ]);
 
+  // =========================
+  // 🟢 GROWTH
+  // =========================
+  const activeOrgs = new Set(listings.map((l) => l.organisationId)).size;
+
+  // =========================
+  // 🟢 MARKETPLACE
+  // =========================
+  const totalValue = bidsData.reduce((sum, b) => sum + b.amount, 0);
+
+  const avgBids = listings.length > 0 ? bidsData.length / listings.length : 0;
+
+  // =========================
+  // 🟢 LOGISTICS
+  // =========================
+  const assigned = listings.filter((l) => l.status === "assigned").length;
+
+  const completed = listings.filter((l) => l.status === "completed").length;
+
+  // =========================
+  // 🟢 TRUST
+  // =========================
+  const avgRating =
+    reviewsData.length > 0
+      ? reviewsData.reduce((sum, r) => sum + r.rating, 0) / reviewsData.length
+      : 0;
+
+  // =========================
+  // 🟢 RISK
+  // =========================
+  const openIncidents = incidentsData.filter(
+    (i) => i.status !== "resolved",
+  ).length;
+
+  const resolvedIncidents = incidentsData.filter(
+    (i) => i.status === "resolved",
+  ).length;
+
+  // =========================
+  // 🟢 SYSTEM (24H WINDOW)
+  // =========================
+  const now = new Date();
+  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  const isLast24h = (date: unknown) => {
+    if (!date) return false;
+    const d = new Date(date as string | number | Date);
+    return d >= last24h;
+  };
+
+  const events24h = events.filter((e) => isLast24h(e.createdAt)).length;
+
+  const activeUsers24h = new Set(
+    events
+      .filter((e) => isLast24h(e.createdAt))
+      .map((e) => e.userId)
+      .filter(Boolean),
+  ).size;
+
+  // =========================
+  // 📈 LISTINGS OVER TIME (LAST 7 DAYS)
+  // =========================
+
+  const days = 7;
+
+  const last7Days = Array.from({ length: days }).map((_, i) => {
+    const d = new Date();
+    d.setDate(now.getDate() - (days - 1 - i));
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+
+  const listingsOverTime = last7Days.map((day) => {
+    const nextDay = new Date(day);
+    nextDay.setDate(day.getDate() + 1);
+
+    const count = listings.filter((l) => {
+      if (!l.createdAt) return false;
+      const created = new Date(l.createdAt as any);
+      return created >= day && created < nextDay;
+    }).length;
+
+    return {
+      date: day.toLocaleDateString("en-GB", { weekday: "short" }),
+      listings: count,
+    };
+  });
+
+  // =========================
+  // 🧾 RETURN
+  // =========================
   return {
     growth: {
-      organisations: totalOrgs[0].value,
-      users: totalUsers[0].value,
+      organisations: orgs.length,
+      users: allUsers.length,
+      activeOrgs,
     },
+
     marketplace: {
-      listings: totalListings[0].value,
-      bids: totalBids[0].value,
-      totalValue: totalMarketplaceValue[0].value ?? 0,
+      listings: listings.length,
+      bids: bidsData.length,
+      totalValue,
+      avgBids: Number(avgBids.toFixed(1)),
     },
+
     logistics: {
-      assignments: totalAssignments[0].value,
-      completed: completedAssignments[0].value,
+      assignments: assignments.length,
+      assigned,
+      completed,
     },
+
     trust: {
-      avgRating: avgRating[0].value ?? 0,
+      avgRating,
+      totalReviews: reviewsData.length,
     },
+
     risk: {
-      openIncidents: openIncidents[0].value,
+      openIncidents,
+      resolvedIncidents,
+    },
+
+    system: {
+      events24h,
+      activeUsers24h,
+    },
+    charts: {
+      listingsOverTime,
     },
   };
 }
