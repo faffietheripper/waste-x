@@ -24,19 +24,30 @@ export const organisations = pgTable("bb_organisation", {
 
   teamName: text("teamName").notNull(),
   profilePicture: text("profilePicture"),
-  chainOfCustody: text("chainOfCustody").$type<ChainOfCustodyType>().notNull(),
+
+  // (REPLACES chainOfCustody)
+  capabilities: text("capabilities")
+    .array()
+    .$type<("generator" | "carrier" | "manager")[]>()
+    .notNull()
+    .default([]),
+
   industry: text("industry"),
 
   telephone: text("telephone").notNull(),
   emailAddress: text("emailAddress").notNull(),
+
   country: text("country").notNull(),
   streetAddress: text("streetAddress").notNull(),
   city: text("city").notNull(),
   region: text("region").notNull(),
   postCode: text("postCode").notNull(),
+
   isSuspended: boolean("isSuspended").notNull().default(false),
+
   createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
-  billingCustomerId: text("billingCustomerId"), // Stripe customer ID
+
+  billingCustomerId: text("billingCustomerId"),
 
   subscriptionStatus: text("subscriptionStatus")
     .$type<"trial" | "active" | "past_due" | "cancelled">()
@@ -49,6 +60,7 @@ export const organisations = pgTable("bb_organisation", {
   trialEndsAt: timestamp("trialEndsAt", { mode: "date" }),
 
   billingEmail: text("billingEmail"),
+
   status: text("status")
     .$type<"PENDING" | "ACTIVE" | "REJECTED" | "SUSPENDED">()
     .default("PENDING"),
@@ -144,6 +156,75 @@ export const payments = pgTable(
   }),
 );
 
+export const wasteEvents = pgTable(
+  "bb_waste_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    // 🔗 TENANT
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    // 🔗 CONTEXT
+    listingId: integer("listingId").references(() => wasteListings.id, {
+      onDelete: "set null",
+    }),
+
+    carrierAssignmentId: text("carrierAssignmentId").references(
+      () => carrierAssignments.id,
+      { onDelete: "set null" },
+    ),
+
+    // 👤 USER
+    performedByUserId: text("performedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    // 🔥 EVENT TYPE
+    eventType: text("eventType")
+      .$type<
+        | "WASTE_CREATED"
+        | "TRANSFER_ASSIGNED"
+        | "TRANSFER_ACCEPTED"
+        | "WASTE_COLLECTED"
+        | "WASTE_RECEIVED"
+        | "WASTE_MOVED_INTERNAL"
+        | "WASTE_PROCESSED"
+        | "WASTE_DISPOSED"
+      >()
+      .notNull(),
+
+    // 🧠 ACTOR
+    actorOrganisationId: text("actorOrganisationId").notNull(),
+    actorRole: text("actorRole")
+      .$type<"generator" | "carrier" | "manager">()
+      .notNull(),
+
+    // 🎯 TARGET (optional)
+    targetOrganisationId: text("targetOrganisationId"),
+
+    // 📍 SITE (future-proof)
+    siteId: text("siteId"),
+
+    // 📦 SNAPSHOT
+    wasteType: text("wasteType"),
+    wasteQuantity: integer("wasteQuantity"),
+
+    // 📦 FLEXIBLE DATA
+    metadata: text("metadata"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("waste_event_org_idx").on(table.organisationId),
+    listingIdx: index("waste_event_listing_idx").on(table.listingId),
+    typeIdx: index("waste_event_type_idx").on(table.eventType),
+    createdIdx: index("waste_event_created_idx").on(table.createdAt),
+  }),
+);
 /* =========================================================
    USERS
 ========================================================= */
@@ -315,12 +396,16 @@ export const wasteListings = pgTable(
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
 
-    winningBidId: integer("winningBidId"),
+    /* ===============================
+       NEW CORE FIELDS
+    ============================== */
 
-    winningOrganisationId: text("winningOrganisationId").references(
-      () => organisations.id,
-      { onDelete: "set null" },
-    ),
+    participationMode: text("participationMode")
+      .$type<"internal" | "external" | "mixed">()
+      .notNull()
+      .default("external"),
+
+    assignmentMethod: text("assignmentMethod").$type<"bid" | "direct">(),
 
     assignedCarrierOrganisationId: text(
       "assignedCarrierOrganisationId",
@@ -330,7 +415,8 @@ export const wasteListings = pgTable(
       () => organisations.id,
       { onDelete: "set null" },
     ),
-    platformFee: integer("platformFee"),
+
+    assignedAt: timestamp("assignedAt", { mode: "date" }),
 
     /* ===============================
        TEMPLATE LOCKING
@@ -343,11 +429,12 @@ export const wasteListings = pgTable(
     templateVersion: integer("templateVersion").notNull(),
 
     /* ===============================
-       AUCTION CORE
+       LISTING CORE
     ============================== */
 
     name: text("name").notNull(),
     location: text("location").notNull(),
+
     startingPrice: integer("startingPrice").notNull().default(0),
     currentBid: integer("currentBid").notNull().default(0),
 
@@ -356,22 +443,17 @@ export const wasteListings = pgTable(
     endDate: timestamp("endDate", { mode: "date" }).notNull(),
 
     /* ===============================
-       WORKFLOW / LIFECYCLE
+       LIFECYCLE
     ============================== */
 
-    assignedAt: timestamp("assignedAt", { mode: "date" }),
-
     archived: boolean("archived").notNull().default(false),
-    offerAccepted: boolean("offerAccepted").notNull().default(false),
-    assigned: boolean("assigned").notNull().default(false),
 
     status: text("status")
       .$type<
         | "draft"
         | "open"
-        | "offer_accepted"
         | "assigned"
-        | "collected"
+        | "in_progress"
         | "completed"
         | "cancelled"
       >()
@@ -410,11 +492,12 @@ export const bids = pgTable(
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
 
-    timestamp: timestamp("timestamp", { mode: "date" }).notNull().defaultNow(),
+    status: text("status")
+      .$type<"active" | "accepted" | "rejected" | "withdrawn">()
+      .notNull()
+      .default("active"),
 
-    declinedOffer: boolean("declinedOffer").notNull().default(false),
-    cancelledJob: boolean("cancelledJob").notNull().default(false),
-    cancellationReason: text("cancellationReason"),
+    timestamp: timestamp("timestamp", { mode: "date" }).notNull().defaultNow(),
   },
   (table) => ({
     listingIdx: index("bid_listing_idx").on(table.listingId),
@@ -433,7 +516,6 @@ export const carrierAssignments = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
 
-    // ✅ NEW — explicit tenant ownership
     organisationId: text("organisationId")
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
@@ -450,8 +532,16 @@ export const carrierAssignments = pgTable(
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
 
+    assignmentMethod: text("assignmentMethod")
+      .$type<"bid" | "direct">()
+      .notNull(),
+
+    bidId: integer("bidId").references(() => bids.id),
+
     status: text("status")
-      .$type<"pending" | "accepted" | "collected" | "completed" | "rejected">()
+      .$type<
+        "pending" | "accepted" | "in_progress" | "completed" | "rejected"
+      >()
       .notNull()
       .default("pending"),
 
@@ -1011,11 +1101,6 @@ export const wasteListingsRelations = relations(
       references: [organisations.id],
     }),
 
-    winningOrganisation: one(organisations, {
-      relationName: "winningOrganisation",
-      fields: [wasteListings.winningOrganisationId],
-      references: [organisations.id],
-    }),
     bids: many(bids),
 
     carrierAssignments: many(carrierAssignments),
@@ -1025,10 +1110,10 @@ export const wasteListingsRelations = relations(
     notifications: many(notifications),
 
     reviews: many(reviews),
+
     templateData: many(listingTemplateData),
   }),
 );
-
 /* ================= BIDS ================= */
 
 export const bidsRelations = relations(bids, ({ one }) => ({
@@ -1047,7 +1132,6 @@ export const bidsRelations = relations(bids, ({ one }) => ({
     references: [organisations.id],
   }),
 }));
-
 /* ================= CARRIER ASSIGNMENTS ================= */
 
 export const carrierAssignmentsRelations = relations(
@@ -1073,6 +1157,11 @@ export const carrierAssignmentsRelations = relations(
       relationName: "assignedByOrganisation",
       fields: [carrierAssignments.assignedByOrganisationId],
       references: [organisations.id],
+    }),
+
+    bid: one(bids, {
+      fields: [carrierAssignments.bidId],
+      references: [bids.id],
     }),
 
     incidents: many(incidents),
@@ -1223,5 +1312,22 @@ export const paymentsRelations = relations(payments, ({ one }) => ({
   invoice: one(invoices, {
     fields: [payments.invoiceId],
     references: [invoices.id],
+  }),
+}));
+
+export const wasteEventsRelations = relations(wasteEvents, ({ one }) => ({
+  organisation: one(organisations, {
+    fields: [wasteEvents.organisationId],
+    references: [organisations.id],
+  }),
+
+  listing: one(wasteListings, {
+    fields: [wasteEvents.listingId],
+    references: [wasteListings.id],
+  }),
+
+  user: one(users, {
+    fields: [wasteEvents.performedByUserId],
+    references: [users.id],
   }),
 }));

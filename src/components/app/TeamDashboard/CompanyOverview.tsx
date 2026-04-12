@@ -36,14 +36,6 @@ export default async function CompanyOverview() {
   const organisation = result[0]?.organisation;
 
   /* ===============================
-     NO ORG → REDIRECT
-  ============================== */
-
-  if (!organisation) {
-    redirect("/home/team-dashboard/team-profile?reason=no-organisation");
-  }
-
-  /* ===============================
      UI
   ============================== */
 

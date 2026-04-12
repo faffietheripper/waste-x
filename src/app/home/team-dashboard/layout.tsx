@@ -28,13 +28,24 @@ export default async function Layout({
     redirect("/login");
   }
 
-  const chainOfCustody = user.organisation?.chainOfCustody ?? null;
+  /* ===============================
+     NEW: CAPABILITIES
+  ============================== */
+
+  const capabilities =
+    (user.organisation?.capabilities as
+      | ("generator" | "carrier" | "manager")[]
+      | null) ?? [];
+
   const userRole = user.role ?? null;
-  console.log("SERVER ROLE:", userRole);
+
+  /* ===============================
+     RENDER
+  ============================== */
 
   return (
     <div className="relative">
-      <TeamNav userRole={userRole} chainOfCustody={chainOfCustody} />
+      <TeamNav userRole={userRole} capabilities={capabilities} />
 
       <div className="pl-[24vw] p-10 pt-56">{children}</div>
     </div>

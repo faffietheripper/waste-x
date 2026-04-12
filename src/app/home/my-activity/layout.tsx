@@ -6,38 +6,75 @@ import { eq } from "drizzle-orm";
 import ActivityNav from "@/components/app/ActivityNav";
 import { redirect } from "next/navigation";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
+type Capability = "generator" | "carrier" | "manager";
+
+/* =========================================================
+   LAYOUT
+========================================================= */
+
 export default async function Layout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  /* ===============================
+     AUTH
+  ============================== */
+
   const session = await auth();
 
-  // 🔹 Protect route
   if (!session?.user?.id) {
     redirect("/login");
   }
 
-  // 🔹 Fetch user + organisation
+  const userId = session.user.id;
+
+  /* ===============================
+     USER + ORGANISATION
+  ============================== */
+
   const user = await database.query.users.findFirst({
-    where: eq(users.id, session.user.id),
+    where: eq(users.id, userId),
     with: {
       organisation: true,
     },
   });
 
-  // 🔹 Ensure organisation exists
-  if (!user?.organisationId || !user?.organisation) {
+  if (!user) {
+    redirect("/login");
+  }
+
+  /* ===============================
+     ORG GUARD
+  ============================== */
+
+  if (!user.organisationId || !user.organisation) {
     redirect("/home/team-dashboard/team-profile?reason=no-organisation");
   }
 
-  // 🔹 Extract chain of custody safely
-  const rawChain = user.organisation.chainOfCustody;
-  const chainOfCustody = user.organisation.chainOfCustody;
+  /* ===============================
+     CAPABILITIES (SAFE)
+  ============================== */
+
+  const capabilities = (user.organisation.capabilities ?? []) as Capability[];
+
+  if (!capabilities.length) {
+    // if somehow empty → force user to fix org setup
+    redirect("/home/team-dashboard/team-profile?reason=no-capabilities");
+  }
+
+  /* ===============================
+     RENDER
+  ============================== */
 
   return (
     <div className="relative">
-      <ActivityNav chainOfCustody={chainOfCustody} />
+      <ActivityNav capabilities={capabilities} />
+
       <main className="pl-[24vw] p-10 pt-56">{children}</main>
     </div>
   );

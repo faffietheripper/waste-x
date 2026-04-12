@@ -1,78 +1,37 @@
 "use server";
 
 import { auth } from "@/auth";
-import { database } from "@/db/database";
-import { users } from "@/db/schema";
-import bcryptjs from "bcryptjs";
-import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
+
+import { updatePassword } from "@/modules/auth/actions/updatePassword";
+import { deleteAccount } from "@/modules/auth/actions/deleteAccount";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-/* =========================================================
+/* ===============================
    UPDATE PASSWORD
-========================================================= */
+============================== */
 
-export const updatePassword = withErrorHandling(
+export const updatePasswordAction = withErrorHandling(
   async ({
-    userId,
     currentPassword,
     newPassword,
   }: {
-    userId: string;
     currentPassword?: string;
     newPassword: string;
   }) => {
-    /* ===============================
-       FIND USER
-    ============================== */
+    const session = await auth();
 
-    const user = await database.query.users.findFirst({
-      where: eq(users.id, userId),
+    if (!session?.user?.id) {
+      throw new Error("UNAUTHORIZED");
+    }
+
+    await updatePassword({
+      userId: session.user.id,
+      currentPassword,
+      newPassword,
     });
-
-    if (!user) {
-      return {
-        success: false,
-        message: "User not found.",
-      };
-    }
-
-    /* ===============================
-       VERIFY CURRENT PASSWORD
-    ============================== */
-
-    if (currentPassword) {
-      const isMatch = await bcryptjs.compare(
-        currentPassword,
-        user.passwordHash ?? "",
-      );
-
-      if (!isMatch) {
-        return {
-          success: false,
-          message: "Current password is incorrect.",
-        };
-      }
-    }
-
-    /* ===============================
-       HASH NEW PASSWORD
-    ============================== */
-
-    const hashedPassword = await bcryptjs.hash(newPassword, 10);
-
-    /* ===============================
-       UPDATE PASSWORD
-    ============================== */
-
-    await database
-      .update(users)
-      .set({
-        passwordHash: hashedPassword,
-      })
-      .where(eq(users.id, userId));
 
     return {
       success: true,
@@ -80,31 +39,31 @@ export const updatePassword = withErrorHandling(
     };
   },
   {
-    actionName: "updatePassword",
+    actionName: "updatePasswordAction",
     code: ERROR_CODES.AUTH_INVALID_TOKEN,
-    severity: "high", // security-sensitive
+    severity: "high",
   },
 );
 
-/* =========================================================
+/* ===============================
    DELETE ACCOUNT
-========================================================= */
+============================== */
 
 export const deleteAccountAction = withErrorHandling(
   async () => {
     const session = await auth();
 
     if (!session?.user?.id) {
-      throw new Error("Unauthorized");
+      throw new Error("UNAUTHORIZED");
     }
 
-    await database.delete(users).where(eq(users.id, session.user.id));
+    await deleteAccount(session.user.id);
 
     redirect("/");
   },
   {
     actionName: "deleteAccountAction",
     code: ERROR_CODES.AUTH_INVALID_TOKEN,
-    severity: "critical", // destructive action
+    severity: "critical",
   },
 );

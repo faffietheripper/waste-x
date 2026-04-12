@@ -14,91 +14,74 @@ const navItem =
   "text-gray-500 hover:text-blue-600 transition-all duration-200 hover:translate-x-1";
 
 // -------------------------------------------------------
-// NAVS
+// DYNAMIC NAV
 // -------------------------------------------------------
-function WasteGeneratorNav() {
+function CapabilityNav({
+  capabilities,
+}: {
+  capabilities: ("generator" | "carrier" | "manager")[];
+}) {
   return (
     <div className="flex flex-col gap-5 text-sm font-medium">
+      {/* ALWAYS */}
       <Link href="/home" className={navItem}>
         Home Page.
       </Link>
-      <Link href="/home/waste-listings" className={navItem}>
-        Waste Listings.
-      </Link>
-      <Link href="/home/create-waste-listings" className={navItem}>
-        Create Waste Listing.
-      </Link>
+
       <Link href="/home/my-activity" className={navItem}>
         My Activity.
       </Link>
-      <Link href="/home/team-dashboard" className={navItem}>
-        Team Dashboard.
-      </Link>
-      <Link href="/home/notifications" className={navItem}>
-        Notifications.
-      </Link>
-      <Link href="/home/me/account" className={navItem}>
-        User Settings.
-      </Link>
-    </div>
-  );
-}
 
-function WasteManagerNav() {
-  return (
-    <div className="flex flex-col gap-5 text-sm font-medium">
-      <Link href="/home" className={navItem}>
-        Home Page.
-      </Link>
-      <Link href="/home/waste-listings" className={navItem}>
-        Waste Listings.
-      </Link>
-      <Link href="/home/my-activity" className={navItem}>
-        My Activity.
-      </Link>
       <Link href="/home/team-dashboard" className={navItem}>
         Team Dashboard.
       </Link>
-      <Link href="/home/waste-carriers" className={navItem}>
-        Waste Carriers.
-      </Link>
-      <Link
-        href="/home/carrier-hub/carrier-manager/analytics"
-        className={navItem}
-      >
-        Carrier Hub.
-      </Link>
-      <Link href="/home/notifications" className={navItem}>
-        Notifications.
-      </Link>
-      <Link href="/home/me/account" className={navItem}>
-        User Settings.
-      </Link>
-    </div>
-  );
-}
 
-function WasteCarrierNav() {
-  return (
-    <div className="flex flex-col gap-5 text-sm font-medium">
-      <Link href="/home" className={navItem}>
-        Home Page.
-      </Link>
-      <Link href="/home/waste-listings" className={navItem}>
-        Waste Listings.
-      </Link>
-      <Link href="/home/team-dashboard" className={navItem}>
-        Team Dashboard.
-      </Link>
-      <Link
-        href="/home/carrier-hub/waste-carriers/analytics"
-        className={navItem}
-      >
-        Carrier Hub.
-      </Link>
+      {/* ================= GENERATOR ================= */}
+      {capabilities.includes("generator") && (
+        <>
+          <Link href="/home/waste-listings" className={navItem}>
+            Waste Listings.
+          </Link>
+
+          <Link href="/home/create-waste-listings" className={navItem}>
+            Create Waste Listing.
+          </Link>
+        </>
+      )}
+
+      {/* ================= MANAGER ================= */}
+      {capabilities.includes("manager") && (
+        <>
+          <Link href="/home/waste-carriers" className={navItem}>
+            Waste Carriers.
+          </Link>
+
+          <Link
+            href="/home/carrier-hub/carrier-manager/analytics"
+            className={navItem}
+          >
+            Carrier Hub.
+          </Link>
+        </>
+      )}
+
+      {/* ================= CARRIER ================= */}
+      {capabilities.includes("carrier") && (
+        <>
+          <Link
+            href="/home/carrier-hub/waste-carriers/analytics"
+            className={navItem}
+          >
+            My Collections.
+          </Link>
+        </>
+      )}
+
+      {/* ALWAYS */}
       <Link href="/home/notifications" className={navItem}>
         Notifications.
       </Link>
+
       <Link href="/home/me/account" className={navItem}>
         User Settings.
       </Link>
@@ -119,22 +102,10 @@ export default async function AppNav() {
     with: { organisation: true },
   });
 
-  const chain = user?.organisation?.chainOfCustody;
-
-  const renderNav = () => {
-    switch (chain) {
-      case "wasteGenerator":
-        return <WasteGeneratorNav />;
-      case "wasteManager":
-        return <WasteManagerNav />;
-      case "wasteCarrier":
-        return <WasteCarrierNav />;
-      default:
-        return (
-          <div className="text-sm text-gray-400">No navigation available.</div>
-        );
-    }
-  };
+  const capabilities =
+    (user?.organisation?.capabilities as
+      | ("generator" | "carrier" | "manager")[]
+      | null) ?? [];
 
   // PROFILE
   let fullName = "Guest";
@@ -203,11 +174,11 @@ export default async function AppNav() {
 
       {/* 🟩 SIDE NAV */}
       <div className="fixed top-[13vh] left-0 h-[87vh] w-[20vw] bg-[#F7F7F8] border-r border-gray-200 flex flex-col justify-between z-40">
-        {/* SPACER */}
         <div />
 
-        {/* 🔻 NAV (BOTTOM ALIGNED) */}
-        <div className="p-10">{renderNav()}</div>
+        <div className="p-10">
+          <CapabilityNav capabilities={capabilities} />
+        </div>
       </div>
     </>
   );

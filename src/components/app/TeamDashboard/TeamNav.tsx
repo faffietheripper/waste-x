@@ -3,38 +3,34 @@
 import React, { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { FiEdit, FiChevronDown, FiShare, FiPlusSquare } from "react-icons/fi";
+import { FiEdit, FiChevronDown, FiShare } from "react-icons/fi";
 import NewMemberModal from "./NewMemberModal";
 
 /* =========================================================
    TYPES
 ========================================================= */
 
-type ChainOfCustodyType =
-  | "wasteManager"
-  | "wasteGenerator"
-  | "wasteCarrier"
-  | null;
+type Capability = "generator" | "carrier" | "manager";
 
 /* =========================================================
    MAIN NAV
 ========================================================= */
 
 export default function TeamNav({
-  chainOfCustody,
+  capabilities,
   userRole,
 }: {
-  chainOfCustody: ChainOfCustodyType;
+  capabilities: Capability[];
   userRole: string | null;
 }) {
   const [showModal, setShowModal] = useState(false);
 
-  if (!chainOfCustody) return null;
+  if (!capabilities?.length) return null;
 
   return (
     <div className="pl-72 pt-[13vh] fixed w-full z-40">
       <SlideTabs
-        chainOfCustody={chainOfCustody}
+        capabilities={capabilities}
         userRole={userRole}
         setShowModal={setShowModal}
       />
@@ -49,11 +45,11 @@ export default function TeamNav({
 ========================================================= */
 
 const SlideTabs = ({
-  chainOfCustody,
+  capabilities,
   userRole,
   setShowModal,
 }: {
-  chainOfCustody: ChainOfCustodyType;
+  capabilities: Capability[];
   userRole: string | null;
   setShowModal: React.Dispatch<React.SetStateAction<boolean>>;
 }) => {
@@ -68,16 +64,38 @@ const SlideTabs = ({
       onMouseLeave={() => setPosition((pv) => ({ ...pv, opacity: 0 }))}
       className="relative flex justify-between w-[80vw] bg-gray-200 pt-4 py-4 text-sm px-10"
     >
+      {/* ALWAYS */}
       <Tab setPosition={setPosition}>
         <Link href="/home/team-dashboard">Home</Link>
       </Tab>
 
-      {/* ================= WASTE MANAGER ================= */}
-      {chainOfCustody === "wasteManager" && (
+      {/* ================= LISTINGS (GENERATOR / MANAGER) ================= */}
+      {(capabilities.includes("generator") ||
+        capabilities.includes("manager")) && (
+        <Tab setPosition={setPosition}>
+          <ListingsDropdown capabilities={capabilities} />
+        </Tab>
+      )}
+
+      {/* ================= TEMPLATE LIBRARY ================= */}
+      {capabilities.includes("generator") && (
+        <Tab setPosition={setPosition}>
+          <Link href="/home/team-dashboard/template-library">
+            Template Library
+          </Link>
+        </Tab>
+      )}
+
+      {/* ================= CARRIER JOBS ================= */}
+      {capabilities.includes("carrier") && (
+        <Tab setPosition={setPosition}>
+          <Link href="/home/carrier-hub/waste-carriers/analytics">My Jobs</Link>
+        </Tab>
+      )}
+
+      {/* ================= MANAGER ONLY ================= */}
+      {capabilities.includes("manager") && (
         <>
-          <Tab setPosition={setPosition}>
-            <ListingsDropdown chainOfCustody={chainOfCustody} />
-          </Tab>
           <Tab setPosition={setPosition}>
             <Link href="/home/team-dashboard/team-withdrawals">
               Withdrawals
@@ -90,27 +108,10 @@ const SlideTabs = ({
         </>
       )}
 
-      {/* ================= WASTE GENERATOR ================= */}
-      {chainOfCustody === "wasteGenerator" && (
-        <>
-          <Tab setPosition={setPosition}>
-            <ListingsDropdown chainOfCustody={chainOfCustody} />
-          </Tab>
-          <Tab setPosition={setPosition}>
-            <Link href="/home/team-dashboard/template-library">
-              Template Library
-            </Link>
-          </Tab>
-          <Tab setPosition={setPosition}>
-            <Link href="/home/team-dashboard/team-reviews">Reviews</Link>
-          </Tab>
-        </>
-      )}
-
-      {/* ================= WASTE CARRIER ================= */}
-      {chainOfCustody === "wasteCarrier" && (
+      {/* ================= GENERATOR REVIEWS ================= */}
+      {capabilities.includes("generator") && (
         <Tab setPosition={setPosition}>
-          <Link href="/home/carrier-hub/waste-carriers/analytics">My Jobs</Link>
+          <Link href="/home/team-dashboard/team-reviews">Reviews</Link>
         </Tab>
       )}
 
@@ -208,15 +209,13 @@ const SettingsDropdown = () => {
 
       {open && (
         <motion.ul
-          initial="closed"
-          animate="open"
-          exit="closed"
           variants={wrapperVariants}
           className="absolute top-[120%] left-1/2 -translate-x-1/2 w-48 flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl z-50"
         >
           <Link href="/home/team-dashboard/team-profile">
             <Option Icon={FiEdit} text="Team Profile" setOpen={setOpen} />
           </Link>
+
           <Link href="/home/team-dashboard/team-management">
             <Option Icon={FiEdit} text="Team Management" setOpen={setOpen} />
           </Link>
@@ -227,14 +226,10 @@ const SettingsDropdown = () => {
 };
 
 /* =========================================================
-   LISTINGS DROPDOWN
+   LISTINGS DROPDOWN (UPDATED)
 ========================================================= */
 
-const ListingsDropdown = ({
-  chainOfCustody,
-}: {
-  chainOfCustody: ChainOfCustodyType;
-}) => {
+const ListingsDropdown = ({ capabilities }: { capabilities: Capability[] }) => {
   const [open, setOpen] = useState(false);
 
   return (
@@ -243,7 +238,7 @@ const ListingsDropdown = ({
         onClick={() => setOpen((pv) => !pv)}
         className="flex items-center gap-2 text-black"
       >
-        <span>Listings Management</span>
+        <span>Listings</span>
         <motion.span variants={iconVariants}>
           <FiChevronDown />
         </motion.span>
@@ -251,40 +246,39 @@ const ListingsDropdown = ({
 
       {open && (
         <motion.ul
-          initial="closed"
-          animate="open"
-          exit="closed"
           variants={wrapperVariants}
-          className="absolute top-[120%] left-1/2 -translate-x-1/2 w-48 flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl z-50"
+          className="absolute top-[120%] left-1/2 -translate-x-1/2 w-56 flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl z-50"
         >
-          {chainOfCustody === "wasteManager" && (
-            <>
-              <Link href="/home/team-dashboard/team-assigned-jobs">
-                <Option Icon={FiEdit} text="Assigned Jobs" setOpen={setOpen} />
-              </Link>
-
-              <Link href="/home/team-dashboard/team-bids">
-                <Option Icon={FiShare} text="Team Bids" setOpen={setOpen} />
-              </Link>
-            </>
-          )}
-
-          {chainOfCustody === "wasteGenerator" && (
+          {/* GENERATOR */}
+          {capabilities.includes("generator") && (
             <>
               <Link href="/home/team-dashboard/team-listings">
                 <Option
-                  Icon={FiEdit}
                   text="Active Listings"
+                  Icon={FiEdit}
                   setOpen={setOpen}
                 />
               </Link>
 
               <Link href="/home/team-dashboard/team-archived-listings">
                 <Option
-                  Icon={FiEdit}
                   text="Archived Listings"
+                  Icon={FiEdit}
                   setOpen={setOpen}
                 />
+              </Link>
+            </>
+          )}
+
+          {/* MANAGER */}
+          {capabilities.includes("manager") && (
+            <>
+              <Link href="/home/team-dashboard/team-assigned-jobs">
+                <Option text="Assigned Jobs" Icon={FiEdit} setOpen={setOpen} />
+              </Link>
+
+              <Link href="/home/team-dashboard/team-bids">
+                <Option text="Team Bids" Icon={FiShare} setOpen={setOpen} />
               </Link>
             </>
           )}

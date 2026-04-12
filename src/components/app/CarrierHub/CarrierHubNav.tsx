@@ -4,110 +4,123 @@ import React, { useState, useRef, ReactNode } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
+type Capability = "generator" | "carrier" | "manager";
+
+/* =========================================================
+   MAIN NAV
+========================================================= */
+
 export default function CarrierHubNav({
-  chainOfCustody,
+  capabilities,
 }: {
-  chainOfCustody: string | null;
+  capabilities: Capability[] | null;
 }) {
-  if (!chainOfCustody) return null;
+  if (!capabilities || capabilities.length === 0) return null;
+
+  const isCarrier = capabilities.includes("carrier");
+  const isManager = capabilities.includes("manager");
+
+  // 🚫 No access to carrier hub at all
+  if (!isCarrier && !isManager) return null;
 
   return (
-    <div className="pl-72 pt-[13vh] fixed">
-      {chainOfCustody === "wasteCarrier" && <CarrierTabs />}
-      {chainOfCustody === "wasteManager" && <ManagerTabs />}
+    <div className="pl-72 pt-[13vh] fixed w-full">
+      <HubTabs isCarrier={isCarrier} isManager={isManager} />
     </div>
   );
 }
 
-//
-// ---------------------------------------------------------
-// CARRIER NAVIGATION
-// ---------------------------------------------------------
-//
+/* =========================================================
+   HUB TABS (MERGED LOGIC)
+========================================================= */
 
-const CarrierTabs = () => {
-  const [position, setPosition] = useState({ left: 0, width: 0, opacity: 0 });
-
-  return (
-    <ul
-      onMouseLeave={() => setPosition((pv) => ({ ...pv, opacity: 0 }))}
-      className="relative flex justify-between w-[80vw] bg-gray-200 h-[13vh] pt-4 text-sm px-10"
-    >
-      <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/waste-carriers/analytics">
-          Analytics Dashboard
-        </Link>
-      </Tab>
-
-      <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/waste-carriers/assigned-carrier-jobs">
-          Assigned Jobs
-        </Link>
-      </Tab>
-
-      <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/waste-carriers/incidents-&-reports">
-          Incident & Reports
-        </Link>
-      </Tab>
-
-      <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/waste-carriers/reviews">Reviews</Link>
-      </Tab>
-
-      <Cursor position={position} />
-    </ul>
-  );
-};
-
-//
-// ---------------------------------------------------------
-// MANAGER NAVIGATION
-// ---------------------------------------------------------
-//
-
-const ManagerTabs = () => {
-  const [position, setPosition] = useState({ left: 0, width: 0, opacity: 0 });
+const HubTabs = ({
+  isCarrier,
+  isManager,
+}: {
+  isCarrier: boolean;
+  isManager: boolean;
+}) => {
+  const [position, setPosition] = useState({
+    left: 0,
+    width: 0,
+    opacity: 0,
+  });
 
   return (
     <ul
       onMouseLeave={() => setPosition((pv) => ({ ...pv, opacity: 0 }))}
       className="relative flex justify-between w-[80vw] bg-gray-200 h-[13vh] pt-4 text-sm px-10"
     >
+      {/* ================= ANALYTICS ================= */}
       <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/carrier-manager/analytics">
+        <Link
+          href={
+            isManager
+              ? "/home/carrier-hub/carrier-manager/analytics"
+              : "/home/carrier-hub/waste-carriers/analytics"
+          }
+        >
           Analytics Dashboard
         </Link>
       </Tab>
 
-      <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/carrier-manager/job-assignments">
-          Job Assignments
-        </Link>
-      </Tab>
+      {/* ================= CARRIER ================= */}
+      {isCarrier && (
+        <Tab setPosition={setPosition}>
+          <Link href="/home/carrier-hub/waste-carriers/assigned-carrier-jobs">
+            Assigned Jobs
+          </Link>
+        </Tab>
+      )}
 
-      <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/carrier-manager/reviews">
-          Carrier Reviews
-        </Link>
-      </Tab>
+      {/* ================= MANAGER ================= */}
+      {isManager && (
+        <Tab setPosition={setPosition}>
+          <Link href="/home/carrier-hub/carrier-manager/job-assignments">
+            Job Assignments
+          </Link>
+        </Tab>
+      )}
 
+      {/* ================= INCIDENTS ================= */}
       <Tab setPosition={setPosition}>
-        <Link href="/home/carrier-hub/carrier-manager/incident-management">
+        <Link
+          href={
+            isManager
+              ? "/home/carrier-hub/carrier-manager/incident-management"
+              : "/home/carrier-hub/waste-carriers/incidents-&-reports"
+          }
+        >
           Incident Management
         </Link>
       </Tab>
 
+      {/* ================= REVIEWS ================= */}
+      <Tab setPosition={setPosition}>
+        <Link
+          href={
+            isManager
+              ? "/home/carrier-hub/carrier-manager/reviews"
+              : "/home/carrier-hub/waste-carriers/reviews"
+          }
+        >
+          Reviews
+        </Link>
+      </Tab>
+
       <Cursor position={position} />
     </ul>
   );
 };
 
-//
-// ---------------------------------------------------------
-// Shared Components
-// ---------------------------------------------------------
-//
+/* =========================================================
+   TAB
+========================================================= */
 
 interface TabProps {
   children: ReactNode;
@@ -124,7 +137,9 @@ const Tab: React.FC<TabProps> = ({ children, setPosition }) => {
       ref={ref}
       onMouseEnter={() => {
         if (!ref.current) return;
+
         const { width } = ref.current.getBoundingClientRect();
+
         setPosition({
           left: ref.current.offsetLeft,
           width,
@@ -137,6 +152,10 @@ const Tab: React.FC<TabProps> = ({ children, setPosition }) => {
     </li>
   );
 };
+
+/* =========================================================
+   CURSOR
+========================================================= */
 
 const Cursor = ({
   position,

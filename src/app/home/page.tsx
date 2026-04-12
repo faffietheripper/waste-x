@@ -35,8 +35,13 @@ export default async function AppHome() {
     );
   }
 
+  const capabilities =
+    (organisation.capabilities as
+      | ("generator" | "carrier" | "manager")[]
+      | null) ?? [];
+
   /* ===============================
-     ORG EXISTS → INFO DASHBOARD
+     ORG EXISTS
   ============================== */
 
   return (
@@ -47,7 +52,7 @@ export default async function AppHome() {
 
       <QuickLinks />
 
-      <GettingStarted chain={organisation.chainOfCustody} />
+      <GettingStarted capabilities={capabilities} />
     </div>
   );
 }
@@ -80,20 +85,16 @@ function Hero({ name, org }: { name?: string; org?: string }) {
 function InfoSection() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* WHAT IS WASTE X */}
       <Card title="What is Waste X?">
         Waste X is a structured digital system designed to manage the full chain
         of custody for waste — from generation through to final processing.
       </Card>
 
-      {/* HOW IT WORKS */}
       <Card title="How the System Works">
-        Waste X connects waste generators, managers, and carriers into a single
-        compliant workflow — ensuring traceability, accountability, and audit
-        readiness.
+        Waste X connects organisations into a single compliant workflow —
+        ensuring traceability, accountability, and audit readiness.
       </Card>
 
-      {/* COMPLIANCE */}
       <Card title="Compliance & Infrastructure">
         Built to align with UK digital waste tracking initiatives, Waste X
         provides audit-ready records and secure operational workflows.
@@ -142,34 +143,41 @@ function QuickLinks() {
    GETTING STARTED
 ============================== */
 
-function GettingStarted({ chain }: { chain: string }) {
+function GettingStarted({
+  capabilities,
+}: {
+  capabilities: ("generator" | "carrier" | "manager")[];
+}) {
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border">
       <h2 className="text-lg font-semibold mb-4">Getting Started</h2>
 
-      <div className="space-y-3 text-sm">
-        {chain === "wasteGenerator" && (
-          <>
+      <div className="space-y-4 text-sm">
+        {/* GENERATOR */}
+        {capabilities.includes("generator") && (
+          <div>
+            <p className="font-medium">Generator</p>
             <p>• Create and manage waste listings</p>
-            <p>• Review and accept bids</p>
-            <p>• Assign jobs to carriers</p>
-          </>
+            <p>• Assign jobs internally or externally</p>
+          </div>
         )}
 
-        {chain === "wasteManager" && (
-          <>
-            <p>• Browse and bid on listings</p>
-            <p>• Manage awarded jobs</p>
-            <p>• Complete and track transfers</p>
-          </>
+        {/* MANAGER */}
+        {capabilities.includes("manager") && (
+          <div>
+            <p className="font-medium">Manager</p>
+            <p>• Oversee waste processing and intake</p>
+            <p>• Track incoming waste and compliance</p>
+          </div>
         )}
 
-        {chain === "wasteCarrier" && (
-          <>
-            <p>• View assigned jobs</p>
-            <p>• Confirm collection</p>
-            <p>• Complete waste transfers</p>
-          </>
+        {/* CARRIER */}
+        {capabilities.includes("carrier") && (
+          <div>
+            <p className="font-medium">Carrier</p>
+            <p>• View and manage assigned jobs</p>
+            <p>• Confirm collection and transport</p>
+          </div>
         )}
       </div>
     </div>
@@ -191,7 +199,7 @@ function CreateOrgCTA() {
       </p>
 
       <Link
-        href="/home/team-dashboard"
+        href="/home/team-dashboard/team-profile?reason=no-organisation"
         className="bg-blue-600 text-white px-6 py-3 rounded-md"
       >
         Create Organisation

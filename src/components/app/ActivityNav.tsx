@@ -4,58 +4,93 @@ import React, { useState, useRef, ReactNode } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { FiChevronDown, FiEdit, FiPlusSquare, FiShare } from "react-icons/fi";
-import { ChainOfCustodyType } from "@/util/types";
+
+/* =========================================================
+   TYPES
+========================================================= */
+
+type Capability = "generator" | "carrier" | "manager";
+
+/* =========================================================
+   MAIN NAV
+========================================================= */
 
 export default function ActivityNav({
-  chainOfCustody,
+  capabilities,
 }: {
-  chainOfCustody: ChainOfCustodyType;
+  capabilities: Capability[] | null;
 }) {
   const [showModal, setShowModal] = useState(false);
 
-  if (!chainOfCustody) return <div>Loading...</div>;
+  if (!capabilities || capabilities.length === 0) {
+    return <div className="pl-72 pt-[13vh]">Loading...</div>;
+  }
 
   return (
     <div className="pl-72 pt-[13vh] w-full fixed">
-      <SlideTabs chainOfCustody={chainOfCustody} setShowModal={setShowModal} />
+      <SlideTabs capabilities={capabilities} setShowModal={setShowModal} />
     </div>
   );
 }
 
-// ---------- SlideTabs ----------
+/* =========================================================
+   SLIDE TABS
+========================================================= */
+
 interface SlideTabsProps {
-  chainOfCustody: ChainOfCustodyType;
+  capabilities: Capability[];
   setShowModal: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const SlideTabs: React.FC<SlideTabsProps> = ({
-  chainOfCustody,
+  capabilities,
   setShowModal,
 }) => {
-  const [position, setPosition] = useState({ left: 0, width: 0, opacity: 0 });
+  const [position, setPosition] = useState({
+    left: 0,
+    width: 0,
+    opacity: 0,
+  });
+
+  const isGenerator = capabilities.includes("generator");
+  const isCarrier = capabilities.includes("carrier");
+  const isManager = capabilities.includes("manager");
 
   return (
     <ul
       onMouseLeave={() => setPosition((pv) => ({ ...pv, opacity: 0 }))}
       className="relative flex justify-around bg-gray-200 h-[13vh] pt-4 text-sm px-10"
     >
+      {/* SUMMARY */}
       <Tab setPosition={setPosition}>
         <Link href="/home/my-activity">Activity Summary</Link>
       </Tab>
 
-      <Tab setPosition={setPosition}>
-        <ListingsDropdown
-          chainOfCustody={chainOfCustody}
-          setShowModal={setShowModal}
-        />
-      </Tab>
+      {/* LISTINGS */}
+      {(isGenerator || isManager) && (
+        <Tab setPosition={setPosition}>
+          <ListingsDropdown
+            capabilities={capabilities}
+            setShowModal={setShowModal}
+          />
+        </Tab>
+      )}
 
-      {chainOfCustody === "wasteManager" && (
+      {/* WITHDRAWALS (manager only) */}
+      {isManager && (
         <Tab setPosition={setPosition}>
           <Link href="/home/my-activity/withdrawals">Withdrawals</Link>
         </Tab>
       )}
 
+      {/* CARRIER JOBS */}
+      {isCarrier && (
+        <Tab setPosition={setPosition}>
+          <Link href="/home/my-activity/assigned-jobs">My Jobs</Link>
+        </Tab>
+      )}
+
+      {/* REVIEWS (everyone) */}
       <Tab setPosition={setPosition}>
         <Link href="/home/my-activity/reviews">Reviews</Link>
       </Tab>
@@ -65,7 +100,10 @@ const SlideTabs: React.FC<SlideTabsProps> = ({
   );
 };
 
-// ---------- Tab ----------
+/* =========================================================
+   TAB
+========================================================= */
+
 interface TabProps {
   children: ReactNode;
   setPosition: React.Dispatch<
@@ -81,7 +119,9 @@ const Tab: React.FC<TabProps> = ({ children, setPosition }) => {
       ref={ref}
       onMouseEnter={() => {
         if (!ref.current) return;
+
         const { width } = ref.current.getBoundingClientRect();
+
         setPosition({
           left: ref.current.offsetLeft,
           width,
@@ -95,29 +135,38 @@ const Tab: React.FC<TabProps> = ({ children, setPosition }) => {
   );
 };
 
-// ---------- Cursor ----------
-interface CursorProps {
-  position: { left: number; width: number; opacity: number };
-}
+/* =========================================================
+   CURSOR
+========================================================= */
 
-const Cursor: React.FC<CursorProps> = ({ position }) => (
+const Cursor = ({
+  position,
+}: {
+  position: { left: number; width: number; opacity: number };
+}) => (
   <motion.li
     animate={{ ...position }}
     className="absolute z-0 h-7 rounded-full bg-blue-600 md:h-12"
   />
 );
 
-// ---------- ListingsDropdown ----------
+/* =========================================================
+   LISTINGS DROPDOWN
+========================================================= */
+
 interface ListingsDropdownProps {
-  chainOfCustody: ChainOfCustodyType;
+  capabilities: Capability[];
   setShowModal: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const ListingsDropdown: React.FC<ListingsDropdownProps> = ({
-  chainOfCustody,
+  capabilities,
   setShowModal,
 }) => {
   const [open, setOpen] = useState(false);
+
+  const isGenerator = capabilities.includes("generator");
+  const isManager = capabilities.includes("manager");
 
   return (
     <motion.div animate={open ? "open" : "closed"} className="relative">
@@ -136,41 +185,42 @@ const ListingsDropdown: React.FC<ListingsDropdownProps> = ({
         animate={open ? "open" : "closed"}
         variants={wrapperVariants}
         style={{ originY: "top", translateX: "-50%" }}
-        className="flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl absolute top-[120%] left-[50%] w-48 overflow-hidden"
+        className="flex flex-col gap-2 p-2 rounded-lg bg-white shadow-xl absolute top-[120%] left-[50%] w-48 overflow-hidden z-50"
       >
-        {chainOfCustody === "wasteManager" && (
+        {/* GENERATOR OPTIONS */}
+        {isGenerator && (
           <>
-            <Link href="/home/my-activity/completed-jobs" passHref>
-              <Option setOpen={setOpen} Icon={FiEdit} text="Jobs Completed" />
+            <Link href="/home/my-activity/my-listings">
+              <Option text="Active Listings" Icon={FiEdit} setOpen={setOpen} />
             </Link>
-            <Link href="/home/my-activity/my-bids" passHref>
-              <Option setOpen={setOpen} Icon={FiPlusSquare} text="My Bids" />
-            </Link>
-            <Link href="/home/my-activity/assigned-jobs" passHref>
+
+            <Link href="/home/my-activity/archived-listings">
               <Option
+                text="Archived Listings"
+                Icon={FiEdit}
                 setOpen={setOpen}
-                Icon={FiPlusSquare}
-                text="My Assigned Jobs"
               />
+            </Link>
+
+            <Link href="/home/my-activity/completed-jobs">
+              <Option text="Completed Jobs" Icon={FiShare} setOpen={setOpen} />
             </Link>
           </>
         )}
 
-        {chainOfCustody === "wasteGenerator" && (
+        {/* MANAGER OPTIONS */}
+        {isManager && (
           <>
-            <Link href="/home/my-activity/my-listings" passHref>
-              <Option setOpen={setOpen} Icon={FiEdit} text="Active Listings" />
-            </Link>
-            <Link href="/home/my-activity/archived-listings" passHref>
-              <Option
-                setOpen={setOpen}
-                Icon={FiEdit}
-                text="Archived Listings"
-              />
+            <Link href="/home/my-activity/my-bids">
+              <Option text="My Bids" Icon={FiPlusSquare} setOpen={setOpen} />
             </Link>
 
-            <Link href="/home/my-activity/completed-jobs" passHref>
-              <Option setOpen={setOpen} Icon={FiShare} text="Completed Jobs" />
+            <Link href="/home/my-activity/assigned-jobs">
+              <Option
+                text="Assigned Jobs"
+                Icon={FiPlusSquare}
+                setOpen={setOpen}
+              />
             </Link>
           </>
         )}
@@ -179,7 +229,10 @@ const ListingsDropdown: React.FC<ListingsDropdownProps> = ({
   );
 };
 
-// ---------- Option ----------
+/* =========================================================
+   OPTION
+========================================================= */
+
 interface OptionProps {
   text: string;
   Icon: React.ComponentType;
@@ -187,23 +240,28 @@ interface OptionProps {
   onClick?: () => void;
 }
 
-const Option: React.FC<OptionProps> = ({ text, Icon, setOpen, onClick }) => (
-  <motion.li
-    variants={itemVariants}
-    onClick={() => {
-      setOpen(false);
-      if (onClick) onClick();
-    }}
-    className="flex items-center gap-2 w-full p-2 text-xs font-medium whitespace-nowrap rounded-md hover:bg-indigo-100 text-slate-700 hover:text-indigo-500 transition-colors cursor-pointer"
-  >
-    <motion.span variants={actionIconVariants}>
-      <Icon />
-    </motion.span>
-    <span>{text}</span>
-  </motion.li>
-);
+const Option: React.FC<OptionProps> = ({ text, Icon, setOpen, onClick }) => {
+  return (
+    <motion.li
+      variants={itemVariants}
+      onClick={() => {
+        setOpen(false);
+        if (onClick) onClick();
+      }}
+      className="flex items-center gap-2 w-full p-2 text-xs font-medium rounded-md hover:bg-indigo-100 text-slate-700 hover:text-indigo-500 transition-colors cursor-pointer"
+    >
+      <motion.span variants={actionIconVariants}>
+        <Icon />
+      </motion.span>
+      <span>{text}</span>
+    </motion.li>
+  );
+};
 
-// ---------- Animation Variants ----------
+/* =========================================================
+   ANIMATIONS
+========================================================= */
+
 const wrapperVariants = {
   open: {
     scaleY: 1,

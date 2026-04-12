@@ -54,9 +54,6 @@ export default async function Layout({
   ============================== */
 
   // No organisation → force setup
-  if (!dbUser.organisationId) {
-    redirect("/home/team-dashboard?reason=no-organisation");
-  }
 
   // Organisation pending
   if (dbUser.organisation?.status === "PENDING") {

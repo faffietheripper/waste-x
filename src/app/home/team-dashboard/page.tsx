@@ -11,6 +11,8 @@ import {
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
+type Capability = "generator" | "carrier" | "manager";
+
 export default async function TeamDashboard() {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Unauthorized");
@@ -29,7 +31,11 @@ export default async function TeamDashboard() {
 
   if (!organisation) throw new Error("Organisation not found");
 
-  const chain = organisation.chainOfCustody;
+  /* ===============================
+     CAPABILITIES
+  ============================== */
+
+  const capabilities = (organisation.capabilities as Capability[] | null) ?? [];
 
   /* ===============================
      DATA
@@ -86,53 +92,57 @@ export default async function TeamDashboard() {
     .slice(0, 5);
 
   /* ===============================
-     KPI CONFIG (KEY PART 🔥)
+     KPI SYSTEM
   ============================== */
 
   let kpis: { title: string; value: number }[] = [];
 
-  if (chain === "wasteGenerator") {
-    kpis = [
+  // GENERATOR
+  if (capabilities.includes("generator")) {
+    kpis.push(
       { title: "Active Listings", value: activeListings.length },
       { title: "Total Listings", value: orgListings.length },
       { title: "Bids Received", value: orgBids.length },
-      { title: "Assigned Jobs", value: assignedJobs.length },
-      { title: "Completed Jobs", value: completedJobs.length },
-    ];
+    );
   }
 
-  if (chain === "wasteManager") {
-    kpis = [
-      { title: "My Bids", value: orgBids.length },
+  // MANAGER
+  if (capabilities.includes("manager")) {
+    kpis.push(
       { title: "Active Jobs", value: assignedJobs.length },
-      { title: "Collected", value: collectedJobs.length },
-      { title: "Completed Jobs", value: completedJobs.length },
-      { title: "Team Members", value: orgUsers.length },
-    ];
-  }
-
-  if (chain === "wasteCarrier") {
-    kpis = [
-      { title: "Assigned Jobs", value: assignedJobs.length },
       { title: "Collected Loads", value: collectedJobs.length },
       { title: "Completed Jobs", value: completedJobs.length },
-      { title: "Total Assignments", value: orgAssignments.length },
-      { title: "Team Members", value: orgUsers.length },
-    ];
+    );
   }
+
+  // CARRIER
+  if (capabilities.includes("carrier")) {
+    kpis.push(
+      { title: "Assigned Jobs", value: assignedJobs.length },
+      { title: "Total Assignments", value: orgAssignments.length },
+    );
+  }
+
+  // ALWAYS
+  kpis.push({
+    title: "Team Members",
+    value: orgUsers.length,
+  });
 
   /* ===============================
      UI
   ============================== */
 
   return (
-    <div className="pt-6 space-y-10 ">
+    <div className="pt-6 space-y-10">
       {/* HEADER */}
       <div className="bg-gradient-to-r from-indigo-600 to-blue-700 text-white p-8 rounded-2xl shadow-xl">
         <h1 className="text-3xl font-bold mb-2">{organisation.teamName}</h1>
+
         <p className="text-sm opacity-80 capitalize">
-          {organisation.chainOfCustody}
+          {capabilities.join(" · ")}
         </p>
+
         <p className="text-sm opacity-70">
           {organisation.city}, {organisation.country}
         </p>
@@ -147,15 +157,16 @@ export default async function TeamDashboard() {
 
       {/* MAIN GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* CONDITIONAL LEFT PANEL */}
+        {/* ACTIVITY */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border">
           <h2 className="text-lg font-semibold mb-6">
-            {chain === "wasteGenerator" && "Recent Listings"}
-            {chain !== "wasteGenerator" && "Recent Assignment Activity"}
+            {capabilities.includes("generator")
+              ? "Recent Listings"
+              : "Recent Assignment Activity"}
           </h2>
 
           <div className="space-y-4">
-            {(chain === "wasteGenerator"
+            {(capabilities.includes("generator")
               ? activeListings.slice(0, 5)
               : recentAssignments
             ).map((item: any) => (
@@ -165,10 +176,11 @@ export default async function TeamDashboard() {
               >
                 <div>
                   <div className="font-medium text-sm">
-                    {chain === "wasteGenerator"
+                    {capabilities.includes("generator")
                       ? item.name
                       : `Job #${item.listingId}`}
                   </div>
+
                   <div className="text-xs text-gray-500">
                     {item.createdAt?.toLocaleDateString?.() ||
                       item.assignedAt?.toLocaleDateString?.()}

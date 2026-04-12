@@ -1,6 +1,7 @@
 import { handleError } from "@/lib/errors/handleError";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 import { auth } from "@/auth";
+import { isRedirectError } from "next/dist/client/components/redirect";
 
 type ActionOptions = {
   code?: string;
@@ -9,35 +10,72 @@ type ActionOptions = {
   actionName?: string;
 };
 
-export function withErrorHandling<T extends (...args: any[]) => Promise<any>>(
-  action: T,
-  options?: ActionOptions,
+/* =========================================================
+   TYPES
+========================================================= */
+
+type ErrorSeverity = "low" | "medium" | "high";
+
+interface ErrorOptions {
+  actionName?: string;
+  code?: string;
+  severity?: ErrorSeverity;
+}
+
+/* =========================================================
+   WRAPPER
+========================================================= */
+
+export function withErrorHandling<T extends (...args: any[]) => any>(
+  fn: T,
+  options?: ErrorOptions,
 ) {
-  return async (...args: Parameters<T>): Promise<Awaited<ReturnType<T>>> => {
-    const session = await auth();
-
-    const userId = session?.user?.id ?? undefined;
-    const organisationId = session?.user?.organisationId ?? undefined;
-
+  return async (...args: Parameters<T>): Promise<ReturnType<T>> => {
     try {
-      return await action(...args);
-    } catch (error) {
-      const errorId = await handleError(error, {
-        code: options?.code || ERROR_CODES.SYSTEM_UNEXPECTED,
-        severity: options?.severity || "medium",
-        system: { layer: options?.layer || "api" },
-        context: {
-          userId,
-          organisationId,
-          route: options?.actionName || action.name,
-          method: "SERVER_ACTION",
-        },
-        metadata: {
-          action: options?.actionName || action.name,
-        },
+      return await fn(...args);
+    } catch (error: any) {
+      /* ===============================
+         ✅ ALLOW NEXT REDIRECTS
+      ============================== */
+
+      if (isRedirectError(error)) {
+        throw error; // DO NOT TOUCH
+      }
+
+      /* ===============================
+         CUSTOM ERROR SUPPORT
+      ============================== */
+
+      const errorId = crypto.randomUUID();
+
+      const errorCode = error?.code || options?.code || "SYSTEM_UNEXPECTED";
+
+      const message =
+        error?.message || "Something went wrong. Please try again.";
+
+      /* ===============================
+         LOGGING (IMPORTANT)
+      ============================== */
+
+      console.error("🚨 ACTION ERROR", {
+        id: errorId,
+        action: options?.actionName,
+        code: errorCode,
+        severity: options?.severity || "low",
+        message,
+        stack: error?.stack,
       });
 
-      throw new Error(`${options?.actionName || "ACTION_FAILED"}:${errorId}`);
+      /* ===============================
+         THROW CLEAN CLIENT ERROR
+      ============================== */
+
+      const clientError = new Error(message);
+
+      (clientError as any).code = errorCode;
+      (clientError as any).id = errorId;
+
+      throw clientError;
     }
   };
 }

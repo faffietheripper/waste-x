@@ -1,42 +1,23 @@
 "use server";
 
-import { database } from "@/db/database";
-import { userProfiles, users } from "@/db/schema";
 import { auth, signOut } from "@/auth";
 import { redirect } from "next/navigation";
-import { getSignedUrlForS3Object } from "@/lib/s3";
-import { eq } from "drizzle-orm";
+
+import { getProfile } from "@/modules/users/profile/actions/getProfile";
+import { saveProfile } from "@/modules/users/profile/actions/saveProfile";
+import { assignRole } from "@/modules/users/roles/actions/assignRole";
+import { createUploadUrls } from "@/modules/shared/storage/createUploadUrls";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-/* =========================================================
-   TYPES
-========================================================= */
-
-type UserRole =
-  | "administrator"
-  | "employee"
-  | "seniorManagement"
-  | "platform_admin";
-
-/* =========================================================
-   CREATE SIGNED UPLOAD URL
-========================================================= */
+/* ===============================
+   UPLOAD URL
+============================== */
 
 export const createUploadUrlAction = withErrorHandling(
   async (keys: string[], types: string[]) => {
-    if (!keys.length || !types.length) return [];
-
-    const uploadUrls = await Promise.all(
-      keys.map((key, i) => {
-        const type = types[i];
-        if (!key || !type) return null;
-        return getSignedUrlForS3Object(key, type);
-      }),
-    );
-
-    return uploadUrls;
+    return createUploadUrls(keys, types);
   },
   {
     actionName: "createUploadUrlAction",
@@ -45,23 +26,19 @@ export const createUploadUrlAction = withErrorHandling(
   },
 );
 
-/* =========================================================
+/* ===============================
    FETCH PROFILE
-========================================================= */
+============================== */
 
 export const fetchProfileAction = withErrorHandling(
   async () => {
     const session = await auth();
 
     if (!session?.user?.id) {
-      throw new Error("Unauthorized");
+      throw new Error("UNAUTHORIZED");
     }
 
-    const profile = await database.query.userProfiles.findFirst({
-      where: eq(userProfiles.userId, session.user.id),
-    });
-
-    return profile ?? null;
+    return getProfile(session.user.id);
   },
   {
     actionName: "fetchProfileAction",
@@ -70,66 +47,22 @@ export const fetchProfileAction = withErrorHandling(
   },
 );
 
-/* =========================================================
-   SAVE / UPDATE PROFILE
-========================================================= */
+/* ===============================
+   SAVE PROFILE
+============================== */
 
 export const saveProfileAction = withErrorHandling(
-  async (data: {
-    profilePicture?: string;
-    fullName: string;
-    telephone?: string;
-    emailAddress?: string;
-    country?: string;
-    streetAddress?: string;
-    city?: string;
-    region?: string;
-    postCode?: string;
-  }) => {
+  async (data) => {
     const session = await auth();
 
     if (!session?.user?.id) {
-      throw new Error("Unauthorized");
+      throw new Error("UNAUTHORIZED");
     }
 
-    const userId = session.user.id;
-
-    const existingProfile = await database.query.userProfiles.findFirst({
-      where: eq(userProfiles.userId, userId),
+    await saveProfile({
+      userId: session.user.id,
+      data,
     });
-
-    if (existingProfile) {
-      await database
-        .update(userProfiles)
-        .set({
-          profilePicture: data.profilePicture,
-          fullName: data.fullName,
-          telephone: data.telephone,
-          emailAddress: data.emailAddress,
-          country: data.country,
-          streetAddress: data.streetAddress,
-          city: data.city,
-          region: data.region,
-          postCode: data.postCode,
-          updatedAt: new Date(),
-        })
-        .where(eq(userProfiles.userId, userId));
-    } else {
-      await database.insert(userProfiles).values({
-        userId,
-        profilePicture: data.profilePicture,
-        fullName: data.fullName,
-        telephone: data.telephone,
-        emailAddress: data.emailAddress,
-        country: data.country,
-        streetAddress: data.streetAddress,
-        city: data.city,
-        region: data.region,
-        postCode: data.postCode,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-    }
 
     redirect("/home");
   },
@@ -140,29 +73,24 @@ export const saveProfileAction = withErrorHandling(
   },
 );
 
-/* =========================================================
+/* ===============================
    ASSIGN ROLE
-========================================================= */
+============================== */
 
 export const assignRoleAction = withErrorHandling(
-  async (role: UserRole) => {
+  async (role) => {
     const session = await auth();
 
     if (!session?.user?.id) {
-      throw new Error("Unauthorized");
+      throw new Error("UNAUTHORIZED");
     }
 
-    await database
-      .update(users)
-      .set({ role })
-      .where(eq(users.id, session.user.id));
-
-    /**
-     * Force re-auth to refresh session role
-     */
-    await signOut({
-      redirectTo: "/",
+    await assignRole({
+      userId: session.user.id,
+      role,
     });
+
+    await signOut({ redirectTo: "/" });
   },
   {
     actionName: "assignRoleAction",

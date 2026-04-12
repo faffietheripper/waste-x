@@ -1,93 +1,45 @@
 "use server";
 
-import { database } from "@/db/database";
-import { incidents, carrierAssignments, wasteListings } from "@/db/schema";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
-import { eq, and, desc } from "drizzle-orm";
+
+import { getIncidentsByOrganisation } from "@/modules/incidents/queries/getIncidents";
+import { getActiveAssignmentsForCarrier } from "@/modules/incidents/queries/getActiveAssignments";
+import { createIncident } from "@/modules/incidents/actions/createIncident";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-/* =========================================================
-   GET INCIDENTS
-========================================================= */
+/* ================= GET INCIDENTS ================= */
 
 export const getCarrierIncidents = withErrorHandling(
   async () => {
     const session = await auth();
 
     if (!session?.user?.organisationId) {
-      throw new Error("Unauthorised");
+      throw new Error("UNAUTHORIZED");
     }
 
-    return database
-      .select({
-        id: incidents.id,
-        type: incidents.type,
-        summary: incidents.summary,
-        status: incidents.status,
-        createdAt: incidents.createdAt,
-
-        listingName: wasteListings.name,
-        listingId: wasteListings.id,
-        location: wasteListings.location,
-        assignmentId: carrierAssignments.id,
-      })
-      .from(incidents)
-      .innerJoin(
-        carrierAssignments,
-        eq(incidents.assignmentId, carrierAssignments.id),
-      )
-      .innerJoin(
-        wasteListings,
-        eq(carrierAssignments.listingId, wasteListings.id),
-      )
-      .where(
-        eq(incidents.reportedByOrganisationId, session.user.organisationId),
-      )
-      .orderBy(desc(incidents.createdAt));
+    return getIncidentsByOrganisation(session.user.organisationId);
   },
   {
     actionName: "getCarrierIncidents",
     code: ERROR_CODES.SYSTEM_UNEXPECTED,
-    severity: "low", // read operation
+    severity: "low",
   },
 );
 
-/* =========================================================
-   GET ACTIVE ASSIGNMENTS
-========================================================= */
+/* ================= GET ACTIVE ASSIGNMENTS ================= */
 
 export const getCarrierActiveAssignments = withErrorHandling(
   async () => {
     const session = await auth();
 
     if (!session?.user?.organisationId) {
-      throw new Error("Unauthorised");
+      throw new Error("UNAUTHORIZED");
     }
 
-    return database
-      .select({
-        assignmentId: carrierAssignments.id,
-        listingId: wasteListings.id,
-        listingName: wasteListings.name,
-        assignedAt: carrierAssignments.assignedAt,
-      })
-      .from(carrierAssignments)
-      .innerJoin(
-        wasteListings,
-        eq(carrierAssignments.listingId, wasteListings.id),
-      )
-      .where(
-        and(
-          eq(
-            carrierAssignments.carrierOrganisationId,
-            session.user.organisationId,
-          ),
-          eq(carrierAssignments.status, "collected"),
-        ),
-      );
+    return getActiveAssignmentsForCarrier(session.user.organisationId);
   },
   {
     actionName: "getCarrierActiveAssignments",
@@ -96,55 +48,25 @@ export const getCarrierActiveAssignments = withErrorHandling(
   },
 );
 
-/* =========================================================
-   CREATE INCIDENT
-========================================================= */
+/* ================= CREATE INCIDENT ================= */
 
-export const createIncident = withErrorHandling(
-  async (data: { assignmentId: string; type: string; summary: string }) => {
+export const createIncidentAction = withErrorHandling(
+  async (data) => {
     const session = await auth();
 
-    if (!session?.user?.id || !session.user.organisationId) {
-      throw new Error("Unauthorised");
+    if (!session?.user?.id || !session?.user?.organisationId) {
+      throw new Error("UNAUTHORIZED");
     }
 
-    /* ===============================
-       VALIDATE ASSIGNMENT
-    ============================== */
-
-    const assignment = await database.query.carrierAssignments.findFirst({
-      where: and(
-        eq(carrierAssignments.id, data.assignmentId),
-        eq(
-          carrierAssignments.carrierOrganisationId,
-          session.user.organisationId,
-        ),
-        eq(carrierAssignments.status, "collected"),
-      ),
-    });
-
-    if (!assignment) {
-      throw new Error("Invalid assignment");
-    }
-
-    /* ===============================
-       CREATE INCIDENT
-    ============================== */
-
-    await database.insert(incidents).values({
+    await createIncident({
+      ...data,
+      userId: session.user.id,
       organisationId: session.user.organisationId,
-      assignmentId: assignment.id,
-      listingId: assignment.listingId,
-      type: data.type,
-      summary: data.summary,
-      reportedByUserId: session.user.id,
-      reportedByOrganisationId: session.user.organisationId,
     });
 
     revalidatePath("/home/carrier-hub/waste-carriers/incidents-&-reports");
 
-    // ✅ IMPORTANT: return something (prevents void typing issues)
-    return true;
+    return { success: true };
   },
   {
     actionName: "createIncident",
