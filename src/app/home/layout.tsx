@@ -1,15 +1,12 @@
 import SetupAlert from "@/components/app/SetupAlert";
 import { Toaster } from "@/components/ui/toaster";
-
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-
 import { database } from "@/db/database";
 import { userProfiles, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
-
-import AppNav from "@/components/app/AppNav";
+import SystemNav from "@/components/app/Navigation/SystemNav";
 
 export default async function Layout({
   children,
@@ -90,7 +87,7 @@ export default async function Layout({
 
   return (
     <div>
-      <AppNav />
+      <SystemNav />
       <Toaster />
 
       <div>

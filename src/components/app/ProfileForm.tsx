@@ -6,7 +6,7 @@ import {
   createUploadUrlAction,
   saveProfileAction,
   fetchProfileAction,
-} from "@/app/home/me/actions";
+} from "@/app/home/settings/actions";
 import { getImageUrl } from "@/util/files";
 import { useToast } from "@/components/ui/use-toast";
 

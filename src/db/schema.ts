@@ -405,6 +405,16 @@ export const wasteListings = pgTable(
       .notNull()
       .default("external"),
 
+    marketMode: text("marketMode")
+      .$type<"internal" | "controlled" | "open">()
+      .notNull()
+      .default("controlled"),
+
+    allowedCarrierIds: text("allowedCarrierIds")
+      .array()
+      .$type<string[]>()
+      .default([]),
+
     assignmentMethod: text("assignmentMethod").$type<"bid" | "direct">(),
 
     assignedCarrierOrganisationId: text(

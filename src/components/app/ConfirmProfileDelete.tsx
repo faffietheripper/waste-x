@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { deleteAccountAction } from "@/app/home/me/account/actions";
+import { deleteAccountAction } from "@/app/home/settings/account/actions";
 import { useToast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
 

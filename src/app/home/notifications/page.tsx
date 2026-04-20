@@ -1,6 +1,6 @@
 import React from "react";
 import { auth } from "@/auth";
-import { getUserNotifications } from "./actions";
+import { getUserNotifications } from "@/modules/notifications/queries/getUserNotifications";
 import { database } from "@/db/database";
 import { users, userProfiles } from "@/db/schema";
 import { eq } from "drizzle-orm";

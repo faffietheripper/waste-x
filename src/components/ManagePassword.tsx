@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { updatePassword } from "@/app/home/me/account/actions";
+import { updatePassword } from "@/app/home/settings/account/actions";
 import { useToast } from "@/components/ui/use-toast";
 import { z } from "zod";
 

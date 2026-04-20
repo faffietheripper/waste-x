@@ -9,7 +9,7 @@ import { isBidOver } from "@/util/bids";
 import { auth } from "@/auth";
 import { archiveBids } from "@/util/archiveBids";
 import { unarchivedBids } from "@/util/unarchivedBids";
-import { deleteListingAction } from "@/app/home/my-activity/archived-listings/actions";
+import { deleteListingAction } from "@/app/home-old/my-activity/archived-listings/actions";
 
 type Listing = InferSelectModel<typeof wasteListings>;
 
@@ -79,7 +79,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
               </form>
             </div>
           ) : (
-            <Link href={`/home/waste-listings/${listing.id}`}>
+            <Link href={`/home/marketplace/browse/${listing.id}`}>
               <button className="bg-blue-600 py-2 px-4 rounded-md w-full text-white">
                 View Listing
               </button>
@@ -88,7 +88,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
         </section>
       ) : (
         <section>
-          <Link href={`/home/waste-listings/${listing.id}`}>
+          <Link href={`/home/marketplace/browse/${listing.id}`}>
             <button className="bg-blue-600 py-2 px-4 mb-2 rounded-md w-full text-white">
               {userRole === "wasteGenerator"
                 ? "View Listing"
