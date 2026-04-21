@@ -8,6 +8,14 @@ import AddFieldModal from "@/components/app/Templates/AddFieldModal";
 import FieldSettingsPanel from "@/components/app/Templates/FieldSettingsPanel";
 
 import {
+  deleteSectionAction,
+  deleteFieldAction,
+  reorderSectionsAction,
+  reorderFieldsAction,
+  toggleTemplateLockAction,
+} from "@/modules/templates/actions/templateActions";
+
+import {
   DndContext,
   closestCenter,
   PointerSensor,
@@ -24,9 +32,9 @@ import {
 
 import { CSS } from "@dnd-kit/utilities";
 
-/* ===============================
-   Sortable Section
-================================ */
+/* ==============================
+   SECTION CARD
+============================== */
 
 function SortableSection({
   section,
@@ -37,37 +45,38 @@ function SortableSection({
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: section.id });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className="bg-gray-800 border border-gray-700 rounded-md p-3 mb-3"
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className="bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition"
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div {...attributes} {...listeners} className="cursor-grab">
+          <div
+            {...attributes}
+            {...listeners}
+            className="cursor-grab text-gray-400"
+          >
             ☰
           </div>
-          <span className="text-sm font-medium">{section.title}</span>
+          <span className="text-sm font-semibold text-gray-900">
+            {section.title}
+          </span>
         </div>
 
         {!template.isLocked && (
-          <div className="flex gap-4 text-xs">
+          <div className="flex gap-2">
             <button
               onClick={() => onAddField(section.id)}
-              className="text-orange-400"
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
             >
               + Field
             </button>
 
             <button
               onClick={() => onDeleteSection(section.id)}
-              className="text-red-400"
+              className="text-xs px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
             >
               Delete
             </button>
@@ -78,27 +87,26 @@ function SortableSection({
   );
 }
 
-/* ===============================
-   Sortable Field
-================================ */
+/* ==============================
+   FIELD CARD
+============================== */
 
 function SortableField({ field, template, onDeleteField, onSelect }: any) {
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: field.id });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className="bg-gray-800 border border-gray-700 p-4 mb-3 rounded flex justify-between items-center"
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className="bg-white border rounded-lg p-4 shadow-sm flex justify-between items-center hover:shadow-md transition"
     >
       <div className="flex items-center gap-3">
-        <div {...attributes} {...listeners} className="cursor-grab">
+        <div
+          {...attributes}
+          {...listeners}
+          className="cursor-grab text-gray-400"
+        >
           ☰
         </div>
 
@@ -106,7 +114,9 @@ function SortableField({ field, template, onDeleteField, onSelect }: any) {
           onClick={() => !template.isLocked && onSelect(field)}
           className="cursor-pointer"
         >
-          <div className="font-medium text-sm">{field.label}</div>
+          <div className="text-sm font-semibold text-gray-900">
+            {field.label}
+          </div>
           <div className="text-xs text-gray-500">{field.fieldType}</div>
         </div>
       </div>
@@ -114,7 +124,7 @@ function SortableField({ field, template, onDeleteField, onSelect }: any) {
       {!template.isLocked && (
         <button
           onClick={() => onDeleteField(field.id)}
-          className="text-xs text-red-400"
+          className="text-xs px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
         >
           Delete
         </button>
@@ -123,9 +133,9 @@ function SortableField({ field, template, onDeleteField, onSelect }: any) {
   );
 }
 
-/* ===============================
-   Main Builder
-================================ */
+/* ==============================
+   MAIN EDITOR
+============================== */
 
 export default function TemplateEditorClient({ template }: { template: any }) {
   const router = useRouter();
@@ -138,27 +148,19 @@ export default function TemplateEditorClient({ template }: { template: any }) {
 
   const sensors = useSensors(useSensor(PointerSensor));
 
-  const orderedSections = [...template.sections].sort(
+  const orderedSections = [...(template.sections ?? [])].sort(
     (a, b) => a.orderIndex - b.orderIndex,
   );
 
   async function deleteSection(sectionId: string) {
     if (!confirm("Delete this section?")) return;
-
-    const { deleteSection } =
-      await import("@/app/home/team-dashboard/template-library/actions");
-
-    await deleteSection(sectionId);
+    await deleteSectionAction(sectionId);
     router.refresh();
   }
 
   async function deleteField(fieldId: string) {
     if (!confirm("Delete this field?")) return;
-
-    const { deleteField } =
-      await import("@/app/home/team-dashboard/template-library/actions");
-
-    await deleteField(fieldId);
+    await deleteFieldAction(fieldId);
     router.refresh();
   }
 
@@ -171,10 +173,7 @@ export default function TemplateEditorClient({ template }: { template: any }) {
 
     const newOrder = arrayMove(orderedSections, oldIndex, newIndex);
 
-    const { reorderSections } =
-      await import("@/app/home/team-dashboard/template-library/actions");
-
-    await reorderSections(
+    await reorderSectionsAction(
       template.id,
       newOrder.map((s) => s.id),
     );
@@ -183,40 +182,44 @@ export default function TemplateEditorClient({ template }: { template: any }) {
   }
 
   return (
-    <>
-      <div className="mb-6 border border-orange-500/30 bg-orange-500/10 p-4 rounded-md">
-        <p className="text-xs text-orange-400 font-semibold mb-2">
-          ⚠️ Waste Listing System Fields
-        </p>
+    <main className="min-h-screen pl-[24vw] mt-32 p-10 bg-gray-50">
+      {/* HEADER */}
+      <div className="flex justify-between items-center mb-10">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">
+            {template.name}
+          </h1>
+          <p className="text-sm text-gray-500">
+            Configure structured listing template
+          </p>
+        </div>
 
-        <p className="text-xs text-black leading-relaxed">
-          Waste X already includes core fields for all listings. You do{" "}
-          <strong>not</strong> need to add these manually in your template:
-        </p>
-
-        <ul className="mt-2 text-xs text-black list-disc list-inside space-y-1">
-          <li>Project Name</li>
-          <li>Location</li>
-          <li>Starting Price</li>
-          <li>End Date</li>
-          <li>File Uploads</li>
-        </ul>
-
-        <p className="mt-3 text-xs text-neutral-500">
-          Use templates only for <strong>waste-specific data</strong>{" "}
-          (materials, contamination, handling requirements, etc).
-        </p>
+        <button
+          onClick={async () => {
+            await toggleTemplateLockAction(template.id);
+            router.refresh();
+          }}
+          className={`px-4 py-2 text-sm rounded-md text-white ${
+            template.isLocked
+              ? "bg-red-600 hover:bg-red-700"
+              : "bg-orange-600 hover:bg-orange-700"
+          }`}
+        >
+          {template.isLocked ? "Unlock Template" : "Lock Template"}
+        </button>
       </div>
-      <div className="h-screen flex bg-gray-900 text-gray-200">
-        {/* LEFT PANEL */}
-        <div className="w-1/4 border-r border-gray-800 p-6">
-          <div className="flex justify-between mb-6">
-            <h2 className="text-sm uppercase text-gray-400">Sections</h2>
+
+      {/* GRID */}
+      <div className="grid grid-cols-12 gap-8">
+        {/* LEFT */}
+        <div className="col-span-3 space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xs uppercase text-gray-500">Sections</h2>
 
             {!template.isLocked && (
               <button
                 onClick={() => setShowAddSection(true)}
-                className="text-xs text-orange-400"
+                className="text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700"
               >
                 + Add
               </button>
@@ -232,44 +235,25 @@ export default function TemplateEditorClient({ template }: { template: any }) {
               items={orderedSections.map((s) => s.id)}
               strategy={verticalListSortingStrategy}
             >
-              {orderedSections.map((section) => (
-                <SortableSection
-                  key={section.id}
-                  section={section}
-                  template={template}
-                  onAddField={setShowAddFieldForSection}
-                  onDeleteSection={deleteSection}
-                />
-              ))}
+              <div className="space-y-3">
+                {orderedSections.map((section) => (
+                  <SortableSection
+                    key={section.id}
+                    section={section}
+                    template={template}
+                    onAddField={setShowAddFieldForSection}
+                    onDeleteSection={deleteSection}
+                  />
+                ))}
+              </div>
             </SortableContext>
           </DndContext>
         </div>
 
-        {/* CENTER PANEL */}
-        <div className="w-2/4 p-8 overflow-y-auto">
-          <div className="flex justify-between items-center mb-8">
-            <h1 className="text-xl font-semibold">{template.name}</h1>
-
-            <button
-              onClick={async () => {
-                const { toggleTemplateLock } =
-                  await import("@/app/home/team-dashboard/template-library/actions");
-
-                await toggleTemplateLock(template.id);
-                router.refresh();
-              }}
-              className={`px-4 py-2 text-sm rounded ${
-                template.isLocked
-                  ? "bg-red-600 hover:bg-red-700"
-                  : "bg-orange-600 hover:bg-orange-700"
-              }`}
-            >
-              {template.isLocked ? "Unlock Template" : "Lock Template"}
-            </button>
-          </div>
-
+        {/* CENTER */}
+        <div className="col-span-6 space-y-8">
           {orderedSections.map((section) => {
-            const orderedFields = [...section.fields].sort(
+            const orderedFields = [...(section.fields ?? [])].sort(
               (a: any, b: any) => a.orderIndex - b.orderIndex,
             );
 
@@ -286,10 +270,7 @@ export default function TemplateEditorClient({ template }: { template: any }) {
 
               const newOrder = arrayMove(orderedFields, oldIndex, newIndex);
 
-              const { reorderFields } =
-                await import("@/app/home/team-dashboard/template-library/actions");
-
-              await reorderFields(
+              await reorderFieldsAction(
                 section.id,
                 newOrder.map((f: any) => f.id),
               );
@@ -298,8 +279,8 @@ export default function TemplateEditorClient({ template }: { template: any }) {
             }
 
             return (
-              <div key={section.id} className="mb-10">
-                <h3 className="text-sm uppercase text-gray-500 mb-4">
+              <div key={section.id}>
+                <h3 className="text-sm font-semibold mb-4 text-gray-600">
                   {section.title}
                 </h3>
 
@@ -312,15 +293,17 @@ export default function TemplateEditorClient({ template }: { template: any }) {
                     items={orderedFields.map((f: any) => f.id)}
                     strategy={verticalListSortingStrategy}
                   >
-                    {orderedFields.map((field: any) => (
-                      <SortableField
-                        key={field.id}
-                        field={field}
-                        template={template}
-                        onDeleteField={deleteField}
-                        onSelect={setSelectedField}
-                      />
-                    ))}
+                    <div className="space-y-3">
+                      {orderedFields.map((field: any) => (
+                        <SortableField
+                          key={field.id}
+                          field={field}
+                          template={template}
+                          onDeleteField={deleteField}
+                          onSelect={setSelectedField}
+                        />
+                      ))}
+                    </div>
                   </SortableContext>
                 </DndContext>
               </div>
@@ -328,30 +311,32 @@ export default function TemplateEditorClient({ template }: { template: any }) {
           })}
         </div>
 
-        {/* RIGHT PANEL */}
-        {selectedField && !template.isLocked && (
-          <FieldSettingsPanel
-            field={selectedField}
-            onClose={() => setSelectedField(null)}
-          />
-        )}
-
-        {/* MODALS */}
-        {showAddSection && !template.isLocked && (
-          <AddSectionModal
-            templateId={template.id}
-            onClose={() => setShowAddSection(false)}
-          />
-        )}
-
-        {showAddFieldForSection && !template.isLocked && (
-          <AddFieldModal
-            templateId={template.id}
-            sectionId={showAddFieldForSection}
-            onClose={() => setShowAddFieldForSection(null)}
-          />
-        )}
+        {/* RIGHT */}
+        <div className="col-span-3">
+          {selectedField && !template.isLocked && (
+            <FieldSettingsPanel
+              field={selectedField}
+              onClose={() => setSelectedField(null)}
+            />
+          )}
+        </div>
       </div>
-    </>
+
+      {/* MODALS */}
+      {showAddSection && !template.isLocked && (
+        <AddSectionModal
+          templateId={template.id}
+          onClose={() => setShowAddSection(false)}
+        />
+      )}
+
+      {showAddFieldForSection && !template.isLocked && (
+        <AddFieldModal
+          templateId={template.id}
+          sectionId={showAddFieldForSection}
+          onClose={() => setShowAddFieldForSection(null)}
+        />
+      )}
+    </main>
   );
 }

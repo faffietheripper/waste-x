@@ -1,10 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import {
-  createListingAction,
-  createUploadUrlAction,
-} from "@/app/home/create-waste-listings/actions";
+import { createListingAction } from "@/modules/listings/actions/createListingAction";
+import { createUploadUrlAction } from "@/modules/shared/actions/createUploadUrlsAction";
 import { DatePickerDemo } from "@/components/DatePicker";
 import { Input } from "@/components/ui/input";
 import { useAction } from "@/lib/actions/useAction";
@@ -39,11 +37,27 @@ export default function DynamicWasteListingForm({
   template: Template;
 }) {
   const [formValues, setFormValues] = useState<Record<string, any>>({});
+
   const [projectName, setProjectName] = useState("");
   const [location, setLocation] = useState("");
   const [startingPrice, setStartingPrice] = useState<number | "">("");
   const [date, setDate] = useState<Date | undefined>();
   const [files, setFiles] = useState<File[]>([]);
+
+  /* ===============================
+     NEW: BEHAVIOUR STATE
+  ============================== */
+
+  const [participationMode, setParticipationMode] = useState<
+    "internal" | "external" | "mixed"
+  >("external");
+
+  const [marketMode, setMarketMode] = useState<
+    "open_market" | "direct_award" | "internal_only" | "hybrid"
+  >("open_market");
+
+  const [allowedCarrierIds, setAllowedCarrierIds] = useState<string>("");
+
   const [submitting, setSubmitting] = useState(false);
 
   const run = useAction();
@@ -63,8 +77,17 @@ export default function DynamicWasteListingForm({
     if (!date) return "End date is required.";
     if (!projectName.trim()) return "Project name is required.";
     if (!location.trim()) return "Location is required.";
+
     if (startingPrice === "" || startingPrice < 0)
       return "Invalid starting price.";
+
+    if (
+      (participationMode === "internal" || participationMode === "mixed") &&
+      marketMode !== "internal_only" &&
+      !allowedCarrierIds.trim()
+    ) {
+      return "Allowed carriers required for restricted modes.";
+    }
 
     for (const section of template.sections) {
       for (const field of section.fields) {
@@ -87,7 +110,6 @@ export default function DynamicWasteListingForm({
 
     const error = validate();
     if (error) {
-      // ❗ Let global system handle UX (you’ll wire toast later)
       console.error(error);
       return;
     }
@@ -95,10 +117,6 @@ export default function DynamicWasteListingForm({
     setSubmitting(true);
 
     try {
-      /* ===============================
-         FILE UPLOAD
-      ============================== */
-
       let fileKeys: string[] = [];
 
       if (files.length > 0) {
@@ -111,10 +129,6 @@ export default function DynamicWasteListingForm({
           ),
         );
 
-        if (!uploadUrls || uploadUrls.length !== files.length) {
-          throw new Error("File upload initialisation failed.");
-        }
-
         await Promise.all(
           files.map((file, i) =>
             fetch(uploadUrls[i], {
@@ -125,19 +139,24 @@ export default function DynamicWasteListingForm({
         );
       }
 
-      /* ===============================
-         CREATE LISTING
-      ============================== */
-
       await run(() =>
         createListingAction({
           templateId: template.id,
           templateData: formValues,
+
           name: projectName,
           location,
           startingPrice: Number(startingPrice),
           endDate: date!,
           fileName: fileKeys,
+
+          /* 🔥 NEW */
+          participationMode,
+          marketMode,
+          allowedCarrierIds: allowedCarrierIds
+            .split(",")
+            .map((id) => id.trim())
+            .filter(Boolean),
         }),
       );
     } finally {
@@ -154,19 +173,19 @@ export default function DynamicWasteListingForm({
       {/* ================= TEMPLATE FIELDS ================= */}
 
       {template.sections.map((section) => (
-        <div key={section.id}>
+        <div key={section.id} className="bg-white p-6 rounded-lg border">
           <h3 className="text-lg font-semibold mb-4">{section.title}</h3>
 
           {section.fields.map((field) => (
             <div key={field.id} className="mb-5">
-              <label className="block mb-2 font-medium">
+              <label className="block mb-2 font-medium text-gray-700">
                 {field.label}
                 {field.required && <span className="text-red-500 ml-1">*</span>}
               </label>
 
               {field.fieldType === "text" && (
                 <input
-                  className="border p-3 w-full rounded"
+                  className="border p-3 w-full rounded bg-white text-black"
                   onChange={(e) => handleChange(field.key, e.target.value)}
                 />
               )}
@@ -174,7 +193,7 @@ export default function DynamicWasteListingForm({
               {field.fieldType === "number" && (
                 <input
                   type="number"
-                  className="border p-3 w-full rounded"
+                  className="border p-3 w-full rounded bg-white text-black"
                   onChange={(e) =>
                     handleChange(field.key, Number(e.target.value))
                   }
@@ -190,15 +209,12 @@ export default function DynamicWasteListingForm({
 
               {field.fieldType === "dropdown" && (
                 <select
-                  className="border p-3 w-full rounded"
+                  className="border p-3 w-full rounded bg-white text-black"
                   onChange={(e) => handleChange(field.key, e.target.value)}
                 >
                   <option value="">Select...</option>
-
                   {JSON.parse(field.optionsJson || "[]").map((opt: string) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
+                    <option key={opt}>{opt}</option>
                   ))}
                 </select>
               )}
@@ -207,9 +223,59 @@ export default function DynamicWasteListingForm({
         </div>
       ))}
 
-      {/* ================= PROJECT DETAILS ================= */}
+      {/* ================= BEHAVIOUR ================= */}
 
-      <div className="border-t pt-8 space-y-6">
+      <div className="bg-white p-6 rounded-lg border space-y-5">
+        <h3 className="text-lg font-semibold">Marketplace Behaviour</h3>
+
+        {/* Participation */}
+        <div>
+          <label className="text-sm font-medium">Participation Mode</label>
+          <select
+            className="border p-3 w-full rounded mt-1"
+            value={participationMode}
+            onChange={(e) => setParticipationMode(e.target.value as any)}
+          >
+            <option value="external">External (Open Market)</option>
+            <option value="internal">Internal Only</option>
+            <option value="mixed">Mixed</option>
+          </select>
+        </div>
+
+        {/* Market */}
+        <div>
+          <label className="text-sm font-medium">Market Mode</label>
+          <select
+            className="border p-3 w-full rounded mt-1"
+            value={marketMode}
+            onChange={(e) => setMarketMode(e.target.value as any)}
+          >
+            <option value="open_market">Open Market</option>
+            <option value="direct_award">Direct Award</option>
+            <option value="internal_only">Internal Only</option>
+            <option value="hybrid">Hybrid</option>
+          </select>
+        </div>
+
+        {/* Allowed carriers */}
+        {(participationMode !== "external" || marketMode !== "open_market") && (
+          <div>
+            <label className="text-sm font-medium">
+              Allowed Carrier IDs (comma separated)
+            </label>
+            <input
+              className="border p-3 w-full rounded mt-1"
+              value={allowedCarrierIds}
+              onChange={(e) => setAllowedCarrierIds(e.target.value)}
+              placeholder="org_123, org_456"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ================= PROJECT ================= */}
+
+      <div className="bg-white p-6 rounded-lg border space-y-5">
         <h3 className="text-lg font-semibold">Project & Commercial Details</h3>
 
         <Input
@@ -244,13 +310,7 @@ export default function DynamicWasteListingForm({
         />
       </div>
 
-      {/* ================= STATUS ================= */}
-
-      {submitting && (
-        <p className="text-sm text-gray-500">
-          Processing listing and uploading files...
-        </p>
-      )}
+      {/* ================= SUBMIT ================= */}
 
       <button
         type="submit"

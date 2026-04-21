@@ -383,102 +383,75 @@ export const verificationTokens = pgTable(
    WASTE LISTINGS
 ========================================================= */
 
-export const wasteListings = pgTable(
-  "bb_waste_listing",
-  {
-    id: serial("id").primaryKey(),
+export const wasteListings = pgTable("bb_waste_listing", {
+  id: serial("id").primaryKey(),
 
-    userId: text("userId")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+  userId: text("userId").notNull(),
+  organisationId: text("organisationId").notNull(),
 
-    organisationId: text("organisationId")
-      .notNull()
-      .references(() => organisations.id, { onDelete: "cascade" }),
+  /* ===============================
+     CORE BEHAVIOUR
+  ============================== */
 
-    /* ===============================
-       NEW CORE FIELDS
-    ============================== */
+  marketMode: text("market_mode")
+    .$type<"open_market" | "direct_award" | "internal_only" | "hybrid">()
+    .notNull()
+    .default("open_market"),
 
-    participationMode: text("participationMode")
-      .$type<"internal" | "external" | "mixed">()
-      .notNull()
-      .default("external"),
+  listingType: text("listing_type")
+    .$type<"waste_collection" | "material_sale" | "internal_transfer">()
+    .notNull(),
 
-    marketMode: text("marketMode")
-      .$type<"internal" | "controlled" | "open">()
-      .notNull()
-      .default("controlled"),
+  visibility: text("visibility")
+    .$type<"public" | "private" | "restricted">()
+    .default("public"),
 
-    allowedCarrierIds: text("allowedCarrierIds")
-      .array()
-      .$type<string[]>()
-      .default([]),
+  /* ===============================
+     ASSIGNMENT
+  ============================== */
 
-    assignmentMethod: text("assignmentMethod").$type<"bid" | "direct">(),
+  assignmentMethod: text("assignmentMethod").$type<"bid" | "direct">(),
 
-    assignedCarrierOrganisationId: text(
-      "assignedCarrierOrganisationId",
-    ).references(() => organisations.id, { onDelete: "set null" }),
+  assignedCarrierOrganisationId: text("assignedCarrierOrganisationId"),
+  assignedByOrganisationId: text("assignedByOrganisationId"),
+  assignedAt: timestamp("assignedAt"),
 
-    assignedByOrganisationId: text("assignedByOrganisationId").references(
-      () => organisations.id,
-      { onDelete: "set null" },
-    ),
+  winnerBidId: integer("winner_bid_id"),
 
-    assignedAt: timestamp("assignedAt", { mode: "date" }),
+  /* ===============================
+     TEMPLATE
+  ============================== */
 
-    /* ===============================
-       TEMPLATE LOCKING
-    ============================== */
+  templateId: text("templateId").notNull(),
+  templateVersion: integer("templateVersion").notNull(),
 
-    templateId: text("templateId")
-      .notNull()
-      .references(() => listingTemplates.id),
+  /* ===============================
+     CORE DATA
+  ============================== */
 
-    templateVersion: integer("templateVersion").notNull(),
+  name: text("name").notNull(),
+  location: text("location").notNull(),
 
-    /* ===============================
-       LISTING CORE
-    ============================== */
+  startingPrice: integer("startingPrice").default(0),
+  currentBid: integer("currentBid").default(0),
 
-    name: text("name").notNull(),
-    location: text("location").notNull(),
+  fileKey: text("fileKey").notNull(),
+  endDate: timestamp("endDate").notNull(),
 
-    startingPrice: integer("startingPrice").notNull().default(0),
-    currentBid: integer("currentBid").notNull().default(0),
+  /* ===============================
+     LIFECYCLE
+  ============================== */
 
-    fileKey: text("fileKey").notNull(),
+  archived: boolean("archived").default(false),
 
-    endDate: timestamp("endDate", { mode: "date" }).notNull(),
+  status: text("status")
+    .$type<
+      "draft" | "open" | "assigned" | "in_progress" | "completed" | "cancelled"
+    >()
+    .default("draft"),
 
-    /* ===============================
-       LIFECYCLE
-    ============================== */
-
-    archived: boolean("archived").notNull().default(false),
-
-    status: text("status")
-      .$type<
-        | "draft"
-        | "open"
-        | "assigned"
-        | "in_progress"
-        | "completed"
-        | "cancelled"
-      >()
-      .notNull()
-      .default("draft"),
-
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
-  },
-  (table) => ({
-    orgIdx: index("listing_org_idx").on(table.organisationId),
-    userIdx: index("listing_user_idx").on(table.userId),
-    archivedIdx: index("listing_archived_idx").on(table.archived),
-    statusIdx: index("listing_status_idx").on(table.status),
-  }),
-);
+  createdAt: timestamp("createdAt").defaultNow(),
+});
 /* =========================================================
    BIDS
 ========================================================= */

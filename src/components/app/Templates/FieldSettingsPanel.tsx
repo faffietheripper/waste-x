@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import {
-  updateField,
-  deleteField,
-} from "@/app/home/team-dashboard/template-library/actions";
+  updateFieldAction,
+  deleteFieldAction,
+} from "@/modules/templates/actions/templateActions";
 import { useAction } from "@/lib/actions/useAction";
 
 /* =========================================================
@@ -45,7 +45,7 @@ export default function FieldSettingsPanel({
 
     try {
       await run(() =>
-        updateField(field.id, {
+        updateFieldAction(field.id, {
           label: label.trim(),
           required,
         }),
@@ -65,7 +65,7 @@ export default function FieldSettingsPanel({
     setLoading(true);
 
     try {
-      await run(() => deleteField(field.id));
+      await run(() => deleteFieldAction(field.id));
       onClose();
     } finally {
       setLoading(false);

@@ -3,7 +3,7 @@
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 
-import { deleteListing } from "@/modules/listings/actions/deleteListing";
+import { deleteListing } from "@/modules/listings/core/deleteListing";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";

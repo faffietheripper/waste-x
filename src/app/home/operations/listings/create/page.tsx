@@ -31,7 +31,7 @@ export default async function CreateWasteListing() {
           {session?.user?.role === "administrator" && (
             <div className="mt-4">
               <Link
-                href="/home/team-dashboard/template-library"
+                href="/home/operations/templates"
                 className="inline-block bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition"
               >
                 Create or publish templates
@@ -47,7 +47,7 @@ export default async function CreateWasteListing() {
           {lockedTemplates.map((template) => (
             <Link
               key={template.id}
-              href={`/home/create-waste-listings/${template.id}`}
+              href={`/home/operations/listings/create/${template.id}`}
               className="block border p-6 rounded hover:bg-gray-50"
             >
               <div className="font-semibold text-lg">{template.name}</div>

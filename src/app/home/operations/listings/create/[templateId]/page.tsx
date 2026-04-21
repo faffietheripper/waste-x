@@ -13,7 +13,7 @@ export default async function TemplateCreatePage({
   }
 
   return (
-    <main className="pl-[24vw] py-14 pt-[15vh] px-12">
+    <main className=" py-14 px-12">
       <h1 className="text-3xl font-bold mb-6">{template.name}</h1>
 
       <DynamicWasteListingForm template={template} />

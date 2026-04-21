@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { addSection } from "@/app/home/team-dashboard/template-library/actions";
+import { addSection } from "@/app/home-old/team-dashboard/template-library/actions";
 import { useAction } from "@/lib/actions/useAction";
 
 export default function AddSectionModal({
