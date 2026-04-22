@@ -6,6 +6,7 @@ import { createUploadUrlAction } from "@/modules/shared/actions/createUploadUrls
 import { DatePickerDemo } from "@/components/DatePicker";
 import { Input } from "@/components/ui/input";
 import { useAction } from "@/lib/actions/useAction";
+import { useRouter } from "next/navigation";
 
 /* =========================================================
    TYPES
@@ -56,6 +57,10 @@ export default function DynamicWasteListingForm({
     "open_market" | "direct_award" | "internal_only" | "hybrid"
   >("open_market");
 
+  const [listingType, setListingType] = useState<
+    "waste_collection" | "material_sale" | "internal_transfer"
+  >("waste_collection");
+
   const [allowedCarrierIds, setAllowedCarrierIds] = useState<string>("");
 
   const [submitting, setSubmitting] = useState(false);
@@ -104,6 +109,22 @@ export default function DynamicWasteListingForm({
      SUBMIT
   ========================================================= */
 
+  const router = useRouter();
+
+  function resetForm() {
+    setFormValues({});
+    setProjectName("");
+    setLocation("");
+    setStartingPrice("");
+    setDate(undefined);
+    setFiles([]);
+
+    setParticipationMode("external");
+    setMarketMode("open_market");
+    setAllowedCarrierIds("");
+    setListingType("waste_collection");
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (submitting) return;
@@ -129,17 +150,27 @@ export default function DynamicWasteListingForm({
           ),
         );
 
+        if (!uploadUrls || uploadUrls.length !== fileKeys.length) {
+          throw new Error("Failed to generate upload URLs");
+        }
+
         await Promise.all(
-          files.map((file, i) =>
-            fetch(uploadUrls[i], {
+          files.map((file, i) => {
+            const url = uploadUrls[i];
+
+            if (!url) {
+              throw new Error(`Missing upload URL at index ${i}`);
+            }
+
+            return fetch(url, {
               method: "PUT",
               body: file,
-            }),
-          ),
+            });
+          }),
         );
       }
 
-      await run(() =>
+      const result = await run(() =>
         createListingAction({
           templateId: template.id,
           templateData: formValues,
@@ -150,15 +181,33 @@ export default function DynamicWasteListingForm({
           endDate: date!,
           fileName: fileKeys,
 
-          /* 🔥 NEW */
           participationMode,
           marketMode,
           allowedCarrierIds: allowedCarrierIds
             .split(",")
             .map((id) => id.trim())
             .filter(Boolean),
+
+          listingType,
         }),
       );
+
+      /* ===============================
+     ✅ SUCCESS FLOW
+  ============================== */
+
+      if (result?.success) {
+        alert("✅ Listing created successfully");
+
+        resetForm(); // clear form immediately
+
+        router.push(`/marketplace/browse/${result.id}`);
+
+        router.refresh(); // 🔥 forces fresh data
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Failed to create listing");
     } finally {
       setSubmitting(false);
     }
@@ -254,6 +303,19 @@ export default function DynamicWasteListingForm({
             <option value="direct_award">Direct Award</option>
             <option value="internal_only">Internal Only</option>
             <option value="hybrid">Hybrid</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium">Listing Type</label>
+          <select
+            className="border p-3 w-full rounded mt-1"
+            value={listingType}
+            onChange={(e) => setListingType(e.target.value as any)}
+          >
+            <option value="waste_collection">Waste Collection</option>
+            <option value="material_sale">Material Sale</option>
+            <option value="internal_transfer">Internal Transfer</option>
           </select>
         </div>
 

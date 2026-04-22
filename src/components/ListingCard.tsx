@@ -1,15 +1,15 @@
 import React from "react";
 import Image from "next/image";
-import { getImageUrl } from "@/util/files";
-import { wasteListings } from "@/db/schema";
-import { InferSelectModel } from "drizzle-orm";
 import Link from "next/link";
 import { format } from "date-fns";
+import { InferSelectModel } from "drizzle-orm";
+import { wasteListings } from "@/db/schema";
+import { getImageUrl } from "@/util/files";
 import { isBidOver } from "@/util/bids";
-import { auth } from "@/auth";
 import { archiveBids } from "@/util/archiveBids";
 import { unarchivedBids } from "@/util/unarchivedBids";
-import { deleteListingAction } from "@/app/home-old/my-activity/archived-listings/actions";
+import { auth } from "@/auth";
+import { deleteListingAction } from "@/modules/listings/actions/deleteListingAction";
 
 type Listing = InferSelectModel<typeof wasteListings>;
 
@@ -17,21 +17,29 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
   const session = await auth();
   const userRole = session?.user?.role;
 
+  const bidOver = await isBidOver(listing);
+
   const canPlaceBid =
     userRole !== "wasteGenerator" &&
     listing.userId !== session?.user?.id &&
-    !(await isBidOver(listing));
+    !bidOver;
+
+  /* ===============================
+     FILES
+  ============================== */
 
   const fileKeys = listing.fileKey?.split(",") ?? [];
+
   const firstImageUrl = fileKeys[0]
     ? getImageUrl(fileKeys[0])
     : "/placeholder.png";
 
+  /* ===============================
+     UI
+  ============================== */
+
   return (
-    <div
-      key={listing.id}
-      className="border p-6 rounded-lg w-full flex flex-col gap-6 justify-between"
-    >
+    <div className="border p-6 rounded-lg w-full flex flex-col gap-6 justify-between">
       <div className="flex flex-col">
         <Image
           src={firstImageUrl}
@@ -48,7 +56,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
           {listing.startingPrice}
         </h1>
 
-        {(await isBidOver(listing)) ? (
+        {bidOver ? (
           <p className="text-red-600 text-md font-semibold">Bidding is Over.</p>
         ) : (
           <p>
@@ -58,11 +66,15 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
         )}
       </div>
 
+      {/* ===============================
+         ACTIVE LISTING
+      ============================== */}
+
       {!listing.archived ? (
         <section>
           {listing.userId === session?.user?.id ? (
             <div className="grid grid-cols-2 gap-2">
-              <Link href={`/home/waste-listings/${listing.id}`}>
+              <Link href={`/home/marketplace/browse/${listing.id}`}>
                 <button className="bg-blue-600 py-2 px-4 rounded-md w-full text-white">
                   View Listing
                 </button>
@@ -87,6 +99,9 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
           )}
         </section>
       ) : (
+        /* ===============================
+           ARCHIVED LISTING
+        ============================== */
         <section>
           <Link href={`/home/marketplace/browse/${listing.id}`}>
             <button className="bg-blue-600 py-2 px-4 mb-2 rounded-md w-full text-white">
@@ -99,7 +114,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
           </Link>
 
           <div className="grid grid-cols-2 gap-2">
-            <form action={deleteListingAction} method="post">
+            <form action={deleteListingAction}>
               <input type="hidden" name="listingId" value={listing.id} />
               <button className="bg-red-600 py-2 px-4 rounded-md w-full text-white">
                 Delete

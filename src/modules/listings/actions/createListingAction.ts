@@ -1,26 +1,54 @@
 "use server";
 
+import { database } from "@/db/database";
+import { wasteListings, listingTemplateData } from "@/db/schema";
 import { requireOrgUser } from "@/lib/access/require-org-user";
 import { createListing } from "../core/createListing";
+import { withErrorHandling } from "@/lib/errors/withErrorHandling";
+import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-export async function createListingAction(data: {
-  templateId: string;
-  templateData: Record<string, any>;
-  name: string;
-  location: string;
-  startingPrice: number;
-  endDate: Date;
-  fileName: string[];
+export const createListingAction = withErrorHandling(
+  async (input: any) => {
+    const { userId, organisationId } = await requireOrgUser();
 
-  participationMode: "internal" | "external" | "mixed";
-  marketMode: "open_market" | "direct_award" | "internal_only" | "hybrid";
-  allowedCarrierIds: string[];
-}) {
-  const user = await requireOrgUser();
+    /* ===============================
+       CREATE LISTING
+    ============================== */
 
-  return createListing({
-    ...data,
-    userId: user.userId,
-    organisationId: user.organisationId,
-  });
-}
+    const listing = createListing(input, {
+      userId,
+      organisationId,
+    });
+
+    const inserted = await database
+      .insert(wasteListings)
+      .values(listing)
+      .returning({ id: wasteListings.id });
+
+    const listingId = inserted?.[0]?.id;
+
+    if (!listingId) {
+      throw new Error("Failed to create listing");
+    }
+
+    /* ===============================
+       🔥 INSERT TEMPLATE DATA
+    ============================== */
+
+    await database.insert(listingTemplateData).values({
+      id: crypto.randomUUID(),
+      listingId,
+      organisationId,
+      templateId: input.templateId,
+      templateVersion: 1,
+      dataJson: JSON.stringify(input.templateData),
+    });
+
+    return { success: true, id: listingId };
+  },
+  {
+    actionName: "createListing",
+    code: ERROR_CODES.LISTING_CREATE_FAILED,
+    severity: "high",
+  },
+);

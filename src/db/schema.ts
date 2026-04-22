@@ -386,6 +386,10 @@ export const verificationTokens = pgTable(
 export const wasteListings = pgTable("bb_waste_listing", {
   id: serial("id").primaryKey(),
 
+  /* ===============================
+     OWNERSHIP
+  ============================== */
+
   userId: text("userId").notNull(),
   organisationId: text("organisationId").notNull(),
 
@@ -393,7 +397,12 @@ export const wasteListings = pgTable("bb_waste_listing", {
      CORE BEHAVIOUR
   ============================== */
 
-  marketMode: text("market_mode")
+  participationMode: text("participationMode")
+    .$type<"internal" | "external" | "mixed">()
+    .notNull()
+    .default("external"),
+
+  marketMode: text("market_mode") // keep this as-is (you already had it)
     .$type<"open_market" | "direct_award" | "internal_only" | "hybrid">()
     .notNull()
     .default("open_market"),
@@ -405,6 +414,12 @@ export const wasteListings = pgTable("bb_waste_listing", {
   visibility: text("visibility")
     .$type<"public" | "private" | "restricted">()
     .default("public"),
+
+  /* ===============================
+     ACCESS CONTROL
+  ============================== */
+
+  allowedCarrierIds: text("allowedCarrierIds"),
 
   /* ===============================
      ASSIGNMENT
@@ -452,6 +467,7 @@ export const wasteListings = pgTable("bb_waste_listing", {
 
   createdAt: timestamp("createdAt").defaultNow(),
 });
+
 /* =========================================================
    BIDS
 ========================================================= */
