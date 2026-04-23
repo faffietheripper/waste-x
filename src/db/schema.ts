@@ -68,6 +68,18 @@ export const organisations = pgTable("bb_organisation", {
   approvedAt: timestamp("approvedAt", { mode: "date" }),
 });
 
+export const departments = pgTable("bb_departments", {
+  id: text("id").primaryKey(),
+
+  organisationId: text("organisationId").notNull(),
+
+  name: text("name").notNull(),
+
+  type: text("type").$type<"generator" | "carrier" | "compliance">().notNull(),
+
+  createdAt: timestamp("createdAt").defaultNow(),
+});
+
 export const organisationSubscriptions = pgTable(
   "bb_organisation_subscription",
   {
@@ -246,6 +258,8 @@ export const users = pgTable(
     organisationId: text("organisationId").references(() => organisations.id, {
       onDelete: "cascade",
     }),
+
+    departmentId: text("departmentId"),
 
     role: text("role")
       .$type<
@@ -426,7 +440,7 @@ export const wasteListings = pgTable("bb_waste_listing", {
   ============================== */
 
   assignmentMethod: text("assignmentMethod").$type<"bid" | "direct">(),
-
+  assignedCarrierDepartmentId: text("assignedCarrierDepartmentId"),
   assignedCarrierOrganisationId: text("assignedCarrierOrganisationId"),
   assignedByOrganisationId: text("assignedByOrganisationId"),
   assignedAt: timestamp("assignedAt"),
