@@ -3,45 +3,53 @@ import { bids, wasteListings } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { assignCarrierDirect } from "@/modules/assignments/actions/assignCarrierDirect";
 
-export async function selectBid({
-  listingId,
-  bidId,
-  organisationId,
-}: {
+type Input = {
   listingId: number;
   bidId: number;
+};
+
+type Context = {
   organisationId: string;
-}) {
+};
+
+export async function selectBid(input: Input, ctx: Context) {
   const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
+    where: eq(wasteListings.id, input.listingId),
   });
 
-  if (!listing) throw new Error("LISTING_NOT_FOUND");
+  if (!listing) throw new Error("Listing not found");
 
-  if (listing.organisationId !== organisationId) {
-    throw new Error("UNAUTHORIZED");
+  if (listing.organisationId !== ctx.organisationId) {
+    throw new Error("Not authorised");
   }
 
   const bid = await database.query.bids.findFirst({
-    where: eq(bids.id, bidId),
+    where: eq(bids.id, input.bidId),
   });
 
-  if (!bid) throw new Error("BID_NOT_FOUND");
+  if (!bid) throw new Error("Bid not found");
 
-  // 🔥 THIS IS THE KEY CHANGE
-  // selecting a bid = creating assignment
+  /* ===============================
+     ASSIGNMENT (CORE LOGIC)
+  ============================== */
 
   await assignCarrierDirect({
-    listingId,
+    listingId: input.listingId,
     carrierOrganisationId: bid.organisationId,
-    assignedByOrganisationId: organisationId,
+    assignedByOrganisationId: ctx.organisationId,
   });
 
-  // optionally mark bid as accepted
+  /* ===============================
+     MARK BID ACCEPTED
+  ============================== */
+
   await database
     .update(bids)
     .set({ status: "accepted" })
-    .where(eq(bids.id, bidId));
+    .where(eq(bids.id, input.bidId));
 
-  return { success: true };
+  return {
+    success: true,
+    message: "Listing assigned successfully",
+  };
 }

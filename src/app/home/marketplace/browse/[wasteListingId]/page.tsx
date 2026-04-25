@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { isBidOver } from "@/util/bids";
 import BidWinner from "@/components/app/BidWinner";
 import { getWinningBid } from "@/data-access/getWinningBid";
-import AssignListingButton from "@/components/app/AssignListingButton";
+import AssignListingButton from "@/components/app/Listings/AssignListingButton";
 import { canUserAccessListing } from "@/modules/listings/core/canUserAccessListing";
 import { notFound } from "next/navigation";
 
@@ -247,7 +247,9 @@ export default async function ListingPage({ params }: any) {
                         <AssignListingButton
                           listingId={listing.id}
                           bidId={bid.id}
-                          handleAssignWinningBid={handleAssignWinningBid}
+                          assignedCarrierOrganisationId={
+                            listing.assignedCarrierOrganisationId
+                          }
                         />
                       )}
                     </div>

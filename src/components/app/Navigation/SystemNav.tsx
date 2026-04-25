@@ -42,7 +42,7 @@ function CapabilityNav({
           <span className="text-xs uppercase text-gray-400">Operations</span>
 
           <Link href="/home/operations/listings" className={navItem}>
-            Listings
+            My Listings
           </Link>
 
           <Link href="/home/operations/assignments" className={navItem}>
@@ -66,10 +66,6 @@ function CapabilityNav({
 
           <Link href="/home/marketplace/bids" className={navItem}>
             My Bids
-          </Link>
-
-          <Link href="/home/marketplace/assigned" className={navItem}>
-            Assigned Listings
           </Link>
         </div>
       )}
