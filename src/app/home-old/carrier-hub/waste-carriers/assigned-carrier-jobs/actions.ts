@@ -3,10 +3,10 @@
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 
-import { createAssignment } from "@/modules/assignments/actions/createAssignment";
-import { acceptAssignment } from "@/modules/assignments/actions/acceptAssignment";
-import { rejectAssignment } from "@/modules/assignments/actions/rejectAssignment";
-import { markCollected } from "@/modules/assignments/actions/markCollected";
+import { createAssignment } from "@/modules/assignments/core/createAssignment";
+import { acceptAssignment } from "@/modules/assignments/core/acceptAssignment";
+import { rejectAssignment } from "@/modules/assignments/core/rejectAssignment";
+import { markCollected } from "@/modules/assignments/core/markCollected";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";

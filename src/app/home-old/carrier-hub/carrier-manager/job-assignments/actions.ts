@@ -3,7 +3,7 @@
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 
-import { completeAssignmentByManager } from "@/modules/assignments/actions/completeAssignmentByManager";
+import { completeAssignmentByManager } from "@/modules/assignments/core/completeAssignmentByManager";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";

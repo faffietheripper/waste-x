@@ -1,7 +1,7 @@
 import { database } from "@/db/database";
 import { bids, wasteListings } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { assignCarrierDirect } from "@/modules/assignments/actions/assignCarrierDirect";
+import { assignCarrierDirect } from "@/modules/assignments/core/assignCarrierDirect";
 
 type Input = {
   listingId: number;

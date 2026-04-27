@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 
 import { rejectBid } from "@/modules/bids/core/rejectBid";
-import { cancelAssignment } from "@/modules/assignments/actions/cancelAssignment";
+import { cancelAssignment } from "@/modules/assignments/core/cancelAssignment";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";

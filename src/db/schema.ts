@@ -553,7 +553,12 @@ export const carrierAssignments = pgTable(
 
     status: text("status")
       .$type<
-        "pending" | "accepted" | "in_progress" | "completed" | "rejected"
+        | "pending"
+        | "accepted"
+        | "in_progress"
+        | "completed"
+        | "rejected"
+        | "cancelled"
       >()
       .notNull()
       .default("pending"),
@@ -1062,6 +1067,11 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     relationName: "notificationActor",
   }),
 
+  department: one(departments, {
+    fields: [users.departmentId],
+    references: [departments.id],
+  }),
+
   reviewsWritten: many(reviews),
 }));
 
@@ -1085,13 +1095,14 @@ export const organisationsRelations = relations(organisations, ({ many }) => ({
 
   bids: many(bids),
 
-  carrierJobs: many(carrierAssignments, {
+  carrierAssignmentsReceived: many(carrierAssignments, {
     relationName: "carrierOrganisation",
   }),
 
-  assignedCarrierJobs: many(carrierAssignments, {
+  assignmentsCreated: many(carrierAssignments, {
     relationName: "assignedByOrganisation",
   }),
+  departments: many(departments),
 
   reviews: many(reviews),
   subscriptions: many(organisationSubscriptions),
@@ -1343,4 +1354,13 @@ export const wasteEventsRelations = relations(wasteEvents, ({ one }) => ({
     fields: [wasteEvents.performedByUserId],
     references: [users.id],
   }),
+}));
+
+export const departmentsRelations = relations(departments, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [departments.organisationId],
+    references: [organisations.id],
+  }),
+
+  members: many(users),
 }));

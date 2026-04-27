@@ -3,7 +3,7 @@
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 
-import { assignCarrierDirect } from "@/modules/assignments/actions/assignCarrierDirect";
+import { assignCarrierDirect } from "@/modules/assignments/core/assignCarrierDirect";
 import { createNotification } from "@/modules/notifications/services/createNotification";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";

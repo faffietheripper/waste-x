@@ -9,18 +9,16 @@ import React, {
 } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 /* =========================================================
-   TABS
+   TABS (REAL ROUTES)
 ========================================================= */
 
 const tabs = [
-  { label: "Overview", value: "" },
-  { label: "Active", value: "active" },
-  { label: "Pending", value: "pending" },
-  { label: "Collected", value: "collected" },
-  { label: "Completed", value: "completed" },
+  { label: "Overview", href: "/home/operations/assignments" },
+  { label: "Active", href: "/home/operations/assignments/active" },
+  { label: "Completed", href: "/home/operations/assignments/completed" },
 ];
 
 /* =========================================================
@@ -28,8 +26,7 @@ const tabs = [
 ========================================================= */
 
 export default function AssignmentsNav() {
-  const searchParams = useSearchParams();
-  const current = searchParams.get("status") || "";
+  const pathname = usePathname();
 
   const [position, setPosition] = useState({
     left: 0,
@@ -40,8 +37,9 @@ export default function AssignmentsNav() {
   const refs = useRef<(HTMLLIElement | null)[]>([]);
 
   useEffect(() => {
-    const index = tabs.findIndex((t) => t.value === current);
+    const index = tabs.findIndex((t) => pathname === t.href);
     const el = refs.current[index === -1 ? 0 : index];
+
     if (!el) return;
 
     setPosition({
@@ -49,27 +47,25 @@ export default function AssignmentsNav() {
       width: el.offsetWidth,
       opacity: 1,
     });
-  }, [current]);
+  }, [pathname]);
 
   return (
     <div className="pl-[24vw] mt-32 w-full border-b-2 pb-6">
       <ul className="relative flex gap-6 text-sm font-medium">
-        {tabs.map((tab, i) => (
-          <Tab
-            key={tab.value}
-            ref={(el) => (refs.current[i] = el)}
-            setPosition={setPosition}
-            isActive={current === tab.value}
-          >
-            <Link
-              href={`/home/operations/assignments${
-                tab.value ? `?status=${tab.value}` : ""
-              }`}
+        {tabs.map((tab, i) => {
+          const isActive = pathname === tab.href;
+
+          return (
+            <Tab
+              key={tab.href}
+              ref={(el) => (refs.current[i] = el)}
+              setPosition={setPosition}
+              isActive={isActive}
             >
-              {tab.label}
-            </Link>
-          </Tab>
-        ))}
+              <Link href={tab.href}>{tab.label}</Link>
+            </Tab>
+          );
+        })}
 
         <Cursor position={position} />
       </ul>
