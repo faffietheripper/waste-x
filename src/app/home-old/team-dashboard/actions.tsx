@@ -2,9 +2,9 @@
 
 import { auth } from "@/auth";
 
-import { inviteUser } from "@/modules/team/actions/inviteUser";
-import { revokeInvite } from "@/modules/team/actions/revokeInvite";
-import { resendInvite } from "@/modules/team/actions/resendInvite";
+import { inviteUser } from "@/modules/team/core/inviteTeamMember";
+import { revokeInvite } from "@/modules/team/core/revokeInvite";
+import { resendInvite } from "@/modules/team/core/resendInvite";
 
 import { sendRegEmail } from "@/util/sendRegEmail";
 

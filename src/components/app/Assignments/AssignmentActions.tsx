@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { acceptAssignmentAction } from "@/modules/assignments/actions/acceptAssignmentAction";
 import { rejectAssignmentAction } from "@/modules/assignments/actions/rejectAssignmentAction";
 import { cancelAssignmentAction } from "@/modules/assignments/actions/cancelAssignmentAction";
-import { markCollectedAction } from "@/modules/assignments/actions/markCollectedAction";
 import { completeAssignmentAction } from "@/modules/assignments/actions/completeAssignmentAction";
 
 type DepartmentType = "generator" | "carrier" | "compliance";
@@ -19,6 +18,11 @@ type AssignmentStatus =
   | "rejected"
   | "cancelled";
 
+type Message = {
+  type: "success" | "error";
+  text: string;
+};
+
 export default function AssignmentActions({
   assignmentId,
   status,
@@ -30,26 +34,55 @@ export default function AssignmentActions({
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<Message | null>(null);
 
   async function runAction(action: () => Promise<any>) {
     if (loading) return;
 
     setLoading(true);
+    setMessage(null);
 
     try {
       const result = await action();
 
       if (!result?.success) {
-        throw new Error(result?.message || "Action failed");
+        throw new Error(result?.message || "Action failed.");
       }
 
-      router.refresh();
+      setMessage({
+        type: "success",
+        text: result.message || "Action completed successfully.",
+      });
+
+      setTimeout(() => {
+        router.refresh();
+      }, 700);
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Something went wrong");
+
+      setMessage({
+        type: "error",
+        text: err.message || "Something went wrong.",
+      });
     } finally {
       setLoading(false);
     }
+  }
+
+  function MessageBox() {
+    if (!message) return null;
+
+    return (
+      <div
+        className={`rounded-lg border p-3 text-sm ${
+          message.type === "success"
+            ? "bg-green-50 border-green-200 text-green-700"
+            : "bg-red-50 border-red-200 text-red-700"
+        }`}
+      >
+        {message.text}
+      </div>
+    );
   }
 
   if (departmentType === "compliance") {
@@ -65,7 +98,21 @@ export default function AssignmentActions({
       <div className="bg-white border rounded-2xl p-6 space-y-3">
         <h2 className="font-semibold">Generator Actions</h2>
 
-        {status !== "completed" && status !== "cancelled" ? (
+        <MessageBox />
+
+        {status === "in_progress" && (
+          <button
+            disabled={loading}
+            onClick={() =>
+              runAction(() => completeAssignmentAction({ assignmentId }))
+            }
+            className="w-full bg-green-600 text-white py-2 rounded disabled:opacity-50"
+          >
+            {loading ? "Working..." : "Confirm Completion"}
+          </button>
+        )}
+
+        {status !== "completed" && status !== "cancelled" && (
           <button
             disabled={loading}
             onClick={() =>
@@ -75,7 +122,9 @@ export default function AssignmentActions({
           >
             {loading ? "Working..." : "Cancel Assignment"}
           </button>
-        ) : (
+        )}
+
+        {(status === "completed" || status === "cancelled") && (
           <p className="text-sm text-gray-500">No actions available.</p>
         )}
       </div>
@@ -86,6 +135,8 @@ export default function AssignmentActions({
     return (
       <div className="bg-white border rounded-2xl p-6 space-y-3">
         <h2 className="font-semibold">Carrier Actions</h2>
+
+        <MessageBox />
 
         {status === "pending" && (
           <>
@@ -112,31 +163,15 @@ export default function AssignmentActions({
         )}
 
         {status === "accepted" && (
-          <button
-            disabled={loading}
-            onClick={() =>
-              runAction(() =>
-                markCollectedAction({
-                  assignmentId,
-                }),
-              )
-            }
-            className="w-full bg-blue-600 text-white py-2 rounded disabled:opacity-50"
-          >
-            {loading ? "Working..." : "Mark Collected"}
-          </button>
+          <p className="text-sm text-gray-500">
+            Use the verification panel to confirm collection.
+          </p>
         )}
 
         {status === "in_progress" && (
-          <button
-            disabled={loading}
-            onClick={() =>
-              runAction(() => completeAssignmentAction({ assignmentId }))
-            }
-            className="w-full bg-black text-white py-2 rounded disabled:opacity-50"
-          >
-            {loading ? "Working..." : "Complete Assignment"}
-          </button>
+          <p className="text-sm text-gray-500">
+            Collection has been recorded. Waiting for generator completion.
+          </p>
         )}
 
         {!["pending", "accepted", "in_progress"].includes(status) && (

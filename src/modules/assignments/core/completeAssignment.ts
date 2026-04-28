@@ -1,6 +1,6 @@
 import { database } from "@/db/database";
-import { carrierAssignments, wasteListings } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { carrierAssignments, wasteListings, incidents } from "@/db/schema";
+import { and, eq, ne } from "drizzle-orm";
 
 export async function completeAssignment({
   assignmentId,
@@ -13,11 +13,27 @@ export async function completeAssignment({
     .where(eq(carrierAssignments.id, assignmentId));
 
   if (!assignment) {
-    throw new Error("ASSIGNMENT_NOT_FOUND");
+    throw new Error("Assignment not found.");
   }
 
   if (assignment.status !== "in_progress") {
-    throw new Error("INVALID_STATE");
+    throw new Error("Only in-progress assignments can be completed.");
+  }
+
+  const [unresolvedIncident] = await database
+    .select()
+    .from(incidents)
+    .where(
+      and(
+        eq(incidents.assignmentId, assignmentId),
+        ne(incidents.status, "resolved"),
+      ),
+    );
+
+  if (unresolvedIncident) {
+    throw new Error(
+      "This assignment cannot be completed while an incident is still unresolved.",
+    );
   }
 
   const now = new Date();
@@ -41,6 +57,6 @@ export async function completeAssignment({
 
   return {
     success: true,
-    message: "Assignment completed successfully",
+    message: "Assignment completed successfully.",
   };
 }

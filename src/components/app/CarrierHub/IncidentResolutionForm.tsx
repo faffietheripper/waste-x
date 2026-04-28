@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { resolveIncidentAction } from "@/app/home/carrier-hub/carrier-manager/incident-management/actions";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { resolveIncidentAction } from "@/modules/incidents/actions/resolveIncidentAction";
 import { useAction } from "@/lib/actions/useAction";
 
 interface Props {
@@ -9,16 +10,16 @@ interface Props {
   assignmentId: string;
 }
 
+type Message = {
+  type: "success" | "error";
+  text: string;
+};
+
 export default function IncidentResolutionForm({
   incidentId,
   assignmentId,
 }: Props) {
   const [form, setForm] = useState({
-    dateOfIncident: "",
-    location: "",
-    type: "",
-    summary: "",
-    immediateAction: "",
     findings: "",
     correctiveActions: "",
     preventativeMeasures: "",
@@ -27,122 +28,115 @@ export default function IncidentResolutionForm({
     dateClosed: "",
   });
 
-  const [isPending, startTransition] = useTransition();
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<Message | null>(null);
 
   const run = useAction();
+  const router = useRouter();
 
-  const handleChange = (
+  function handleChange(
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-  ) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
+  ) {
+    setForm((prev) => ({
+      ...prev,
+      [e.target.name]: e.target.value,
+    }));
 
-  const buildResolutionNotes = () => {
-    return `
+    setMessage(null);
+  }
 
-Date of Incident
-${form.dateOfIncident}
+  function validate(): string | null {
+    if (!form.findings.trim()) return "Investigation findings are required.";
+    if (!form.correctiveActions.trim())
+      return "Corrective actions are required.";
+    if (!form.preventativeMeasures.trim())
+      return "Preventative measures are required.";
+    if (!form.complianceReview.trim()) return "Compliance review is required.";
+    if (!form.responsiblePerson.trim())
+      return "Responsible person is required.";
+    if (!form.dateClosed) return "Date closed is required.";
 
-Location of Incident
-${form.location}
+    return null;
+  }
 
-Type of Incident
-${form.type}
+  async function handleResolve() {
+    if (loading) return;
 
-Summary of Incident
-${form.summary}
+    const validationError = validate();
 
-Immediate Action Taken
-${form.immediateAction}
-
-Investigation Findings
-${form.findings}
-
-Corrective Actions Implemented
-${form.correctiveActions}
-
-Preventative Measures
-${form.preventativeMeasures}
-
-Compliance Review
-${form.complianceReview}
-
-Responsible Person for Closure
-${form.responsiblePerson}
-
-Date Closed
-${form.dateClosed}
-    `.trim();
-  };
-
-  const validate = () => {
-    for (const key in form) {
-      if (!form[key as keyof typeof form]) {
-        // ⚠️ validation = local (no global error)
-        return false;
-      }
+    if (validationError) {
+      setMessage({
+        type: "error",
+        text: validationError,
+      });
+      return;
     }
-    return true;
-  };
 
-  const handleResolve = () => {
-    if (!validate()) return;
+    setLoading(true);
+    setMessage(null);
 
-    const compiledNotes = buildResolutionNotes();
-
-    startTransition(async () => {
+    try {
       const result = await run(() =>
-        resolveIncidentAction(incidentId, assignmentId, compiledNotes),
+        resolveIncidentAction({
+          incidentId,
+          assignmentId,
+          investigationFindings: form.findings,
+          correctiveActions: form.correctiveActions,
+          preventativeMeasures: form.preventativeMeasures,
+          complianceReview: form.complianceReview,
+          responsiblePerson: form.responsiblePerson,
+          dateClosed: form.dateClosed,
+        }),
       );
 
-      // no need to handle error here — global system handles it
-      // you could add success UX here later if needed
-    });
-  };
+      if (!result?.success) {
+        throw new Error(result?.message || "Failed to resolve incident.");
+      }
+
+      setMessage({
+        type: "success",
+        text: result.message || "Incident resolved successfully.",
+      });
+
+      setTimeout(() => {
+        router.refresh();
+      }, 800);
+    } catch (err: any) {
+      console.error(err);
+
+      setMessage({
+        type: "error",
+        text: err.message || "Failed to resolve incident.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <div className="mt-6 border-t pt-6 space-y-4">
-      <h3 className="font-semibold text-lg">Incident Resolution Report</h3>
+    <div className="bg-white border rounded-2xl p-6 space-y-4">
+      <div>
+        <h3 className="font-semibold text-lg">Incident Resolution Report</h3>
+        <p className="text-sm text-gray-500 mt-1">
+          Complete the review details before closing this incident.
+        </p>
+      </div>
 
-      <input
-        type="date"
-        name="dateOfIncident"
-        className="w-full border rounded p-2 text-sm"
-        onChange={handleChange}
-      />
-
-      <input
-        name="location"
-        placeholder="Location of Incident"
-        className="w-full border rounded p-2 text-sm"
-        onChange={handleChange}
-      />
-
-      <input
-        name="type"
-        placeholder="Type of Incident"
-        className="w-full border rounded p-2 text-sm"
-        onChange={handleChange}
-      />
-
-      <textarea
-        name="summary"
-        placeholder="Summary of Incident"
-        className="w-full border rounded p-2 text-sm"
-        rows={3}
-        onChange={handleChange}
-      />
-
-      <textarea
-        name="immediateAction"
-        placeholder="Immediate Action Taken"
-        className="w-full border rounded p-2 text-sm"
-        rows={3}
-        onChange={handleChange}
-      />
+      {message && (
+        <div
+          className={`rounded-lg border p-3 text-sm ${
+            message.type === "success"
+              ? "bg-green-50 border-green-200 text-green-700"
+              : "bg-red-50 border-red-200 text-red-700"
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
 
       <textarea
         name="findings"
+        value={form.findings}
         placeholder="Investigation Findings"
         className="w-full border rounded p-2 text-sm"
         rows={3}
@@ -151,6 +145,7 @@ ${form.dateClosed}
 
       <textarea
         name="correctiveActions"
+        value={form.correctiveActions}
         placeholder="Corrective Actions Implemented"
         className="w-full border rounded p-2 text-sm"
         rows={3}
@@ -159,6 +154,7 @@ ${form.dateClosed}
 
       <textarea
         name="preventativeMeasures"
+        value={form.preventativeMeasures}
         placeholder="Preventative Measures"
         className="w-full border rounded p-2 text-sm"
         rows={3}
@@ -167,6 +163,7 @@ ${form.dateClosed}
 
       <textarea
         name="complianceReview"
+        value={form.complianceReview}
         placeholder="Compliance Review"
         className="w-full border rounded p-2 text-sm"
         rows={3}
@@ -175,6 +172,7 @@ ${form.dateClosed}
 
       <input
         name="responsiblePerson"
+        value={form.responsiblePerson}
         placeholder="Responsible Person for Closure"
         className="w-full border rounded p-2 text-sm"
         onChange={handleChange}
@@ -183,19 +181,18 @@ ${form.dateClosed}
       <input
         type="date"
         name="dateClosed"
+        value={form.dateClosed}
         className="w-full border rounded p-2 text-sm"
         onChange={handleChange}
       />
 
-      <div className="flex gap-4 pt-4">
-        <button
-          onClick={handleResolve}
-          disabled={isPending}
-          className="px-4 py-2 bg-green-600 text-white rounded"
-        >
-          {isPending ? "Processing..." : "Resolve Incident"}
-        </button>
-      </div>
+      <button
+        onClick={handleResolve}
+        disabled={loading}
+        className="w-full px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+      >
+        {loading ? "Resolving..." : "Resolve Incident"}
+      </button>
     </div>
   );
 }

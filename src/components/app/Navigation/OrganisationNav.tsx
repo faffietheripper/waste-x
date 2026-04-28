@@ -18,8 +18,7 @@ import { FiChevronDown } from "react-icons/fi";
 
 const tabs = [
   { label: "Overview", value: "" },
-  { label: "Capabilities", value: "capabilities" },
-  { label: "Billing", value: "billing" },
+  { label: "Departments", value: "departments" },
 ];
 
 /* =========================================================

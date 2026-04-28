@@ -1,6 +1,7 @@
 import { database } from "@/db/database";
 import { carrierAssignments, wasteListings, organisations } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { incidents } from "@/db/schema";
 
 export async function getAssignmentById(assignmentId: string) {
   const assignment = await database.query.carrierAssignments.findFirst({
@@ -21,10 +22,18 @@ export async function getAssignmentById(assignmentId: string) {
     where: eq(organisations.id, assignment.organisationId),
   });
 
+  const [incident] = await database
+    .select({
+      id: incidents.id,
+    })
+    .from(incidents)
+    .where(eq(incidents.assignmentId, assignmentId));
+
   return {
     ...assignment,
     listing,
     carrierOrg,
     generatorOrg,
+    hasIncident: !!incident,
   };
 }

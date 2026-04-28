@@ -7,6 +7,7 @@ import { getAssignmentById } from "@/modules/assignments/queries/getAssignmentBy
 import AssignmentActions from "@/components/app/Assignments/AssignmentActions";
 import VerificationPanel from "@/components/app/Assignments/VerificationPanel";
 import AssignmentCompliancePanel from "@/components/app/Assignments/AssignmentCompliancePanel";
+import AssignmentIncidentModal from "@/components/app/Assignments/AssignmentIncidentModal";
 
 import { acceptAssignmentAction } from "@/modules/assignments/actions/acceptAssignmentAction";
 import { rejectAssignmentAction } from "@/modules/assignments/actions/rejectAssignmentAction";
@@ -203,6 +204,18 @@ export default async function AssignmentDetailPage({
           {departmentType === "compliance" && (
             <AssignmentCompliancePanel assignment={assignment} />
           )}
+          {departmentType === "carrier" &&
+            ["accepted", "in_progress"].includes(assignment.status) && (
+              <AssignmentIncidentModal
+                assignment={{
+                  assignmentId: assignment.id,
+                  listingId: assignment.listingId,
+                  listingName: assignment.listing?.name ?? "Assignment",
+                  assignedAt: assignment.assignedAt,
+                }}
+                hasIncident={assignment.hasIncident}
+              />
+            )}
         </aside>
       </div>
     </main>
