@@ -1,7 +1,8 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { carrierAssignments } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, or, desc } from "drizzle-orm";
+import Link from "next/link";
 
 /* =========================================================
    PAGE
@@ -16,8 +17,25 @@ export default async function AssignmentsPage() {
 
   const orgId = session.user.organisationId;
 
+  /*
+    Supports both internal and external assignments.
+
+    organisationId:
+    - original / owning organisation assignment context
+
+    carrierOrganisationId:
+    - external or internal carrier organisation assigned to the job
+
+    assignedByOrganisationId:
+    - organisation that created/assigned the job
+  */
   const assignments = await database.query.carrierAssignments.findMany({
-    where: eq(carrierAssignments.organisationId, orgId),
+    where: or(
+      eq(carrierAssignments.organisationId, orgId),
+      eq(carrierAssignments.carrierOrganisationId, orgId),
+      eq(carrierAssignments.assignedByOrganisationId, orgId),
+    ),
+    orderBy: desc(carrierAssignments.assignedAt),
   });
 
   /* ===============================
@@ -25,9 +43,24 @@ export default async function AssignmentsPage() {
   ============================== */
 
   const total = assignments.length;
+
   const pending = assignments.filter((a) => a.status === "pending").length;
-  const active = assignments.filter((a) => a.status === "accepted").length;
+
+  const active = assignments.filter((a) =>
+    ["accepted", "in_progress"].includes(a.status),
+  ).length;
+
   const completed = assignments.filter((a) => a.status === "completed").length;
+
+  const activeAssignments = assignments.filter((a) =>
+    ["accepted", "in_progress"].includes(a.status),
+  );
+
+  const pendingAssignments = assignments.filter((a) => a.status === "pending");
+
+  const completedAssignments = assignments.filter(
+    (a) => a.status === "completed",
+  );
 
   return (
     <div className="p-10 flex flex-col gap-10">
@@ -35,7 +68,7 @@ export default async function AssignmentsPage() {
       <div className="pl-[24vw]">
         <h1 className="text-2xl font-semibold">Assignments Overview</h1>
         <p className="text-sm text-gray-500">
-          Manage and track all waste assignment operations
+          Manage and track all internal and external waste assignment operations
         </p>
       </div>
 
@@ -50,34 +83,57 @@ export default async function AssignmentsPage() {
       {/* GRID SECTIONS */}
       <div className="pl-[24vw] grid grid-cols-2 gap-6">
         <Section title="Active Assignments">
-          {assignments
-            .filter((a) => a.status === "accepted")
-            .slice(0, 5)
-            .map((a) => (
-              <Item key={a.id} label={`Assignment #${a.id}`} />
-            ))}
+          {activeAssignments.length > 0 ? (
+            activeAssignments
+              .slice(0, 5)
+              .map((a) => (
+                <Item
+                  key={a.id}
+                  href={`/home/operations/assignments/${a.id}`}
+                  label={`Assignment #${a.id}`}
+                />
+              ))
+          ) : (
+            <Empty text="No active assignments" />
+          )}
         </Section>
 
         <Section title="Pending Responses">
-          {assignments
-            .filter((a) => a.status === "pending")
-            .slice(0, 5)
-            .map((a) => (
-              <Item key={a.id} label={`Assignment #${a.id}`} />
-            ))}
+          {pendingAssignments.length > 0 ? (
+            pendingAssignments
+              .slice(0, 5)
+              .map((a) => (
+                <Item
+                  key={a.id}
+                  href={`/home/operations/assignments/${a.id}`}
+                  label={`Assignment #${a.id}`}
+                />
+              ))
+          ) : (
+            <Empty text="No pending responses" />
+          )}
         </Section>
 
         <Section title="Recently Completed">
-          {assignments
-            .filter((a) => a.status === "completed")
-            .slice(0, 5)
-            .map((a) => (
-              <Item key={a.id} label={`Assignment #${a.id}`} />
-            ))}
+          {completedAssignments.length > 0 ? (
+            completedAssignments
+              .slice(0, 5)
+              .map((a) => (
+                <Item
+                  key={a.id}
+                  href={`/home/operations/assignments/${a.id}`}
+                  label={`Assignment #${a.id}`}
+                />
+              ))
+          ) : (
+            <Empty text="No completed assignments" />
+          )}
         </Section>
 
         <Section title="Issues / Incidents">
-          <div className="text-sm text-gray-400">No incidents reported</div>
+          <div className="text-sm text-gray-400">
+            Incident summary coming soon
+          </div>
         </Section>
       </div>
     </div>
@@ -112,10 +168,17 @@ function Section({
   );
 }
 
-function Item({ label }: { label: string }) {
+function Item({ label, href }: { label: string; href: string }) {
   return (
-    <div className="text-sm text-gray-600 border-b border-gray-100 pb-2">
+    <Link
+      href={href}
+      className="text-sm text-gray-600 border-b border-gray-100 pb-2 hover:text-orange-600 transition"
+    >
       {label}
-    </div>
+    </Link>
   );
+}
+
+function Empty({ text }: { text: string }) {
+  return <div className="text-sm text-gray-400">{text}</div>;
 }

@@ -41,8 +41,8 @@ export async function completeInvite(input: {
   }
 
   if (
-    invitedUser.inviteExpiresAt &&
-    new Date(invitedUser.inviteExpiresAt) < new Date()
+    invitedUser.inviteExpiry &&
+    new Date(invitedUser.inviteExpiry) < new Date()
   ) {
     return {
       success: false,
@@ -57,9 +57,9 @@ export async function completeInvite(input: {
     .set({
       passwordHash: hashedPassword,
       status: "ACTIVE",
+      isActive: true,
       inviteToken: null,
-      inviteExpiresAt: null,
-      updatedAt: new Date(),
+      inviteExpiry: null,
     })
     .where(eq(users.id, invitedUser.id));
 

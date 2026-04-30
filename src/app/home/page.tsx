@@ -199,8 +199,8 @@ function CreateOrgCTA() {
       </p>
 
       <Link
-        href="/home/team-dashboard/team-profile?reason=no-organisation"
-        className="bg-blue-600 text-white px-6 py-3 rounded-md"
+        href="/home/settings/organisation?reason=no-organisation"
+        className="rounded-full bg-orange-500 px-6 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
       >
         Create Organisation
       </Link>

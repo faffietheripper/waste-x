@@ -1,20 +1,18 @@
 import crypto from "crypto";
+import { and, eq } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { users, departments } from "@/db/schema";
 
-type InviteInput = {
+type InviteTeamMemberInput = {
   name: string;
   email: string;
   role: "employee" | "seniorManagement" | "administrator";
-  departments: string[];
+  departmentId: string;
 };
 
-const validDepartments = ["generator", "carrier", "compliance"];
-
-export async function inviteTeamMember(input: InviteInput) {
+export async function inviteTeamMember(input: InviteTeamMemberInput) {
   const session = await auth();
 
   if (!session?.user?.organisationId) {
@@ -24,28 +22,10 @@ export async function inviteTeamMember(input: InviteInput) {
     };
   }
 
-  if (!input.name || !input.email || !input.role) {
+  if (!input.name || !input.email || !input.role || !input.departmentId) {
     return {
       success: false,
-      message: "Name, email and role are required.",
-    };
-  }
-
-  if (!input.departments?.length) {
-    return {
-      success: false,
-      message: "Please assign at least one department.",
-    };
-  }
-
-  const invalidDepartment = input.departments.find(
-    (department) => !validDepartments.includes(department),
-  );
-
-  if (invalidDepartment) {
-    return {
-      success: false,
-      message: "Invalid department selected.",
+      message: "Name, email, role and department are required.",
     };
   }
 
@@ -60,18 +40,36 @@ export async function inviteTeamMember(input: InviteInput) {
     };
   }
 
+  const department = await database.query.departments.findFirst({
+    where: and(
+      eq(departments.id, input.departmentId),
+      eq(departments.organisationId, session.user.organisationId),
+    ),
+  });
+
+  if (!department) {
+    return {
+      success: false,
+      message: "Selected department does not belong to this organisation.",
+    };
+  }
+
   const token = crypto.randomBytes(32).toString("hex");
+
+  const inviteExpiry = new Date();
+  inviteExpiry.setDate(inviteExpiry.getDate() + 7);
 
   await database.insert(users).values({
     name: input.name,
     email: input.email,
     role: input.role,
-    status: "INVITED",
     organisationId: session.user.organisationId,
-    inviteToken: token,
+    departmentId: input.departmentId,
 
-    // Add this field to users schema for now.
-    departmentTypes: input.departments,
+    status: "INVITED",
+    isActive: false,
+    inviteToken: token,
+    inviteExpiry,
   });
 
   return {

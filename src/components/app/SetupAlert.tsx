@@ -30,7 +30,7 @@ export default function SetupAlert({
   const handleGoToSettings = () => {
     console.log("⚠️ handleGoToSettings fired!");
     setShowAlert(false);
-    router.push("/home/me");
+    router.push("/home/settings");
   };
 
   return (

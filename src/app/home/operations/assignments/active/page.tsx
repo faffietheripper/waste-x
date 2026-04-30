@@ -1,6 +1,5 @@
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 
 import { getAssignmentsByDepartment } from "@/modules/assignments/queries/getAssignmentsByDepartment";
 import { AssignmentCard } from "@/components/app/Assignments/AssignmentCard";
@@ -26,13 +25,7 @@ export default async function ActiveAssignmentsPage() {
   const assignments = await getAssignmentsByDepartment({
     organisationId,
     departmentType: activeDepartment.type,
-    statusFilter: ["accepted", "in_progress"],
-  });
-
-  console.log("ASSIGNMENTS DEBUG:", {
-    organisationId,
-    activeDepartment,
-    assignments,
+    statusFilter: ["assigned", "accepted", "in_progress"],
   });
 
   return (
@@ -40,8 +33,8 @@ export default async function ActiveAssignmentsPage() {
       <div>
         <h1 className="text-2xl font-bold">Active Assignments</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Showing active assignments for your {activeDepartment.name}{" "}
-          department.
+          Showing pending, accepted and in-progress assignments for your{" "}
+          {activeDepartment.name} department.
         </p>
       </div>
 
@@ -52,12 +45,11 @@ export default async function ActiveAssignmentsPage() {
       ) : (
         <div className="grid gap-4">
           {assignments.map((assignment) => (
-            <Link
+            <AssignmentCard
               key={assignment.id}
-              href={`/home/operations/assignments/${assignment.id}`}
-            >
-              <AssignmentCard assignment={assignment} />
-            </Link>
+              assignment={assignment}
+              departmentType={activeDepartment.type}
+            />
           ))}
         </div>
       )}

@@ -14,51 +14,74 @@ import SignOutButton from "../SignOutButton";
 ========================================================= */
 
 const navItem =
-  "text-gray-500 hover:text-blue-600 transition-all duration-200 hover:translate-x-1";
+  "text-gray-500 hover:text-orange-500 transition-all duration-200 hover:translate-x-1";
+
+const navSectionLabel = "text-xs uppercase tracking-[0.18em] text-gray-400";
 
 /* =========================================================
-   CAPABILITY NAV (NEW SYSTEM NAV)
+   TYPES
 ========================================================= */
 
-function CapabilityNav({
-  capabilities,
-}: {
-  capabilities: ("generator" | "carrier" | "manager")[];
-}) {
+type Capability = "generator" | "carrier" | "manager";
+
+/* =========================================================
+   CAPABILITY NAV
+========================================================= */
+
+function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
   const isGenerator = capabilities.includes("generator");
   const isCarrier = capabilities.includes("carrier");
   const isManager = capabilities.includes("manager");
 
+  const canUseOperations = isGenerator || isCarrier || isManager;
+  const canUseListings = isGenerator || isManager;
+  const canUseTemplates = isGenerator || isManager;
+  const canUseMarketplace = isCarrier || isManager;
+  const canUseCompliance = isGenerator || isCarrier || isManager;
+
   return (
-    <div className="flex flex-col gap-6 text-sm font-medium">
+    <div className="flex flex-col gap-7 text-sm font-medium">
       {/* DASHBOARD */}
       <Link href="/home" className={navItem}>
         Dashboard
       </Link>
 
       {/* ================= OPERATIONS ================= */}
-      {(isGenerator || isManager) && (
+      {canUseOperations && (
         <div className="flex flex-col gap-3">
-          <span className="text-xs uppercase text-gray-400">Operations</span>
+          <span className={navSectionLabel}>Operations</span>
 
-          <Link href="/home/operations/listings" className={navItem}>
-            My Listings
-          </Link>
+          {canUseListings && (
+            <Link href="/home/operations/listings" className={navItem}>
+              My Listings
+            </Link>
+          )}
 
           <Link href="/home/operations/assignments" className={navItem}>
             Assignments
           </Link>
 
-          <Link href="/home/operations/templates" className={navItem}>
-            Templates
-          </Link>
+          {isCarrier && (
+            <Link
+              href="/home/operations/assignments/active"
+              className={navItem}
+            >
+              Active Jobs
+            </Link>
+          )}
+
+          {canUseTemplates && (
+            <Link href="/home/operations/templates" className={navItem}>
+              Templates
+            </Link>
+          )}
         </div>
       )}
 
       {/* ================= MARKETPLACE ================= */}
-      {isCarrier && (
+      {canUseMarketplace && (
         <div className="flex flex-col gap-3">
-          <span className="text-xs uppercase text-gray-400">Marketplace</span>
+          <span className={navSectionLabel}>Marketplace</span>
 
           <Link href="/home/marketplace/browse" className={navItem}>
             Browse Listings
@@ -71,35 +94,48 @@ function CapabilityNav({
       )}
 
       {/* ================= COMPLIANCE ================= */}
-      <div className="flex flex-col gap-3">
-        <span className="text-xs uppercase text-gray-400">Compliance</span>
+      {canUseCompliance && (
+        <div className="flex flex-col gap-3">
+          <span className={navSectionLabel}>Compliance</span>
 
-        <Link href="/home/compliance/incidents" className={navItem}>
-          Incidents
-        </Link>
-      </div>
+          <Link href="/home/compliance/incidents" className={navItem}>
+            Incidents
+          </Link>
+
+          <Link
+            href="/home/operations/assignments/completed"
+            className={navItem}
+          >
+            Completed Jobs
+          </Link>
+        </div>
+      )}
 
       {/* ================= TEAM ================= */}
       <div className="flex flex-col gap-3">
-        <span className="text-xs uppercase text-gray-400">Team</span>
+        <span className={navSectionLabel}>Team</span>
 
         <Link href="/home/team/members" className={navItem}>
           Members
         </Link>
 
-        <Link href="/home/team/organisation" className={navItem}>
+        <Link href="/home/settings/organisation" className={navItem}>
           Organisation
         </Link>
       </div>
 
       {/* ================= GLOBAL ================= */}
-      <Link href="/home/notifications" className={navItem}>
-        Notifications
-      </Link>
+      <div className="flex flex-col gap-3">
+        <span className={navSectionLabel}>System</span>
 
-      <Link href="/home/settings" className={navItem}>
-        Settings
-      </Link>
+        <Link href="/home/notifications" className={navItem}>
+          Notifications
+        </Link>
+
+        <Link href="/home/settings" className={navItem}>
+          Settings
+        </Link>
+      </div>
     </div>
   );
 }
@@ -112,27 +148,19 @@ export default async function SystemNav() {
   const session = await auth();
   if (!session?.user?.id) return null;
 
-  /* ================= USER ================= */
-
   const user = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
     with: { organisation: true },
   });
 
   const capabilities =
-    (user?.organisation?.capabilities as
-      | ("generator" | "carrier" | "manager")[]
-      | null) ?? [];
-
-  /* ================= PROFILE ================= */
+    (user?.organisation?.capabilities as Capability[] | null) ?? [];
 
   let fullName = "Guest";
   let unreadCount = 0;
 
   const profile = await getProfileByUserId(session.user.id);
-  fullName = profile?.fullName ?? "Unknown User";
-
-  /* ================= SUPPORT BADGE ================= */
+  fullName = profile?.fullName ?? user?.name ?? "Unknown User";
 
   if (user?.organisationId) {
     const unreadTickets = await database.query.supportTickets.findMany({
@@ -149,7 +177,6 @@ export default async function SystemNav() {
     <>
       {/* ================= TOP BAR ================= */}
       <div className="fixed top-0 left-0 w-full h-[13vh] bg-[#F7F7F8] border-b border-gray-200 flex items-center justify-between px-10 z-50">
-        {/* LOGO */}
         <Link href="/home" className="flex items-center">
           <Image
             src="/wastexblack.png"
@@ -160,9 +187,7 @@ export default async function SystemNav() {
           />
         </Link>
 
-        {/* RIGHT SIDE */}
         <div className="flex items-center gap-8">
-          {/* PROFILE */}
           <Link
             href="/home/settings"
             className="flex items-center gap-3 hover:opacity-80 transition"
@@ -171,7 +196,6 @@ export default async function SystemNav() {
             <span className="text-sm text-gray-700">{fullName}</span>
           </Link>
 
-          {/* SUPPORT */}
           <Link
             href="/home/support"
             className="relative flex items-center gap-2 bg-gray-200 hover:bg-gray-300 px-4 py-2.5 rounded-md transition"
@@ -185,7 +209,6 @@ export default async function SystemNav() {
             )}
           </Link>
 
-          {/* SIGN OUT */}
           <SignOutButton />
         </div>
       </div>

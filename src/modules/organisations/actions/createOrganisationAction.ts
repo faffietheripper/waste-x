@@ -1,51 +1,55 @@
 "use server";
 
-import { auth, signOut } from "@/auth";
 import { redirect } from "next/navigation";
 
-import { saveOrganisation } from "@/modules/organisations/core/saveOrganisation";
-import { getOrganisationByUser } from "@/modules/organisations/queries/getOrganisation";
-import { organisationSchema } from "@/modules/organisations/validators/organisationSchema";
+import { auth } from "@/auth";
+import { createOrganisation } from "../core/createOrganisation";
+import { getOrganisationByUser } from "../queries/getOrganisation";
+import { organisationSchema } from "../validators/organisationSchema";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 
-/* ===============================
-   FETCH PROFILE
-============================== */
-
-export const fetchProfileAction = withErrorHandling(
+export const fetchOrganisationAction = withErrorHandling(
   async () => {
     const session = await auth();
-    if (!session?.user?.id) throw new Error("UNAUTHORIZED");
+
+    if (!session?.user?.id) {
+      throw new Error("UNAUTHORIZED");
+    }
 
     return getOrganisationByUser(session.user.id);
   },
   {
-    actionName: "fetchOrganisationProfile",
+    actionName: "fetchOrganisation",
     code: ERROR_CODES.SYSTEM_UNEXPECTED,
     severity: "low",
   },
 );
 
-/* ===============================
-   SAVE PROFILE
-============================== */
-
-export const saveProfileAction = withErrorHandling(
+export const createOrganisationAction = withErrorHandling(
   async (formData: FormData) => {
     const session = await auth();
-    if (!session?.user?.id) throw new Error("UNAUTHORIZED");
+
+    if (!session?.user?.id) {
+      throw new Error("UNAUTHORIZED");
+    }
 
     const parsed = organisationSchema.safeParse({
       teamName: formData.get("teamName"),
+      industry: formData.get("industry"),
+
       telephone: formData.get("telephone"),
       emailAddress: formData.get("emailAddress"),
-      country: formData.get("country"),
+
       streetAddress: formData.get("streetAddress"),
       city: formData.get("city"),
       region: formData.get("region"),
       postCode: formData.get("postCode"),
+      country: formData.get("country"),
+
+      profilePicture: formData.get("profilePicture") || null,
+
       capabilities: formData.getAll("capabilities"),
     });
 
@@ -53,7 +57,7 @@ export const saveProfileAction = withErrorHandling(
       throw new Error("INVALID_INPUT");
     }
 
-    const result = await saveOrganisation({
+    const result = await createOrganisation({
       userId: session.user.id,
       data: parsed.data,
     });
@@ -62,10 +66,12 @@ export const saveProfileAction = withErrorHandling(
       redirect("/onboarding/pending");
     }
 
-    return { success: true };
+    return {
+      success: true,
+    };
   },
   {
-    actionName: "saveOrganisationProfile",
+    actionName: "createOrganisation",
     code: ERROR_CODES.SYSTEM_UNEXPECTED,
     severity: "high",
   },
