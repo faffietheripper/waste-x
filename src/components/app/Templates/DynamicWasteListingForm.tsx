@@ -201,7 +201,7 @@ export default function DynamicWasteListingForm({
 
         resetForm(); // clear form immediately
 
-        router.push(`/marketplace/browse/${result.id}`);
+        router.push(`/home/marketplace/browse/${result.id}`);
 
         router.refresh(); // 🔥 forces fresh data
       }

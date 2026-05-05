@@ -1,6 +1,7 @@
 "use client";
 
 import { useToast } from "@/components/ui/use-toast";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useAction } from "@/lib/actions/useAction";
 import { selectBidAction } from "@/modules/bids/actions/selectBidAction";
@@ -9,7 +10,15 @@ interface AssignListingButtonProps {
   listingId: number;
   bidId: number;
   offerAccepted?: boolean;
+
+  /**
+   * Temporary compatibility field.
+   * In the manager-first workflow this is being used as an assignment lock.
+   */
   assignedCarrierOrganisationId?: string | null;
+
+  assignedManagerOrganisationId?: string | null;
+
   declinedOffer?: boolean;
   cancelledJob?: boolean;
 }
@@ -19,19 +28,24 @@ export default function AssignListingButton({
   bidId,
   offerAccepted = false,
   assignedCarrierOrganisationId = null,
+  assignedManagerOrganisationId = null,
   declinedOffer = false,
   cancelledJob = false,
 }: AssignListingButtonProps) {
   const { toast } = useToast();
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const run = useAction();
+
+  const alreadyAssigned =
+    !!assignedManagerOrganisationId || !!assignedCarrierOrganisationId;
 
   const isDisabled =
     loading ||
     declinedOffer ||
     cancelledJob ||
     offerAccepted ||
-    !!assignedCarrierOrganisationId;
+    alreadyAssigned;
 
   async function handleAssign() {
     if (isDisabled) return;
@@ -46,16 +60,24 @@ export default function AssignListingButton({
         }),
       );
 
+      if (!result?.success) {
+        throw new Error(result?.message || "Failed to assign manager.");
+      }
+
       toast({
-        title: "Listing Assigned",
-        description: result.message,
+        title: "Manager Assigned",
+        description:
+          result.message ||
+          "The winning bid organisation has been assigned as the waste manager.",
       });
+
+      router.refresh();
     } catch (error: any) {
       console.error(error);
 
       toast({
         title: "Assignment Failed",
-        description: error.message || "Something went wrong",
+        description: error.message || "Something went wrong.",
         variant: "destructive",
       });
     } finally {
@@ -68,18 +90,19 @@ export default function AssignListingButton({
     if (declinedOffer) return "Offer Declined";
     if (cancelledJob) return "Job Cancelled";
     if (offerAccepted) return "Offer Accepted";
-    if (assignedCarrierOrganisationId) return "Carrier Assigned";
-    return "Assign Listing";
+    if (alreadyAssigned) return "Manager Assigned";
+
+    return "Assign Manager";
   }
 
   return (
     <button
       onClick={handleAssign}
       disabled={isDisabled}
-      className={`py-2 px-4 rounded-md text-white transition ${
+      className={`rounded-md px-4 py-2 text-sm font-medium transition ${
         isDisabled
-          ? "bg-gray-400 cursor-not-allowed"
-          : "bg-blue-600 hover:bg-blue-700"
+          ? "cursor-not-allowed bg-gray-400 text-white"
+          : "bg-orange-500 text-black hover:bg-orange-400"
       }`}
     >
       {getLabel()}

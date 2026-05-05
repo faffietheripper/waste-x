@@ -529,6 +529,10 @@ export const carrierAssignments = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
 
+    /*
+      organisationId = owning/generator-side organisation context.
+      Keep this for backwards compatibility with your existing internal flow.
+    */
     organisationId: text("organisationId")
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
@@ -537,13 +541,33 @@ export const carrierAssignments = pgTable(
       .notNull()
       .references(() => wasteListings.id, { onDelete: "cascade" }),
 
-    carrierOrganisationId: text("carrierOrganisationId")
-      .notNull()
-      .references(() => organisations.id, { onDelete: "cascade" }),
+    /*
+      NEW EXTERNAL FLOW:
+      Generator assigns manager first.
+      Manager assigns carrier later.
+      Therefore carrierOrganisationId MUST be nullable.
+    */
+    carrierOrganisationId: text("carrierOrganisationId").references(
+      () => organisations.id,
+      { onDelete: "cascade" },
+    ),
 
+    /*
+      Organisation that originally assigned the work.
+      Usually the generator organisation.
+    */
     assignedByOrganisationId: text("assignedByOrganisationId")
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
+
+    /*
+      Waste manager organisation.
+      This is populated when a manager wins/is assigned a listing.
+    */
+    managerOrganisationId: text("managerOrganisationId").references(
+      () => organisations.id,
+      { onDelete: "cascade" },
+    ),
 
     assignmentMethod: text("assignmentMethod")
       .$type<"bid" | "direct">()
@@ -551,10 +575,32 @@ export const carrierAssignments = pgTable(
 
     bidId: integer("bidId").references(() => bids.id),
 
+    /*
+      External manager-first flow:
+
+      pending
+        → manager has been assigned, waiting for manager response
+
+      accepted
+        → manager accepted, now manager needs to assign carrier
+
+      carrier_pending
+        → carrier has been assigned, waiting for carrier response
+
+      in_progress
+        → carrier accepted / collection underway
+
+      completed
+        → job complete
+
+      rejected/cancelled
+        → stopped
+    */
     status: text("status")
       .$type<
         | "pending"
         | "accepted"
+        | "carrier_pending"
         | "in_progress"
         | "completed"
         | "rejected"
@@ -567,6 +613,10 @@ export const carrierAssignments = pgTable(
     codeGeneratedAt: timestamp("codeGeneratedAt", { mode: "date" }),
     codeUsedAt: timestamp("codeUsedAt", { mode: "date" }),
 
+    managerAcceptedAt: timestamp("managerAcceptedAt", { mode: "date" }),
+
+    carrierAssignedAt: timestamp("carrierAssignedAt", { mode: "date" }),
+
     assignedAt: timestamp("assignedAt", { mode: "date" }).defaultNow(),
     respondedAt: timestamp("respondedAt", { mode: "date" }),
     collectedAt: timestamp("collectedAt", { mode: "date" }),
@@ -574,8 +624,18 @@ export const carrierAssignments = pgTable(
   },
   (table) => ({
     listingIdx: index("carrier_listing_idx").on(table.listingId),
+
     carrierIdx: index("carrier_org_idx").on(table.carrierOrganisationId),
+
+    managerIdx: index("assignment_manager_org_idx").on(
+      table.managerOrganisationId,
+    ),
+
     orgIdx: index("carrier_assignment_org_idx").on(table.organisationId),
+
+    assignedByIdx: index("assignment_assigned_by_org_idx").on(
+      table.assignedByOrganisationId,
+    ),
   }),
 );
 
@@ -1086,6 +1146,8 @@ export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
 
 /* ================= ORGANISATIONS ================= */
 
+/* ================= ORGANISATIONS ================= */
+
 export const organisationsRelations = relations(organisations, ({ many }) => ({
   members: many(users),
 
@@ -1099,16 +1161,20 @@ export const organisationsRelations = relations(organisations, ({ many }) => ({
     relationName: "carrierOrganisation",
   }),
 
+  managerAssignmentsReceived: many(carrierAssignments, {
+    relationName: "managerOrganisation",
+  }),
+
   assignmentsCreated: many(carrierAssignments, {
     relationName: "assignedByOrganisation",
   }),
+
   departments: many(departments),
 
   reviews: many(reviews),
   subscriptions: many(organisationSubscriptions),
   invoices: many(invoices),
 }));
-
 /* ================= WASTE LISTINGS ================= */
 
 export const wasteListingsRelations = relations(
@@ -1156,6 +1222,7 @@ export const bidsRelations = relations(bids, ({ one }) => ({
     references: [organisations.id],
   }),
 }));
+
 /* ================= CARRIER ASSIGNMENTS ================= */
 
 export const carrierAssignmentsRelations = relations(
@@ -1174,6 +1241,12 @@ export const carrierAssignmentsRelations = relations(
     carrierOrganisation: one(organisations, {
       relationName: "carrierOrganisation",
       fields: [carrierAssignments.carrierOrganisationId],
+      references: [organisations.id],
+    }),
+
+    managerOrganisation: one(organisations, {
+      relationName: "managerOrganisation",
+      fields: [carrierAssignments.managerOrganisationId],
       references: [organisations.id],
     }),
 
