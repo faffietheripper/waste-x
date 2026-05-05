@@ -12,8 +12,6 @@ type Context = {
   organisationId: string;
 };
 
-const ASSIGNABLE_LISTING_STATUSES = ["draft", "open"];
-
 export async function selectBid(input: Input, ctx: Context) {
   const listing = await database.query.wasteListings.findFirst({
     where: eq(wasteListings.id, input.listingId),
@@ -27,17 +25,8 @@ export async function selectBid(input: Input, ctx: Context) {
     throw new Error("Not authorised.");
   }
 
-  /*
-    MVP RULE:
-    For now, draft and open listings are assignable because
-    the app does not yet have a proper preview/publish flow.
-
-    Future rule:
-    draft = preview only
-    open = marketplace assignable
-  */
-  if (!ASSIGNABLE_LISTING_STATUSES.includes(listing.status ?? "")) {
-    throw new Error("This listing is no longer available for assignment.");
+  if (listing.status !== "open") {
+    throw new Error("Only open listings can be assigned.");
   }
 
   if (listing.assignedCarrierOrganisationId) {
@@ -60,11 +49,6 @@ export async function selectBid(input: Input, ctx: Context) {
     throw new Error("You cannot assign your own organisation.");
   }
 
-  /*
-    Manager-first external workflow:
-    Selecting a bid assigns the bidding organisation as the waste manager,
-    not as the carrier.
-  */
   await assignManagerFromBid({
     listingId: input.listingId,
     managerOrganisationId: bid.organisationId,
@@ -72,9 +56,6 @@ export async function selectBid(input: Input, ctx: Context) {
     bidId: bid.id,
   });
 
-  /*
-    Mark winning bid accepted.
-  */
   await database
     .update(bids)
     .set({
@@ -82,9 +63,6 @@ export async function selectBid(input: Input, ctx: Context) {
     })
     .where(eq(bids.id, input.bidId));
 
-  /*
-    Reject all other active bids for the same listing.
-  */
   await database
     .update(bids)
     .set({

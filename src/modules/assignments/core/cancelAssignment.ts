@@ -2,45 +2,60 @@ import { database } from "@/db/database";
 import { carrierAssignments, wasteListings } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-export async function completeAssignment({
-  assignmentId,
-}: {
+type CancelAssignmentInput = {
   assignmentId: string;
-}) {
-  const [assignment] = await database
-    .select()
-    .from(carrierAssignments)
-    .where(eq(carrierAssignments.id, assignmentId));
+  organisationId: string;
+};
+
+export async function cancelAssignment({
+  assignmentId,
+  organisationId,
+}: CancelAssignmentInput) {
+  const assignment = await database.query.carrierAssignments.findFirst({
+    where: eq(carrierAssignments.id, assignmentId),
+  });
 
   if (!assignment) {
-    throw new Error("ASSIGNMENT_NOT_FOUND");
+    return {
+      success: false,
+      message: "Assignment not found.",
+    };
   }
 
-  if (assignment.status !== "in_progress") {
-    throw new Error("INVALID_STATE");
+  const isGenerator =
+    assignment.organisationId === organisationId ||
+    assignment.assignedByOrganisationId === organisationId;
+
+  if (!isGenerator) {
+    return {
+      success: false,
+      message: "Only the assigning organisation can cancel this assignment.",
+    };
   }
 
-  const now = new Date();
+  if (["completed", "cancelled", "rejected"].includes(assignment.status)) {
+    return {
+      success: false,
+      message: "This assignment can no longer be cancelled.",
+    };
+  }
 
-  await database.transaction(async (tx) => {
-    await tx
-      .update(carrierAssignments)
-      .set({
-        status: "completed",
-        completedAt: now,
-      })
-      .where(eq(carrierAssignments.id, assignmentId));
+  await database
+    .update(carrierAssignments)
+    .set({
+      status: "cancelled",
+    })
+    .where(eq(carrierAssignments.id, assignmentId));
 
-    await tx
-      .update(wasteListings)
-      .set({
-        status: "completed",
-      })
-      .where(eq(wasteListings.id, assignment.listingId));
-  });
+  await database
+    .update(wasteListings)
+    .set({
+      status: "cancelled",
+    })
+    .where(eq(wasteListings.id, assignment.listingId));
 
   return {
     success: true,
-    message: "Assignment completed successfully",
+    message: "Assignment cancelled successfully.",
   };
 }

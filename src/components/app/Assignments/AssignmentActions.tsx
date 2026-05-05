@@ -8,7 +8,11 @@ import { rejectAssignmentAction } from "@/modules/assignments/actions/rejectAssi
 import { cancelAssignmentAction } from "@/modules/assignments/actions/cancelAssignmentAction";
 import { completeAssignmentAction } from "@/modules/assignments/actions/completeAssignmentAction";
 
-type DepartmentType = "generator" | "carrier" | "compliance";
+/* =========================================================
+   TYPES
+========================================================= */
+
+type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
 
 type AssignmentStatus =
   | "pending"
@@ -18,23 +22,105 @@ type AssignmentStatus =
   | "rejected"
   | "cancelled";
 
+type AssignmentPerspective = "generator" | "manager" | "carrier" | "compliance";
+
 type Message = {
   type: "success" | "error";
   text: string;
 };
 
+/* =========================================================
+   COMPONENT
+========================================================= */
+
 export default function AssignmentActions({
   assignmentId,
   status,
   departmentType,
+  perspective,
+  variant = "panel",
+
+  managerAcceptedAt = null,
+  carrierOrganisationId = null,
+  viewerOrganisationId,
 }: {
   assignmentId: string;
   status: AssignmentStatus;
   departmentType: DepartmentType;
+  perspective?: AssignmentPerspective;
+  variant?: "panel" | "inline";
+
+  managerAcceptedAt?: Date | string | null;
+  carrierOrganisationId?: string | null;
+  viewerOrganisationId?: string;
 }) {
   const router = useRouter();
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+
+  const isInline = variant === "inline";
+
+  const effectivePerspective =
+    perspective ??
+    (departmentType === "compliance" ? "compliance" : departmentType);
+
+  /*
+    New workflow logic:
+
+    Manager response:
+      status = pending
+      managerAcceptedAt = null
+      carrierOrganisationId = null
+
+    Manager accepted, now needs to assign carrier:
+      status = pending
+      managerAcceptedAt exists
+      carrierOrganisationId = null
+
+    Carrier response:
+      status = pending
+      managerAcceptedAt exists
+      carrierOrganisationId = viewer org
+
+    Carrier accepted:
+      status = accepted
+
+    Collection underway:
+      status = in_progress
+  */
+
+  const managerHasAccepted = Boolean(managerAcceptedAt);
+  const carrierHasBeenAssigned = Boolean(carrierOrganisationId);
+
+  const managerNeedsToRespond =
+    effectivePerspective === "manager" &&
+    status === "pending" &&
+    !managerHasAccepted &&
+    !carrierHasBeenAssigned;
+
+  const managerNeedsToAssignCarrier =
+    effectivePerspective === "manager" &&
+    status === "pending" &&
+    managerHasAccepted &&
+    !carrierHasBeenAssigned;
+
+  const managerWaitingForCarrier =
+    effectivePerspective === "manager" &&
+    status === "pending" &&
+    managerHasAccepted &&
+    carrierHasBeenAssigned;
+
+  const carrierNeedsToRespond =
+    effectivePerspective === "carrier" &&
+    status === "pending" &&
+    managerHasAccepted &&
+    carrierHasBeenAssigned &&
+    carrierOrganisationId === viewerOrganisationId;
+
+  /* =========================================================
+     ACTION RUNNER
+  ========================================================= */
 
   async function runAction(action: () => Promise<any>) {
     if (loading) return;
@@ -76,8 +162,8 @@ export default function AssignmentActions({
       <div
         className={`rounded-lg border p-3 text-sm ${
           message.type === "success"
-            ? "bg-green-50 border-green-200 text-green-700"
-            : "bg-red-50 border-red-200 text-red-700"
+            ? "border-green-200 bg-green-50 text-green-700"
+            : "border-red-200 bg-red-50 text-red-700"
         }`}
       >
         {message.text}
@@ -85,18 +171,34 @@ export default function AssignmentActions({
     );
   }
 
-  if (departmentType === "compliance") {
+  const wrapperClass = isInline
+    ? "space-y-2"
+    : "space-y-3 rounded-2xl border bg-white p-6";
+
+  const buttonClass =
+    "w-full rounded py-2 text-sm font-medium transition disabled:opacity-50";
+
+  /* =========================================================
+     COMPLIANCE
+  ========================================================= */
+
+  if (effectivePerspective === "compliance") {
     return (
-      <div className="bg-white border rounded-2xl p-6 text-sm text-gray-500">
-        Compliance view is read-only.
+      <div className={isInline ? "text-xs text-gray-400" : wrapperClass}>
+        {!isInline && <h2 className="font-semibold">Compliance Actions</h2>}
+        <p className="text-sm text-gray-500">Compliance view is read-only.</p>
       </div>
     );
   }
 
-  if (departmentType === "generator") {
+  /* =========================================================
+     GENERATOR
+  ========================================================= */
+
+  if (effectivePerspective === "generator") {
     return (
-      <div className="bg-white border rounded-2xl p-6 space-y-3">
-        <h2 className="font-semibold">Generator Actions</h2>
+      <div className={wrapperClass}>
+        {!isInline && <h2 className="font-semibold">Generator Actions</h2>}
 
         <MessageBox />
 
@@ -106,48 +208,52 @@ export default function AssignmentActions({
             onClick={() =>
               runAction(() => completeAssignmentAction({ assignmentId }))
             }
-            className="w-full bg-green-600 text-white py-2 rounded disabled:opacity-50"
+            className={`${buttonClass} bg-green-600 text-white hover:bg-green-700`}
           >
             {loading ? "Working..." : "Confirm Completion"}
           </button>
         )}
 
-        {status !== "completed" && status !== "cancelled" && (
+        {!["completed", "cancelled", "rejected"].includes(status) && (
           <button
             disabled={loading}
             onClick={() =>
               runAction(() => cancelAssignmentAction({ assignmentId }))
             }
-            className="w-full bg-red-600 text-white py-2 rounded disabled:opacity-50"
+            className={`${buttonClass} bg-red-600 text-white hover:bg-red-700`}
           >
             {loading ? "Working..." : "Cancel Assignment"}
           </button>
         )}
 
-        {(status === "completed" || status === "cancelled") && (
+        {["completed", "cancelled", "rejected"].includes(status) && (
           <p className="text-sm text-gray-500">No actions available.</p>
         )}
       </div>
     );
   }
 
-  if (departmentType === "carrier") {
+  /* =========================================================
+     MANAGER
+  ========================================================= */
+
+  if (effectivePerspective === "manager") {
     return (
-      <div className="bg-white border rounded-2xl p-6 space-y-3">
-        <h2 className="font-semibold">Carrier Actions</h2>
+      <div className={wrapperClass}>
+        {!isInline && <h2 className="font-semibold">Manager Actions</h2>}
 
         <MessageBox />
 
-        {status === "pending" && (
-          <>
+        {managerNeedsToRespond && (
+          <div className="grid grid-cols-2 gap-2">
             <button
               disabled={loading}
               onClick={() =>
                 runAction(() => acceptAssignmentAction({ assignmentId }))
               }
-              className="w-full bg-green-600 text-white py-2 rounded disabled:opacity-50"
+              className={`${buttonClass} bg-green-600 text-white hover:bg-green-700`}
             >
-              {loading ? "Working..." : "Accept Assignment"}
+              {loading ? "..." : "Accept"}
             </button>
 
             <button
@@ -155,28 +261,106 @@ export default function AssignmentActions({
               onClick={() =>
                 runAction(() => rejectAssignmentAction({ assignmentId }))
               }
-              className="w-full bg-red-600 text-white py-2 rounded disabled:opacity-50"
+              className={`${buttonClass} bg-red-600 text-white hover:bg-red-700`}
             >
-              {loading ? "Working..." : "Reject Assignment"}
+              {loading ? "..." : "Reject"}
             </button>
-          </>
+          </div>
+        )}
+
+        {managerNeedsToAssignCarrier && (
+          <p className="text-xs text-gray-500">
+            Manager accepted. Assign a carrier from the assignment detail page.
+          </p>
+        )}
+
+        {managerWaitingForCarrier && (
+          <p className="text-xs text-gray-500">
+            Carrier assigned. Waiting for carrier response.
+          </p>
         )}
 
         {status === "accepted" && (
-          <p className="text-sm text-gray-500">
-            Use the verification panel to confirm collection.
+          <p className="text-xs text-gray-500">
+            Carrier accepted. Collection can now move forward.
           </p>
         )}
 
         {status === "in_progress" && (
-          <p className="text-sm text-gray-500">
-            Collection has been recorded. Waiting for generator completion.
+          <p className="text-xs text-gray-500">Collection is in progress.</p>
+        )}
+
+        {["completed", "rejected", "cancelled"].includes(status) && (
+          <p className="text-xs text-gray-500">No actions available.</p>
+        )}
+
+        {!managerNeedsToRespond &&
+          !managerNeedsToAssignCarrier &&
+          !managerWaitingForCarrier &&
+          ![
+            "accepted",
+            "in_progress",
+            "completed",
+            "rejected",
+            "cancelled",
+          ].includes(status) && (
+            <p className="text-xs text-gray-500">No actions available.</p>
+          )}
+      </div>
+    );
+  }
+
+  /* =========================================================
+     CARRIER
+  ========================================================= */
+
+  if (effectivePerspective === "carrier") {
+    return (
+      <div className={wrapperClass}>
+        {!isInline && <h2 className="font-semibold">Carrier Actions</h2>}
+
+        <MessageBox />
+
+        {carrierNeedsToRespond && (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              disabled={loading}
+              onClick={() =>
+                runAction(() => acceptAssignmentAction({ assignmentId }))
+              }
+              className={`${buttonClass} bg-green-600 text-white hover:bg-green-700`}
+            >
+              {loading ? "..." : "Accept"}
+            </button>
+
+            <button
+              disabled={loading}
+              onClick={() =>
+                runAction(() => rejectAssignmentAction({ assignmentId }))
+              }
+              className={`${buttonClass} bg-red-600 text-white hover:bg-red-700`}
+            >
+              {loading ? "..." : "Reject"}
+            </button>
+          </div>
+        )}
+
+        {status === "accepted" && (
+          <p className="text-xs text-gray-500">
+            Open the assignment to confirm collection.
           </p>
         )}
 
-        {!["pending", "accepted", "in_progress"].includes(status) && (
-          <p className="text-sm text-gray-500">No actions available.</p>
+        {status === "in_progress" && (
+          <p className="text-xs text-gray-500">
+            Collection has been recorded. Waiting for completion.
+          </p>
         )}
+
+        {!carrierNeedsToRespond &&
+          !["accepted", "in_progress"].includes(status) && (
+            <p className="text-xs text-gray-500">No actions available.</p>
+          )}
       </div>
     );
   }

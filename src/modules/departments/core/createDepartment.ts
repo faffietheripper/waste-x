@@ -2,7 +2,7 @@ import { database } from "@/db/database";
 import { departments } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
-export type DepartmentType = "generator" | "carrier" | "compliance";
+type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
 
 type Input = {
   name: string;
@@ -22,7 +22,7 @@ export async function createDepartment(input: Input, ctx: Context) {
     throw new Error("Department name is required");
   }
 
-  if (!["generator", "carrier", "compliance"].includes(input.type)) {
+  if (!["generator", "carrier", "manager", "compliance"].includes(input.type)) {
     throw new Error("Invalid department type");
   }
 

@@ -1,10 +1,12 @@
 import Link from "next/link";
 import AssignmentActions from "@/components/app/Assignments/AssignmentActions";
 
-type DepartmentType = "generator" | "carrier" | "compliance";
+type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
+
+type AssignmentPerspective = "generator" | "manager" | "carrier" | "compliance";
 
 function formatDate(date: Date | string | null | undefined) {
-  if (!date) return "Unknown";
+  if (!date) return "Not yet";
 
   return new Date(date).toLocaleString("en-GB", {
     day: "2-digit",
@@ -21,8 +23,6 @@ function statusClass(status: string) {
       return "bg-orange-100 text-orange-700";
     case "accepted":
       return "bg-green-100 text-green-700";
-    case "carrier_pending":
-      return "bg-yellow-100 text-yellow-700";
     case "in_progress":
       return "bg-blue-100 text-blue-700";
     case "completed":
@@ -35,25 +35,113 @@ function statusClass(status: string) {
   }
 }
 
-function getViewerRole(assignment: any, viewerOrganisationId?: string) {
-  if (!viewerOrganisationId) return null;
+function formatStatus(status: string) {
+  switch (status) {
+    case "pending":
+      return "Pending";
+    case "accepted":
+      return "Accepted";
+    case "in_progress":
+      return "In Progress";
+    case "completed":
+      return "Completed";
+    case "rejected":
+      return "Rejected";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return status;
+  }
+}
+
+function getViewerPerspective({
+  assignment,
+  viewerOrganisationId,
+  departmentType,
+}: {
+  assignment: any;
+  viewerOrganisationId?: string;
+  departmentType: DepartmentType;
+}): AssignmentPerspective {
+  if (departmentType === "compliance") {
+    return "compliance";
+  }
+
+  if (!viewerOrganisationId) {
+    return departmentType === "manager" ? "manager" : departmentType;
+  }
 
   if (assignment.managerOrganisationId === viewerOrganisationId) {
-    return "Manager";
+    return "manager";
   }
 
   if (assignment.carrierOrganisationId === viewerOrganisationId) {
-    return "Carrier";
+    return "carrier";
   }
 
   if (
     assignment.organisationId === viewerOrganisationId ||
     assignment.assignedByOrganisationId === viewerOrganisationId
   ) {
-    return "Generator";
+    return "generator";
   }
 
-  return null;
+  return departmentType === "manager" ? "manager" : departmentType;
+}
+
+function getWorkflowMessage({
+  assignment,
+  viewerPerspective,
+}: {
+  assignment: any;
+  viewerPerspective: AssignmentPerspective;
+}) {
+  const managerAccepted = Boolean(assignment.managerAcceptedAt);
+  const carrierAssigned = Boolean(assignment.carrierOrganisationId);
+
+  if (assignment.status === "rejected") return "This assignment was rejected.";
+  if (assignment.status === "cancelled")
+    return "This assignment was cancelled.";
+  if (assignment.status === "completed") return "This assignment is complete.";
+  if (assignment.status === "in_progress") return "Collection is in progress.";
+  if (assignment.status === "accepted")
+    return "Carrier accepted. Ready for collection workflow.";
+
+  if (assignment.status === "pending" && viewerPerspective === "manager") {
+    if (!managerAccepted && !carrierAssigned) {
+      return "This job is waiting for your manager response.";
+    }
+
+    if (managerAccepted && !carrierAssigned) {
+      return "Manager accepted. A carrier now needs to be assigned.";
+    }
+
+    if (managerAccepted && carrierAssigned) {
+      return "Carrier assigned. Waiting for carrier response.";
+    }
+  }
+
+  if (assignment.status === "pending" && viewerPerspective === "carrier") {
+    if (carrierAssigned) {
+      return "This carrier job is waiting for your response.";
+    }
+
+    return "Waiting for manager to assign a carrier.";
+  }
+
+  if (assignment.status === "pending" && viewerPerspective === "generator") {
+    if (!managerAccepted) {
+      return "Waiting for the manager to accept or reject.";
+    }
+
+    if (managerAccepted && !carrierAssigned) {
+      return "Manager accepted. Waiting for carrier assignment.";
+    }
+
+    return "Carrier assigned. Waiting for carrier response.";
+  }
+
+  return "Assignment is pending.";
 }
 
 export function AssignmentCard({
@@ -65,7 +153,16 @@ export function AssignmentCard({
   departmentType: DepartmentType;
   viewerOrganisationId?: string;
 }) {
-  const viewerRole = getViewerRole(assignment, viewerOrganisationId);
+  const viewerPerspective = getViewerPerspective({
+    assignment,
+    viewerOrganisationId,
+    departmentType,
+  });
+
+  const workflowMessage = getWorkflowMessage({
+    assignment,
+    viewerPerspective,
+  });
 
   return (
     <div className="rounded-xl border bg-white p-5 shadow-sm space-y-4">
@@ -81,20 +178,22 @@ export function AssignmentCard({
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          {viewerRole && (
-            <span className="rounded-full bg-black text-white px-3 py-1 text-xs font-medium">
-              Your role: {viewerRole}
-            </span>
-          )}
+          <span className="rounded-full bg-black px-3 py-1 text-xs font-medium capitalize text-white">
+            Your role: {viewerPerspective}
+          </span>
 
           <span
             className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${statusClass(
               assignment.status,
             )}`}
           >
-            {assignment.status.replace("_", " ")}
+            {formatStatus(assignment.status)}
           </span>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-orange-100 bg-orange-50 px-4 py-3 text-sm text-orange-800">
+        {workflowMessage}
       </div>
 
       <div className="grid grid-cols-3 gap-4 text-sm">
@@ -156,7 +255,11 @@ export function AssignmentCard({
             assignmentId={assignment.id}
             status={assignment.status}
             departmentType={departmentType}
+            perspective={viewerPerspective}
             variant="inline"
+            managerAcceptedAt={assignment.managerAcceptedAt}
+            carrierOrganisationId={assignment.carrierOrganisationId}
+            viewerOrganisationId={viewerOrganisationId}
           />
         </div>
       </div>

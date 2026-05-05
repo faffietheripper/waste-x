@@ -75,7 +75,9 @@ export const departments = pgTable("bb_departments", {
 
   name: text("name").notNull(),
 
-  type: text("type").$type<"generator" | "carrier" | "compliance">().notNull(),
+  type: text("type")
+    .$type<"generator" | "carrier" | "manager" | "compliance">()
+    .notNull(),
 
   createdAt: timestamp("createdAt").defaultNow(),
 });
@@ -474,11 +476,8 @@ export const wasteListings = pgTable("bb_waste_listing", {
   archived: boolean("archived").default(false),
 
   status: text("status")
-    .$type<
-      "draft" | "open" | "assigned" | "in_progress" | "completed" | "cancelled"
-    >()
-    .default("draft"),
-
+    .$type<"open" | "assigned" | "in_progress" | "completed" | "cancelled">()
+    .default("open"),
   createdAt: timestamp("createdAt").defaultNow(),
 });
 
@@ -578,9 +577,6 @@ export const carrierAssignments = pgTable(
     /*
       External manager-first flow:
 
-      pending
-        → manager has been assigned, waiting for manager response
-
       accepted
         → manager accepted, now manager needs to assign carrier
 
@@ -600,7 +596,6 @@ export const carrierAssignments = pgTable(
       .$type<
         | "pending"
         | "accepted"
-        | "carrier_pending"
         | "in_progress"
         | "completed"
         | "rejected"

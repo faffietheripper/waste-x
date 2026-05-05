@@ -3,27 +3,33 @@
 import { requireOrgUser } from "@/lib/access/require-org-user";
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
-import { acceptAssignment } from "../core/acceptAssignment";
+import { assignCarrierToAssignment } from "../core/assignCarrierToAssignment";
 
 type Input = {
   assignmentId: string;
+  carrierOrganisationId: string;
 };
 
-export const acceptAssignmentAction = withErrorHandling(
+export const assignCarrierToAssignmentAction = withErrorHandling(
   async (input: Input) => {
     const { organisationId } = await requireOrgUser();
 
-    if (!input?.assignmentId) {
+    if (!input.assignmentId) {
       throw new Error("Missing assignment ID.");
     }
 
-    return acceptAssignment({
+    if (!input.carrierOrganisationId) {
+      throw new Error("Missing carrier organisation.");
+    }
+
+    return assignCarrierToAssignment({
       assignmentId: input.assignmentId,
-      organisationId,
+      carrierOrganisationId: input.carrierOrganisationId,
+      managerOrganisationId: organisationId,
     });
   },
   {
-    actionName: "acceptAssignment",
+    actionName: "assignCarrierToAssignment",
     code: ERROR_CODES.SYSTEM_UNEXPECTED,
     severity: "high",
   },

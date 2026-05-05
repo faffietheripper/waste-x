@@ -3,55 +3,69 @@ import { carrierAssignments, organisations, wasteListings } from "@/db/schema";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
-type DepartmentType = "generator" | "carrier" | "compliance";
+/* =========================================================
+   TYPES
+========================================================= */
+
+type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
 
 type AssignmentStatus =
   | "pending"
   | "accepted"
-  | "carrier_pending"
   | "in_progress"
   | "completed"
   | "rejected"
   | "cancelled";
 
+/* =========================================================
+   QUERY
+========================================================= */
+
 export async function getAssignmentsByDepartment({
   organisationId,
   departmentType,
   statusFilter,
-  includeManagerAssignments = false,
 }: {
   organisationId: string;
   departmentType: DepartmentType;
   statusFilter?: AssignmentStatus[];
-  includeManagerAssignments?: boolean;
 }) {
   const generatorOrg = alias(organisations, "generatorOrg");
   const managerOrg = alias(organisations, "managerOrg");
   const carrierOrg = alias(organisations, "carrierOrg");
 
-  const baseFilter =
+  /*
+    Department rules:
+
+    generator:
+      sees assignments created by / owned by their organisation
+
+    manager:
+      sees assignments where their organisation is the assigned waste manager
+
+    carrier:
+      sees assignments where their organisation is the assigned carrier
+
+    compliance:
+      sees anything involving their organisation
+  */
+
+  const visibilityFilter =
     departmentType === "generator"
       ? or(
           eq(carrierAssignments.organisationId, organisationId),
           eq(carrierAssignments.assignedByOrganisationId, organisationId),
         )
-      : departmentType === "carrier"
-        ? or(
-            eq(carrierAssignments.carrierOrganisationId, organisationId),
-            eq(carrierAssignments.organisationId, organisationId),
-          )
-        : or(
-            eq(carrierAssignments.organisationId, organisationId),
-            eq(carrierAssignments.assignedByOrganisationId, organisationId),
-            eq(carrierAssignments.carrierOrganisationId, organisationId),
-          );
-
-  const visibilityFilter = includeManagerAssignments
-    ? or(
-        baseFilter,
-        eq(carrierAssignments.managerOrganisationId, organisationId),
-      )
-    : baseFilter;
+      : departmentType === "manager"
+        ? eq(carrierAssignments.managerOrganisationId, organisationId)
+        : departmentType === "carrier"
+          ? eq(carrierAssignments.carrierOrganisationId, organisationId)
+          : or(
+              eq(carrierAssignments.organisationId, organisationId),
+              eq(carrierAssignments.assignedByOrganisationId, organisationId),
+              eq(carrierAssignments.managerOrganisationId, organisationId),
+              eq(carrierAssignments.carrierOrganisationId, organisationId),
+            );
 
   const finalFilter = statusFilter?.length
     ? and(visibilityFilter, inArray(carrierAssignments.status, statusFilter))

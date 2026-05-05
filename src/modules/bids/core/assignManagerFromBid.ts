@@ -9,8 +9,6 @@ type AssignManagerFromBidInput = {
   bidId: number;
 };
 
-const ASSIGNABLE_LISTING_STATUSES = ["draft", "open"];
-
 export async function assignManagerFromBid({
   listingId,
   managerOrganisationId,
@@ -29,13 +27,8 @@ export async function assignManagerFromBid({
     throw new Error("Only the listing owner can assign this listing.");
   }
 
-  /*
-    MVP RULE:
-    draft and open are both currently assignable.
-    Later, once preview/publish exists, only open should be assignable.
-  */
-  if (!ASSIGNABLE_LISTING_STATUSES.includes(listing.status ?? "")) {
-    throw new Error("This listing is no longer available for assignment.");
+  if (listing.status !== "open") {
+    throw new Error("Only open listings can be assigned.");
   }
 
   if (listing.assignedCarrierOrganisationId) {
@@ -50,35 +43,22 @@ export async function assignManagerFromBid({
     throw new Error("This listing already has an assignment.");
   }
 
-  /*
-    Create assignment record.
-
-    At this stage:
-    - managerOrganisationId is set
-    - carrierOrganisationId is null
-    - status is pending, meaning waiting for manager response
-  */
   await database.insert(carrierAssignments).values({
     organisationId: listing.organisationId,
     listingId: listing.id,
 
     managerOrganisationId,
-
     carrierOrganisationId: null,
 
     assignedByOrganisationId,
     assignmentMethod: "bid",
     bidId,
+
+    // Pending = waiting for the next required party response.
+    // At this stage, that party is the manager.
     status: "pending",
   });
 
-  /*
-    Lock listing so nobody else can bid/assign it.
-
-    NOTE:
-    assignedCarrierOrganisationId is temporarily being used as an assignment
-    lock because the listing schema does not yet have assignedManagerOrganisationId.
-  */
   await database
     .update(wasteListings)
     .set({
@@ -87,6 +67,16 @@ export async function assignManagerFromBid({
       winnerBidId: bidId,
       assignedByOrganisationId,
       assignedAt: new Date(),
+
+      /**
+       * Temporary lock.
+       *
+       * This currently stores the manager organisation ID because the listing
+       * schema does not yet have assignedManagerOrganisationId.
+       *
+       * Long term, add assignedManagerOrganisationId and stop using this field
+       * for manager assignment.
+       */
       assignedCarrierOrganisationId: managerOrganisationId,
     })
     .where(eq(wasteListings.id, listing.id));
