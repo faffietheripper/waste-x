@@ -158,7 +158,7 @@ export default function OrganisationSetupForm() {
     profileData.status === "REJECTED";
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] px-8 py-32">
+    <main className="min-h-screen bg-[#f7f3ed]">
       <div className="mx-auto max-w-5xl space-y-8">
         <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
           <div className="flex items-start gap-5">

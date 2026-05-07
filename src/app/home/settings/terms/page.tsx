@@ -1,137 +1,39 @@
-import React from "react";
-
-export default function Terms() {
+export default function TermsSettingsPage() {
   return (
-    <div>
-      <div className="">
-        <h1 className="text-3xl font-bold mb-10">Terms and Policies</h1>
+    <div className="space-y-8">
+      <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
+        <p className="text-xs uppercase tracking-[0.25em] text-orange-400">
+          Waste X Policies
+        </p>
 
-        <div className="space-y-4 ">
-          <details className="group rounded-lg bg-gray-200 p-6 [&_summary::-webkit-details-marker]:hidden">
-            <summary className="flex cursor-pointer items-center justify-between gap-1.5 text-gray-900">
-              <h2 className="font-medium">Privacy Policy</h2>
+        <h1 className="mt-3 text-3xl font-semibold">Terms & Policies</h1>
 
-              <span className="relative size-5 shrink-0">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="absolute inset-0 opacity-100 group-open:opacity-0"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
+          Review platform terms, compliance policies and operational usage
+          guidance.
+        </p>
+      </section>
 
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="absolute inset-0 opacity-0 group-open:opacity-100"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </span>
-            </summary>
+      <section className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
+        <h2 className="text-xl font-semibold text-black">Policy Documents</h2>
 
-            <p className="mt-4 leading-relaxed text-gray-700">
-              1. Thou shalt not
-            </p>
-          </details>
-          <details className="group rounded-lg bg-gray-200 p-6 [&_summary::-webkit-details-marker]:hidden">
-            <summary className="flex cursor-pointer items-center justify-between gap-1.5 text-gray-900">
-              <h2 className="font-medium">Terms of Service</h2>
-
-              <span className="relative size-5 shrink-0">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="absolute inset-0 opacity-100 group-open:opacity-0"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="absolute inset-0 opacity-0 group-open:opacity-100"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </span>
-            </summary>
-
-            <p className="mt-4 leading-relaxed text-gray-700">
-              1. Thou shalt not
-            </p>
-          </details>{" "}
-          <details className="group rounded-lg bg-gray-200 p-6 [&_summary::-webkit-details-marker]:hidden">
-            <summary className="flex cursor-pointer items-center justify-between gap-1.5 text-gray-900">
-              <h2 className="font-medium">Cookie Policy</h2>
-
-              <span className="relative size-5 shrink-0">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="absolute inset-0 opacity-100 group-open:opacity-0"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="absolute inset-0 opacity-0 group-open:opacity-100"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </span>
-            </summary>
-
-            <p className="mt-4 leading-relaxed text-gray-700">
-              1. Thou shalt not
-            </p>
-          </details>
+        <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-3">
+          <PolicyCard title="Terms of Use" />
+          <PolicyCard title="Privacy Policy" />
+          <PolicyCard title="Compliance Policy" />
         </div>
-      </div>
+      </section>
+    </div>
+  );
+}
+
+function PolicyCard({ title }: { title: string }) {
+  return (
+    <div className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-5">
+      <p className="text-sm font-semibold text-black">{title}</p>
+      <p className="mt-2 text-sm leading-6 text-black/45">
+        Document content can be added here when legal copy is ready.
+      </p>
     </div>
   );
 }
