@@ -30,7 +30,7 @@ export default async function CompletedAssignmentsPage() {
   });
 
   return (
-    <main className="pl-[24vw] mt-10 space-y-6 pr-10">
+    <main className="pl-[24vw] mt-36 space-y-6 pr-10">
       <div>
         <h1 className="text-2xl font-bold">Completed Assignments</h1>
         <p className="text-sm text-gray-500 mt-1">

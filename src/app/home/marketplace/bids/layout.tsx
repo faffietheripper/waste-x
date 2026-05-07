@@ -15,8 +15,7 @@ export default async function ListingsLayout({
 
   return (
     <div className="relative">
-      <BidsNav />
-      <div className="pl-[24vw]">{children}</div>
+      <div className="">{children}</div>
     </div>
   );
 }

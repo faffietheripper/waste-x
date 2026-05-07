@@ -1,8 +1,202 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { carrierAssignments } from "@/db/schema";
+import {
+  carrierAssignments,
+  organisations,
+  wasteListings,
+  incidents,
+} from "@/db/schema";
 import { eq, or, desc } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import Link from "next/link";
+
+/* =========================================================
+   TYPES
+========================================================= */
+
+type AssignmentStatus =
+  | "pending"
+  | "accepted"
+  | "in_progress"
+  | "completed"
+  | "rejected"
+  | "cancelled";
+
+type AssignmentRow = {
+  id: string;
+  organisationId: string;
+  listingId: number;
+  managerOrganisationId: string | null;
+  carrierOrganisationId: string | null;
+  assignedByOrganisationId: string;
+  assignmentMethod: "bid" | "direct";
+  bidId: number | null;
+  status: AssignmentStatus;
+  verificationCode: string | null;
+  assignedAt: Date | null;
+  managerAcceptedAt: Date | null;
+  carrierAssignedAt: Date | null;
+  respondedAt: Date | null;
+  collectedAt: Date | null;
+  completedAt: Date | null;
+
+  listingName: string | null;
+  listingLocation: string | null;
+  listingStatus: string | null;
+
+  generatorOrgName: string | null;
+  managerOrgName: string | null;
+  carrierOrgName: string | null;
+
+  incidentId: string | null;
+  incidentStatus: string | null;
+};
+
+/* =========================================================
+   FORMATTERS
+========================================================= */
+
+function formatDate(date: Date | string | null | undefined) {
+  if (!date) return "Not yet";
+
+  return new Date(date).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatMode(value: string | null | undefined) {
+  if (!value) return "Not set";
+
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getStatusLabel(status: string | null | undefined) {
+  switch (status) {
+    case "pending":
+      return "Pending";
+    case "accepted":
+      return "Accepted";
+    case "in_progress":
+      return "In Progress";
+    case "completed":
+      return "Completed";
+    case "rejected":
+      return "Rejected";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Unknown";
+  }
+}
+
+function getStatusClass(status: string | null | undefined) {
+  switch (status) {
+    case "pending":
+      return "border-orange-300 bg-orange-100 text-orange-700";
+    case "accepted":
+      return "border-green-300 bg-green-100 text-green-700";
+    case "in_progress":
+      return "border-blue-300 bg-blue-100 text-blue-700";
+    case "completed":
+      return "border-black bg-black text-white";
+    case "rejected":
+    case "cancelled":
+      return "border-red-300 bg-red-100 text-red-700";
+    default:
+      return "border-gray-300 bg-gray-100 text-gray-700";
+  }
+}
+
+function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
+  const isGenerator =
+    assignment.organisationId === orgId ||
+    assignment.assignedByOrganisationId === orgId;
+
+  const isManager = assignment.managerOrganisationId === orgId;
+  const isCarrier = assignment.carrierOrganisationId === orgId;
+
+  const managerAccepted = Boolean(assignment.managerAcceptedAt);
+  const carrierAssigned = Boolean(assignment.carrierOrganisationId);
+
+  if (assignment.status === "completed") {
+    return "Workflow completed. Waste receipt and assignment completion have been recorded.";
+  }
+
+  if (assignment.status === "cancelled") {
+    return "This assignment has been cancelled.";
+  }
+
+  if (assignment.status === "rejected") {
+    return "This assignment has been rejected.";
+  }
+
+  if (assignment.status === "in_progress") {
+    if (isManager) {
+      return "Collection is in progress. Manager receipt confirmation is the next step.";
+    }
+
+    if (isCarrier) {
+      return "Collection has been verified. Waiting for manager receipt confirmation.";
+    }
+
+    return "Collection is in progress. Waiting for manager receipt confirmation.";
+  }
+
+  if (assignment.status === "accepted") {
+    if (isCarrier) {
+      return "Carrier accepted. Open the assignment to verify collection.";
+    }
+
+    return "Carrier accepted. Collection verification is now available.";
+  }
+
+  if (assignment.status === "pending") {
+    if (!managerAccepted && !carrierAssigned) {
+      if (isManager) {
+        return "Manager response required. Accept or reject this assigned job.";
+      }
+
+      if (isGenerator) {
+        return "Waiting for the assigned manager to accept or reject.";
+      }
+
+      return "Waiting for manager response.";
+    }
+
+    if (managerAccepted && !carrierAssigned) {
+      if (isManager) {
+        return "Manager accepted. Assign a carrier organisation next.";
+      }
+
+      if (isGenerator) {
+        return "Manager accepted. Waiting for carrier assignment.";
+      }
+
+      return "Waiting for carrier assignment.";
+    }
+
+    if (managerAccepted && carrierAssigned) {
+      if (isCarrier) {
+        return "Carrier response required. Accept or reject this collection job.";
+      }
+
+      if (isManager) {
+        return "Carrier assigned. Waiting for carrier response.";
+      }
+
+      return "Carrier assigned. Waiting for carrier response.";
+    }
+  }
+
+  return "Assignment is awaiting the next workflow action.";
+}
 
 /* =========================================================
    PAGE
@@ -12,131 +206,378 @@ export default async function AssignmentsPage() {
   const session = await auth();
 
   if (!session?.user?.organisationId) {
-    return <div className="p-10">Unauthorized</div>;
+    return (
+      <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-8 text-sm text-red-700">
+          Unauthorized. You must belong to an organisation to view assignments.
+        </div>
+      </main>
+    );
   }
 
   const orgId = session.user.organisationId;
 
+  const generatorOrg = alias(organisations, "generatorOrg");
+  const managerOrg = alias(organisations, "managerOrg");
+  const carrierOrg = alias(organisations, "carrierOrg");
+
   /*
-    Supports both internal and external assignments.
+    Supports current Waste X assignment visibility:
 
     organisationId:
-    - original / owning organisation assignment context
-
-    carrierOrganisationId:
-    - external or internal carrier organisation assigned to the job
+      generator-side / owning organisation context
 
     assignedByOrganisationId:
-    - organisation that created/assigned the job
-  */
-  const assignments = await database.query.carrierAssignments.findMany({
-    where: or(
-      eq(carrierAssignments.organisationId, orgId),
-      eq(carrierAssignments.carrierOrganisationId, orgId),
-      eq(carrierAssignments.assignedByOrganisationId, orgId),
-    ),
-    orderBy: desc(carrierAssignments.assignedAt),
-  });
+      organisation that created or assigned the job
 
-  /* ===============================
+    managerOrganisationId:
+      waste manager organisation assigned from winning bid
+
+    carrierOrganisationId:
+      carrier/logistics organisation assigned by manager
+  */
+
+  const assignments = await database
+    .select({
+      id: carrierAssignments.id,
+      organisationId: carrierAssignments.organisationId,
+      listingId: carrierAssignments.listingId,
+
+      managerOrganisationId: carrierAssignments.managerOrganisationId,
+      carrierOrganisationId: carrierAssignments.carrierOrganisationId,
+      assignedByOrganisationId: carrierAssignments.assignedByOrganisationId,
+
+      assignmentMethod: carrierAssignments.assignmentMethod,
+      bidId: carrierAssignments.bidId,
+      status: carrierAssignments.status,
+
+      verificationCode: carrierAssignments.verificationCode,
+
+      assignedAt: carrierAssignments.assignedAt,
+      managerAcceptedAt: carrierAssignments.managerAcceptedAt,
+      carrierAssignedAt: carrierAssignments.carrierAssignedAt,
+      respondedAt: carrierAssignments.respondedAt,
+      collectedAt: carrierAssignments.collectedAt,
+      completedAt: carrierAssignments.completedAt,
+
+      listingName: wasteListings.name,
+      listingLocation: wasteListings.location,
+      listingStatus: wasteListings.status,
+
+      generatorOrgName: generatorOrg.teamName,
+      managerOrgName: managerOrg.teamName,
+      carrierOrgName: carrierOrg.teamName,
+
+      incidentId: incidents.id,
+      incidentStatus: incidents.status,
+    })
+    .from(carrierAssignments)
+    .leftJoin(wasteListings, eq(wasteListings.id, carrierAssignments.listingId))
+    .leftJoin(
+      generatorOrg,
+      eq(generatorOrg.id, carrierAssignments.organisationId),
+    )
+    .leftJoin(
+      managerOrg,
+      eq(managerOrg.id, carrierAssignments.managerOrganisationId),
+    )
+    .leftJoin(
+      carrierOrg,
+      eq(carrierOrg.id, carrierAssignments.carrierOrganisationId),
+    )
+    .leftJoin(incidents, eq(incidents.assignmentId, carrierAssignments.id))
+    .where(
+      or(
+        eq(carrierAssignments.organisationId, orgId),
+        eq(carrierAssignments.assignedByOrganisationId, orgId),
+        eq(carrierAssignments.managerOrganisationId, orgId),
+        eq(carrierAssignments.carrierOrganisationId, orgId),
+      ),
+    )
+    .orderBy(desc(carrierAssignments.assignedAt));
+
+  /* =========================================================
      METRICS
-  ============================== */
+  ========================================================= */
 
   const total = assignments.length;
 
-  const pending = assignments.filter((a) => a.status === "pending").length;
-
-  const active = assignments.filter((a) =>
-    ["accepted", "in_progress"].includes(a.status),
+  const pending = assignments.filter(
+    (assignment) => assignment.status === "pending",
   ).length;
 
-  const completed = assignments.filter((a) => a.status === "completed").length;
+  const accepted = assignments.filter(
+    (assignment) => assignment.status === "accepted",
+  ).length;
 
-  const activeAssignments = assignments.filter((a) =>
-    ["accepted", "in_progress"].includes(a.status),
+  const inProgress = assignments.filter(
+    (assignment) => assignment.status === "in_progress",
+  ).length;
+
+  const active = assignments.filter((assignment) =>
+    ["accepted", "in_progress"].includes(assignment.status),
+  ).length;
+
+  const completed = assignments.filter(
+    (assignment) => assignment.status === "completed",
+  ).length;
+
+  const rejectedOrCancelled = assignments.filter((assignment) =>
+    ["rejected", "cancelled"].includes(assignment.status),
+  ).length;
+
+  const incidentsCount = assignments.filter(
+    (assignment) => assignment.incidentId,
+  ).length;
+
+  const unresolvedIncidents = assignments.filter(
+    (assignment) =>
+      assignment.incidentId &&
+      assignment.incidentStatus &&
+      assignment.incidentStatus !== "resolved",
+  ).length;
+
+  const managerNeedsResponse = assignments.filter(
+    (assignment) =>
+      assignment.status === "pending" &&
+      assignment.managerOrganisationId === orgId &&
+      !assignment.managerAcceptedAt &&
+      !assignment.carrierOrganisationId,
   );
 
-  const pendingAssignments = assignments.filter((a) => a.status === "pending");
+  const carrierNeedsResponse = assignments.filter(
+    (assignment) =>
+      assignment.status === "pending" &&
+      assignment.carrierOrganisationId === orgId &&
+      Boolean(assignment.managerAcceptedAt),
+  );
+
+  const waitingForCarrierAssignment = assignments.filter(
+    (assignment) =>
+      assignment.status === "pending" &&
+      assignment.managerOrganisationId === orgId &&
+      Boolean(assignment.managerAcceptedAt) &&
+      !assignment.carrierOrganisationId,
+  );
+
+  const activeAssignments = assignments.filter((assignment) =>
+    ["accepted", "in_progress"].includes(assignment.status),
+  );
+
+  const pendingAssignments = assignments.filter(
+    (assignment) => assignment.status === "pending",
+  );
 
   const completedAssignments = assignments.filter(
-    (a) => a.status === "completed",
+    (assignment) => assignment.status === "completed",
   );
 
+  const incidentAssignments = assignments.filter(
+    (assignment) => assignment.incidentId,
+  );
+
+  /* =========================================================
+     UI
+  ========================================================= */
+
   return (
-    <div className="p-10 flex flex-col gap-10">
-      {/* HEADER */}
-      <div className="pl-[24vw]">
-        <h1 className="text-2xl font-semibold">Assignments Overview</h1>
-        <p className="text-sm text-gray-500">
-          Manage and track all internal and external waste assignment operations
-        </p>
-      </div>
+    <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
+      <div className="space-y-8">
+        {/* HEADER */}
+        <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
+          <div className="flex items-start justify-between gap-8">
+            <div>
+              <p className="text-xs uppercase tracking-[0.25em] text-orange-400">
+                Waste X Operations
+              </p>
 
-      {/* METRIC CARDS */}
-      <div className="pl-[24vw] grid grid-cols-4 gap-6">
-        <Card title="Total" value={total} />
-        <Card title="Pending" value={pending} />
-        <Card title="Active" value={active} />
-        <Card title="Completed" value={completed} />
-      </div>
+              <h1 className="mt-3 text-3xl font-semibold">
+                Assignments Overview
+              </h1>
 
-      {/* GRID SECTIONS */}
-      <div className="pl-[24vw] grid grid-cols-2 gap-6">
-        <Section title="Active Assignments">
-          {activeAssignments.length > 0 ? (
-            activeAssignments
-              .slice(0, 5)
-              .map((a) => (
-                <Item
-                  key={a.id}
-                  href={`/home/operations/assignments/${a.id}`}
-                  label={`Assignment #${a.id}`}
-                />
-              ))
-          ) : (
-            <Empty text="No active assignments" />
-          )}
-        </Section>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
+                Track internal and external assignment operations across the
+                generator, manager, carrier and compliance workflow. Assignments
+                become the operational source of truth once a waste listing is
+                awarded or directly assigned.
+              </p>
+            </div>
 
-        <Section title="Pending Responses">
-          {pendingAssignments.length > 0 ? (
-            pendingAssignments
-              .slice(0, 5)
-              .map((a) => (
-                <Item
-                  key={a.id}
-                  href={`/home/operations/assignments/${a.id}`}
-                  label={`Assignment #${a.id}`}
-                />
-              ))
-          ) : (
-            <Empty text="No pending responses" />
-          )}
-        </Section>
-
-        <Section title="Recently Completed">
-          {completedAssignments.length > 0 ? (
-            completedAssignments
-              .slice(0, 5)
-              .map((a) => (
-                <Item
-                  key={a.id}
-                  href={`/home/operations/assignments/${a.id}`}
-                  label={`Assignment #${a.id}`}
-                />
-              ))
-          ) : (
-            <Empty text="No completed assignments" />
-          )}
-        </Section>
-
-        <Section title="Issues / Incidents">
-          <div className="text-sm text-gray-400">
-            Incident summary coming soon
+            <Link
+              href="/home/operations/assignments/active"
+              className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+            >
+              View Active →
+            </Link>
           </div>
-        </Section>
+        </section>
+
+        {/* METRICS */}
+        <section className="grid grid-cols-1 gap-5 md:grid-cols-4 xl:grid-cols-8">
+          <MetricCard label="Total" value={total} />
+          <MetricCard label="Pending" value={pending} />
+          <MetricCard label="Accepted" value={accepted} />
+          <MetricCard label="In Progress" value={inProgress} />
+          <MetricCard label="Active" value={active} />
+          <MetricCard label="Completed" value={completed} />
+          <MetricCard label="Closed" value={rejectedOrCancelled} />
+          <MetricCard label="Incidents" value={incidentsCount} />
+        </section>
+
+        {/* ATTENTION STRIP */}
+        <section className="grid grid-cols-1 gap-5 lg:grid-cols-4">
+          <AttentionCard
+            title="Manager Responses"
+            value={managerNeedsResponse.length}
+            detail="Jobs waiting for manager accept/reject."
+          />
+
+          <AttentionCard
+            title="Carrier Responses"
+            value={carrierNeedsResponse.length}
+            detail="Carrier jobs waiting for accept/reject."
+          />
+
+          <AttentionCard
+            title="Carrier Assignment"
+            value={waitingForCarrierAssignment.length}
+            detail="Manager accepted jobs needing a carrier."
+          />
+
+          <AttentionCard
+            title="Unresolved Incidents"
+            value={unresolvedIncidents}
+            detail="Assignments blocked or requiring review."
+            danger={unresolvedIncidents > 0}
+          />
+        </section>
+
+        {/* GRID SECTIONS */}
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <AssignmentSection
+            title="Active Assignments"
+            description="Accepted or in-progress assignments currently moving through collection, receipt or completion."
+            href="/home/operations/assignments/active"
+            hrefLabel="Open active view"
+          >
+            {activeAssignments.length > 0 ? (
+              activeAssignments
+                .slice(0, 5)
+                .map((assignment) => (
+                  <AssignmentItem
+                    key={`${assignment.id}-active`}
+                    assignment={assignment}
+                    orgId={orgId}
+                  />
+                ))
+            ) : (
+              <Empty text="No active assignments." />
+            )}
+          </AssignmentSection>
+
+          <AssignmentSection
+            title="Pending Workflow Actions"
+            description="Assignments waiting for manager response, carrier assignment or carrier response."
+            href="/home/operations/assignments/active"
+            hrefLabel="Review pending"
+          >
+            {pendingAssignments.length > 0 ? (
+              pendingAssignments
+                .slice(0, 5)
+                .map((assignment) => (
+                  <AssignmentItem
+                    key={`${assignment.id}-pending`}
+                    assignment={assignment}
+                    orgId={orgId}
+                  />
+                ))
+            ) : (
+              <Empty text="No pending workflow actions." />
+            )}
+          </AssignmentSection>
+
+          <AssignmentSection
+            title="Recently Completed"
+            description="Completed assignments where collection and receipt have been recorded."
+            href="/home/operations/assignments/completed"
+            hrefLabel="View completed"
+          >
+            {completedAssignments.length > 0 ? (
+              completedAssignments
+                .slice(0, 5)
+                .map((assignment) => (
+                  <AssignmentItem
+                    key={`${assignment.id}-completed`}
+                    assignment={assignment}
+                    orgId={orgId}
+                  />
+                ))
+            ) : (
+              <Empty text="No completed assignments." />
+            )}
+          </AssignmentSection>
+
+          <AssignmentSection
+            title="Issues / Incidents"
+            description="Assignments with incident records attached for compliance review."
+            href="/home/compliance/incidents"
+            hrefLabel="Open incidents"
+          >
+            {incidentAssignments.length > 0 ? (
+              incidentAssignments
+                .slice(0, 5)
+                .map((assignment) => (
+                  <AssignmentItem
+                    key={`${assignment.id}-incident`}
+                    assignment={assignment}
+                    orgId={orgId}
+                    showIncident
+                  />
+                ))
+            ) : (
+              <Empty text="No incidents reported." />
+            )}
+          </AssignmentSection>
+        </section>
+
+        {/* FULL RECENT LIST */}
+        <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+          <div className="mb-6 flex items-start justify-between gap-6">
+            <div>
+              <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                Recent Records
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-black">
+                All Visible Assignments
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm text-black/45">
+                This list includes assignments where your organisation is the
+                generator-side owner, assigning organisation, manager or
+                carrier.
+              </p>
+            </div>
+
+            <span className="rounded-full bg-black px-4 py-2 text-xs font-medium text-orange-400">
+              {assignments.length} records
+            </span>
+          </div>
+
+          {assignments.length > 0 ? (
+            <div className="divide-y divide-black/5">
+              {assignments.slice(0, 10).map((assignment) => (
+                <AssignmentRow
+                  key={`${assignment.id}-row`}
+                  assignment={assignment}
+                  orgId={orgId}
+                />
+              ))}
+            </div>
+          ) : (
+            <Empty text="No assignments found for this organisation." />
+          )}
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -144,41 +585,210 @@ export default async function AssignmentsPage() {
    UI COMPONENTS
 ========================================================= */
 
-function Card({ title, value }: { title: string; value: number }) {
+function MetricCard({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-      <p className="text-sm text-gray-500">{title}</p>
-      <h2 className="text-2xl font-semibold">{value}</h2>
+    <div className="rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
+      <p className="text-xs uppercase tracking-widest text-black/40">{label}</p>
+      <p className="mt-3 text-3xl font-semibold text-black">{value}</p>
     </div>
   );
 }
 
-function Section({
+function AttentionCard({
   title,
+  value,
+  detail,
+  danger = false,
+}: {
+  title: string;
+  value: number;
+  detail: string;
+  danger?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-3xl border p-5 shadow-sm ${
+        danger ? "border-red-200 bg-red-50" : "border-black/10 bg-white"
+      }`}
+    >
+      <p
+        className={`text-xs uppercase tracking-widest ${
+          danger ? "text-red-500" : "text-black/40"
+        }`}
+      >
+        {title}
+      </p>
+      <p
+        className={`mt-3 text-3xl font-semibold ${danger ? "text-red-700" : "text-black"}`}
+      >
+        {value}
+      </p>
+      <p
+        className={`mt-2 text-sm ${danger ? "text-red-600" : "text-black/45"}`}
+      >
+        {detail}
+      </p>
+    </div>
+  );
+}
+
+function AssignmentSection({
+  title,
+  description,
+  href,
+  hrefLabel,
   children,
 }: {
   title: string;
+  description: string;
+  href: string;
+  hrefLabel: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col gap-4">
-      <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
-      {children}
+    <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+      <div className="mb-5 flex items-start justify-between gap-6">
+        <div>
+          <h3 className="text-lg font-semibold text-black">{title}</h3>
+          <p className="mt-1 text-sm text-black/45">{description}</p>
+        </div>
+
+        <Link
+          href={href}
+          className="shrink-0 rounded-full bg-[#fbfaf7] px-4 py-2 text-xs font-medium text-black/55 transition hover:bg-orange-100 hover:text-orange-700"
+        >
+          {hrefLabel}
+        </Link>
+      </div>
+
+      <div className="space-y-3">{children}</div>
     </div>
   );
 }
 
-function Item({ label, href }: { label: string; href: string }) {
+function AssignmentItem({
+  assignment,
+  orgId,
+  showIncident = false,
+}: {
+  assignment: AssignmentRow;
+  orgId: string;
+  showIncident?: boolean;
+}) {
+  const workflowMessage = getWorkflowMessage(assignment, orgId);
+
   return (
     <Link
-      href={href}
-      className="text-sm text-gray-600 border-b border-gray-100 pb-2 hover:text-orange-600 transition"
+      href={`/home/operations/assignments/${assignment.id}`}
+      className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-sm"
     >
-      {label}
+      <div className="flex items-start justify-between gap-5">
+        <div>
+          <p className="font-semibold text-black">
+            {assignment.listingName ?? `Assignment ${assignment.id}`}
+          </p>
+
+          <p className="mt-1 text-sm text-black/45">
+            {assignment.listingLocation ?? "Unknown location"}
+          </p>
+        </div>
+
+        <span
+          className={`rounded-full border px-3 py-1 text-xs font-semibold ${getStatusClass(
+            assignment.status,
+          )}`}
+        >
+          {getStatusLabel(assignment.status)}
+        </span>
+      </div>
+
+      <p className="mt-3 text-sm text-black/55">{workflowMessage}</p>
+
+      <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
+        <MiniDetail
+          label="Manager"
+          value={assignment.managerOrgName ?? "Not assigned"}
+        />
+        <MiniDetail
+          label="Carrier"
+          value={assignment.carrierOrgName ?? "Not assigned"}
+        />
+        <MiniDetail
+          label="Assigned"
+          value={formatDate(assignment.assignedAt)}
+        />
+      </div>
+
+      {showIncident && assignment.incidentStatus && (
+        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+          Incident status: {formatMode(assignment.incidentStatus)}
+        </div>
+      )}
     </Link>
   );
 }
 
+function AssignmentRow({
+  assignment,
+  orgId,
+}: {
+  assignment: AssignmentRow;
+  orgId: string;
+}) {
+  const workflowMessage = getWorkflowMessage(assignment, orgId);
+
+  return (
+    <Link
+      href={`/home/operations/assignments/${assignment.id}`}
+      className="grid grid-cols-12 items-center gap-4 py-5 transition hover:bg-[#fbfaf7]"
+    >
+      <div className="col-span-4">
+        <p className="font-medium text-black">
+          {assignment.listingName ?? `Assignment ${assignment.id}`}
+        </p>
+        <p className="mt-1 text-xs text-black/40">ID: {assignment.id}</p>
+      </div>
+
+      <div className="col-span-3">
+        <p className="text-sm text-black/55">{workflowMessage}</p>
+      </div>
+
+      <div className="col-span-2 text-sm text-black/45">
+        {formatDate(assignment.assignedAt)}
+      </div>
+
+      <div className="col-span-2">
+        <span
+          className={`rounded-full border px-3 py-1 text-xs font-semibold ${getStatusClass(
+            assignment.status,
+          )}`}
+        >
+          {getStatusLabel(assignment.status)}
+        </span>
+      </div>
+
+      <div className="col-span-1 text-right text-sm font-medium text-orange-600">
+        View →
+      </div>
+    </Link>
+  );
+}
+
+function MiniDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-black/10 bg-white p-3">
+      <p className="text-[10px] uppercase tracking-widest text-black/35">
+        {label}
+      </p>
+      <p className="mt-1 truncate text-xs font-medium text-black">{value}</p>
+    </div>
+  );
+}
+
 function Empty({ text }: { text: string }) {
-  return <div className="text-sm text-gray-400">{text}</div>;
+  return (
+    <div className="rounded-2xl border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-center text-sm text-black/45">
+      {text}
+    </div>
+  );
 }

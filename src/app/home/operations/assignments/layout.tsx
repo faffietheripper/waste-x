@@ -15,7 +15,6 @@ export default async function AssignmentsLayout({
 
   return (
     <div className="relative">
-      <AssignmentsNav />
       <div className="">{children}</div>
     </div>
   );

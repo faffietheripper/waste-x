@@ -15,8 +15,7 @@ export default async function ListingsLayout({
 
   return (
     <div className="relative">
-      <ListingsNav />
-      <div className="pt-48 pl-[24vw]">{children}</div>
+      <div className=" pl-[20vw]">{children}</div>
     </div>
   );
 }
