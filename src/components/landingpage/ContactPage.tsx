@@ -1,7 +1,6 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState } from "react";
 import Image from "next/image";
 
 const fadeUp = {
@@ -10,8 +9,6 @@ const fadeUp = {
 };
 
 export default function ContactPage() {
-  const [submitted, setSubmitted] = useState(false);
-
   return (
     <main className="relative min-h-screen text-white">
       {/* ================= BACKGROUND IMAGE ================= */}
@@ -43,14 +40,14 @@ export default function ContactPage() {
           </h1>
 
           <p className="text-gray-300 text-lg leading-relaxed max-w-2xl mx-auto">
-            Speak with our team regarding operational deployment, regulatory
-            alignment, or pilot participation within construction environments.
+            Speak with us about pilot access, Digital Waste Tracking readiness,
+            operational deployment, or how Waste X can support your organisation.
           </p>
         </motion.section>
 
-        {/* FORM + INFO */}
+        {/* CONTACT + INFO */}
         <section className="max-w-6xl mx-auto grid md:grid-cols-2 gap-20">
-          {/* FORM */}
+          {/* CONTACT CARD */}
           <motion.div
             initial="hidden"
             whileInView="show"
@@ -58,47 +55,35 @@ export default function ContactPage() {
             variants={fadeUp}
             className="bg-black/70 border border-gray-700 p-12 backdrop-blur-md"
           >
-            <h2 className="font-[var(--font-heading)] text-3xl tracking-tight mb-10">
-              Operational Inquiry
+            <h2 className="font-[var(--font-heading)] text-3xl tracking-tight mb-6">
+              Get in Touch
             </h2>
 
-            {submitted ? (
-              <div className="border border-orange-500 p-6">
-                <p className="text-orange-500 font-medium">
-                  Inquiry received. Our team will respond shortly.
-                </p>
-              </div>
-            ) : (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  setSubmitted(true);
-                }}
-                className="space-y-8"
+            <p className="text-gray-300 leading-relaxed mb-10">
+              For enquiries about Waste X, pilot participation, organisation
+              setup, or regulatory-aligned waste workflows, contact us directly
+              by email.
+            </p>
+
+            <div className="border border-orange-500 p-6 mb-8">
+              <p className="text-sm text-gray-400 uppercase tracking-wide mb-3">
+                Email
+              </p>
+
+              <a
+                href="mailto:tino@wastextracking.com"
+                className="text-2xl font-semibold text-orange-500 hover:text-orange-400 transition break-all"
               >
-                <Input label="Full Name" type="text" required />
-                <Input label="Company Name" type="text" />
-                <Input label="Email Address" type="email" required />
+                tino@wastextracking.com
+              </a>
+            </div>
 
-                <div>
-                  <label className="block text-sm text-gray-300 uppercase tracking-wide mb-3">
-                    Message
-                  </label>
-                  <textarea
-                    required
-                    rows={5}
-                    className="w-full bg-black/80 border border-gray-600 px-4 py-3 text-sm focus:outline-none focus:border-orange-500 transition"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full bg-orange-500 hover:bg-orange-600 text-black px-6 py-4 font-semibold uppercase tracking-wide transition"
-                >
-                  Submit Inquiry
-                </button>
-              </form>
-            )}
+            <a
+              href="mailto:tino@wastextracking.com?subject=Waste X Enquiry"
+              className="inline-flex w-full items-center justify-center bg-orange-500 hover:bg-orange-600 text-black px-6 py-4 font-semibold uppercase tracking-wide transition"
+            >
+              Email Waste X
+            </a>
           </motion.div>
 
           {/* INFO */}
@@ -111,20 +96,20 @@ export default function ContactPage() {
           >
             <div>
               <h3 className="font-[var(--font-heading)] text-2xl tracking-tight mb-6">
-                Enterprise & Regulatory Coordination
+                Pilot & Regulatory Coordination
               </h3>
 
               <p className="text-gray-300 leading-relaxed">
                 Waste X supports structured waste movement documentation,
-                carrier participation, and compliance visibility aligned with
-                evolving UK Digital Waste Tracking initiatives.
+                carrier workflows, receipt logging, and compliance visibility
+                aligned with the UK’s move towards Digital Waste Tracking.
               </p>
             </div>
 
             <div className="bg-black/70 border border-gray-700 p-10 backdrop-blur-md space-y-6">
-              <InfoRow label="Enterprise" value="enterprise@waste-x.com" />
-              <InfoRow label="Support" value="support@waste-x.com" />
+              <InfoRow label="Contact" value="tino@wastextracking.com" />
               <InfoRow label="Operating Region" value="United Kingdom" />
+              <InfoRow label="Platform Stage" value="MVP / Pilot Access" />
             </div>
 
             <div>
@@ -133,10 +118,9 @@ export default function ContactPage() {
               </h3>
 
               <p className="text-gray-300 leading-relaxed">
-                The platform provides digital chain-of-custody logging,
-                structured listing workflows, carrier verification, completion
-                logging, and audit-ready record generation for construction
-                waste environments.
+                Waste X is designed for waste generators, licensed carriers,
+                waste managers, receiving sites, full-chain operators, and
+                compliance teams that need structured digital waste records.
               </p>
             </div>
           </motion.div>
@@ -148,34 +132,11 @@ export default function ContactPage() {
 
 /* ================= COMPONENTS ================= */
 
-function Input({
-  label,
-  type,
-  required = false,
-}: {
-  label: string;
-  type: string;
-  required?: boolean;
-}) {
-  return (
-    <div>
-      <label className="block text-sm text-gray-300 uppercase tracking-wide mb-3">
-        {label}
-      </label>
-      <input
-        type={type}
-        required={required}
-        className="w-full bg-black/80 border border-gray-600 px-4 py-3 text-sm focus:outline-none focus:border-orange-500 transition"
-      />
-    </div>
-  );
-}
-
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between text-sm uppercase tracking-wide">
+    <div className="flex justify-between gap-6 text-sm uppercase tracking-wide">
       <span className="text-gray-400">{label}</span>
-      <span className="text-white">{value}</span>
+      <span className="text-white text-right break-all">{value}</span>
     </div>
   );
 }

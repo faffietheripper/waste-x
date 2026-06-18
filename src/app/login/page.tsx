@@ -44,7 +44,7 @@ export default function Login() {
                 contact:
               </p>
 
-              <p className="text-white">tafadzwampofu24@gmail.com</p>
+              <p className="text-white">tino@wastextracking.com</p>
             </div>
           </motion.div>
 
