@@ -1,9 +1,9 @@
 "use server";
 
-import { requireOrgUser } from "@/lib/access/require-org-user";
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 import { selectBid } from "../core/selectBid";
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 
 type Input = {
   listingId: number;
@@ -12,9 +12,11 @@ type Input = {
 
 export const selectBidAction = withErrorHandling(
   async (input: Input) => {
-    const { organisationId } = await requireOrgUser();
+    const context = await requireOperationalPermission("listing:assign");
 
-    return await selectBid(input, { organisationId });
+    return await selectBid(input, {
+      organisationId: context.user.organisationId!,
+    });
   },
   {
     actionName: "selectBid",

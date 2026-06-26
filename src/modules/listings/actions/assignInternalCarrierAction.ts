@@ -1,9 +1,9 @@
 "use server";
 
-import { requireOrgUser } from "@/lib/access/require-org-user";
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
 import { ERROR_CODES } from "@/lib/errors/errorCodes";
 import { assignInternalCarrier } from "../core/assignInternalCarrier";
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 
 type Input = {
   listingId: number;
@@ -12,11 +12,11 @@ type Input = {
 
 export const assignInternalCarrierAction = withErrorHandling(
   async (input: Input) => {
-    const { userId, organisationId } = await requireOrgUser();
+    const context = await requireOperationalPermission("listing:direct_assign");
 
     const result = await assignInternalCarrier(input, {
-      userId,
-      organisationId,
+      userId: context.user.id,
+      organisationId: context.user.organisationId!,
     });
 
     return result;

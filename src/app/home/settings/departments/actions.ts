@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import { departments, organisations, users } from "@/db/schema";
@@ -17,6 +17,46 @@ type ActionResult = {
   success: boolean;
   message: string;
 };
+
+type AdminContext =
+  | {
+      success: true;
+      userId: string;
+      organisationId: string;
+    }
+  | {
+      success: false;
+      message: string;
+    };
+
+/* =========================================================
+   ADMIN GUARD
+========================================================= */
+
+async function requireOrganisationAdministrator(): Promise<AdminContext> {
+  const { userId, organisationId } = await requireOrgUser();
+
+  const currentUser = await database.query.users.findFirst({
+    where: and(eq(users.id, userId), eq(users.organisationId, organisationId)),
+    columns: {
+      id: true,
+      role: true,
+    },
+  });
+
+  if (!currentUser || currentUser.role !== "administrator") {
+    return {
+      success: false,
+      message: "Only organisation administrators can make this change.",
+    };
+  }
+
+  return {
+    success: true,
+    userId,
+    organisationId,
+  };
+}
 
 /* =========================================================
    HELPERS
@@ -71,11 +111,6 @@ function getRecommendedTypesFromCapabilities(
     recommended.add("carrier");
   }
 
-  /*
-    Compliance should exist for every approved organisation.
-    This gives administrators somewhere safe to land and keeps
-    audit access consistent.
-  */
   recommended.add("compliance");
 
   return Array.from(recommended);
@@ -88,7 +123,13 @@ function getRecommendedTypesFromCapabilities(
 export async function createDepartmentAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  const { organisationId } = await requireOrgUser();
+  const admin = await requireOrganisationAdministrator();
+
+  if (!admin.success) {
+    return admin;
+  }
+
+  const { organisationId } = admin;
 
   const name = cleanName(formData.get("name"));
   const type = formData.get("type")?.toString();
@@ -107,17 +148,81 @@ export async function createDepartmentAction(
     };
   }
 
-  const existing = await database.query.departments.findFirst({
-    where: and(
-      eq(departments.organisationId, organisationId),
-      eq(departments.name, name),
-    ),
+  /*
+    Check organisation capabilities first.
+
+    Example:
+    - If the organisation does not have carrier capability,
+      it should not be able to create a carrier/logistics department.
+    - Compliance is always allowed.
+  */
+  const organisation = await database.query.organisations.findFirst({
+    where: eq(organisations.id, organisationId),
   });
 
-  if (existing) {
+  if (!organisation) {
+    return {
+      success: false,
+      message: "Organisation not found.",
+    };
+  }
+
+  const capabilities =
+    (organisation.capabilities as ("generator" | "carrier" | "manager")[]) ??
+    [];
+
+  const recommendedTypes = getRecommendedTypesFromCapabilities(capabilities);
+
+  if (!recommendedTypes.includes(type)) {
+    return {
+      success: false,
+      message:
+        "This department type is not available for your organisation capabilities.",
+    };
+  }
+
+  /*
+    Fetch all departments once so we can check:
+    - total count
+    - duplicate names
+    - duplicate department types
+  */
+  const existingDepartments = await database.query.departments.findMany({
+    where: eq(departments.organisationId, organisationId),
+  });
+
+  const existingByName = existingDepartments.find(
+    (department) =>
+      department.name.trim().toLowerCase() === name.trim().toLowerCase(),
+  );
+
+  if (existingByName) {
     return {
       success: false,
       message: "A department with this name already exists.",
+    };
+  }
+
+  const existingByType = existingDepartments.find(
+    (department) => department.type === type,
+  );
+
+  if (existingByType) {
+    return {
+      success: false,
+      message: `A ${type} department already exists for this organisation.`,
+    };
+  }
+
+  /*
+    Waste X only supports one of each manageable department type:
+    generator, manager, carrier, compliance.
+  */
+  if (existingDepartments.length >= 4) {
+    return {
+      success: false,
+      message:
+        "This organisation already has the maximum number of departments.",
     };
   }
 
@@ -138,12 +243,21 @@ export async function createDepartmentAction(
 
 /* =========================================================
    SET ACTIVE DEPARTMENT
+
+   Kept administrator-only because you asked for this settings page
+   to be view-only for non-admin users.
 ========================================================= */
 
 export async function setActiveDepartmentAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  const { userId, organisationId } = await requireOrgUser();
+  const admin = await requireOrganisationAdministrator();
+
+  if (!admin.success) {
+    return admin;
+  }
+
+  const { userId, organisationId } = admin;
 
   const departmentId = formData.get("departmentId")?.toString();
 
@@ -193,7 +307,13 @@ export async function setActiveDepartmentAction(
 export async function assignMemberToDepartmentAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  const { organisationId } = await requireOrgUser();
+  const admin = await requireOrganisationAdministrator();
+
+  if (!admin.success) {
+    return admin;
+  }
+
+  const { organisationId } = admin;
 
   const memberId = formData.get("memberId")?.toString();
   const departmentId = formData.get("departmentId")?.toString();
@@ -258,7 +378,13 @@ export async function assignMemberToDepartmentAction(
 export async function deleteDepartmentAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  const { organisationId } = await requireOrgUser();
+  const admin = await requireOrganisationAdministrator();
+
+  if (!admin.success) {
+    return admin;
+  }
+
+  const { organisationId } = admin;
 
   const departmentId = formData.get("departmentId")?.toString();
 
@@ -320,7 +446,13 @@ export async function deleteDepartmentAction(
 ========================================================= */
 
 export async function ensureRecommendedDepartmentsAction(): Promise<ActionResult> {
-  const { organisationId } = await requireOrgUser();
+  const admin = await requireOrganisationAdministrator();
+
+  if (!admin.success) {
+    return admin;
+  }
+
+  const { organisationId } = admin;
 
   const organisation = await database.query.organisations.findFirst({
     where: eq(organisations.id, organisationId),
@@ -374,15 +506,19 @@ export async function ensureRecommendedDepartmentsAction(): Promise<ActionResult
 }
 
 /* =========================================================
-   MOVE USERS OFF DEPARTMENT
-
-   Useful before deletion if needed later.
+   CLEAR MEMBER DEPARTMENT
 ========================================================= */
 
 export async function clearMemberDepartmentAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  const { organisationId } = await requireOrgUser();
+  const admin = await requireOrganisationAdministrator();
+
+  if (!admin.success) {
+    return admin;
+  }
+
+  const { organisationId } = admin;
 
   const memberId = formData.get("memberId")?.toString();
 

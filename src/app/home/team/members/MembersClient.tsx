@@ -13,10 +13,12 @@ export default function MembersClient({
   members,
   invited,
   departments,
+  canInviteMembers = false,
 }: {
   members: any[];
   invited: any[];
   departments: Department[];
+  canInviteMembers?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -39,17 +41,36 @@ export default function MembersClient({
               </h1>
 
               <p className="mt-2 max-w-xl text-sm text-white/60">
-                Manage team access, invitations and department-based
-                permissions.
+                Review team access, invitations and department-based
+                permissions. Only organisation administrators can invite new
+                members.
               </p>
+
+              <div className="mt-5">
+                <span
+                  className={`rounded-full border px-4 py-2 text-xs font-medium ${
+                    canInviteMembers
+                      ? "border-green-400/30 bg-green-500/10 text-green-300"
+                      : "border-orange-400/30 bg-orange-500/10 text-orange-300"
+                  }`}
+                >
+                  {canInviteMembers ? "Administrator Access" : "View Only"}
+                </span>
+              </div>
             </div>
 
-            <button
-              onClick={() => setIsOpen(true)}
-              className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black hover:bg-orange-400 transition"
-            >
-              + Invite Member
-            </button>
+            {canInviteMembers ? (
+              <button
+                onClick={() => setIsOpen(true)}
+                className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black hover:bg-orange-400 transition"
+              >
+                + Invite Member
+              </button>
+            ) : (
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm text-white/60">
+                Administrator role required to invite members.
+              </div>
+            )}
           </div>
 
           <div className="mt-8 grid grid-cols-3 gap-4">
@@ -58,6 +79,20 @@ export default function MembersClient({
             <Stat label="Departments" value={departments.length} />
           </div>
         </div>
+
+        {!canInviteMembers && (
+          <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+            <p className="text-sm font-semibold text-orange-800">
+              View-only access
+            </p>
+
+            <p className="mt-2 text-sm leading-6 text-orange-700">
+              You can view organisation members and pending invitations, but
+              only an administrator can invite new members or change team
+              access.
+            </p>
+          </section>
+        )}
 
         <div className="grid grid-cols-3 gap-6">
           <section className="col-span-2 rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
@@ -113,16 +148,18 @@ export default function MembersClient({
         </div>
       </div>
 
-      <NewMemberModal
-        isOpen={isOpen}
-        setIsOpen={setIsOpen}
-        departments={departments}
-      />
+      {canInviteMembers && (
+        <NewMemberModal
+          isOpen={isOpen}
+          setIsOpen={setIsOpen}
+          departments={departments}
+        />
+      )}
     </div>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string | number }) {
+function Stat({ label, value }: { label: string | number; value: string | number }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
       <p className="text-xs uppercase tracking-widest text-white/40">{label}</p>

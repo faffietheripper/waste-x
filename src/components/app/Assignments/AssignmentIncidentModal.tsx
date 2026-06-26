@@ -74,136 +74,218 @@ export default function AssignmentIncidentModal({
   return (
     <>
       <button
+        type="button"
         onClick={() => {
           if (!hasIncident) setOpen(true);
         }}
         disabled={hasIncident}
-        className={`w-full px-4 py-2 rounded-xl ${
+        className={`w-full rounded-2xl px-4 py-3 text-sm font-semibold transition ${
           hasIncident
-            ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-            : "bg-orange-600 text-white"
+            ? "cursor-not-allowed bg-black/10 text-black/35"
+            : "bg-orange-600 text-white hover:bg-orange-500"
         }`}
       >
         {hasIncident ? "Incident Already Reported" : "Report Incident"}
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
-          <div className="bg-white w-full max-w-xl rounded-2xl p-6 space-y-5">
-            <div>
-              <h2 className="text-lg font-semibold">Report Incident</h2>
-              <p className="text-sm text-gray-500">
-                Log an operational issue against this assignment.
-              </p>
-            </div>
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 px-4 py-8 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          {/* BACKDROP CLICK AREA */}
+          <button
+            type="button"
+            aria-label="Close incident modal"
+            onClick={() => {
+              if (!loading) setOpen(false);
+            }}
+            className="absolute inset-0 cursor-default"
+          />
 
-            {message && (
-              <div
-                className={`rounded-lg p-3 text-sm ${
-                  message.type === "success"
-                    ? "bg-green-50 text-green-700 border border-green-200"
-                    : "bg-red-50 text-red-700 border border-red-200"
-                }`}
-              >
-                {message.text}
-              </div>
-            )}
+          {/* MODAL CARD */}
+          <div className="relative z-10 flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-black/10 bg-white shadow-2xl">
+            {/* HEADER */}
+            <div className="shrink-0 border-b border-black/10 bg-black p-6 text-white">
+              <div className="flex items-start justify-between gap-6">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-orange-400">
+                    Waste X Incident
+                  </p>
 
-            <div className="rounded-lg border p-3 text-sm bg-gray-50">
-              <p className="font-medium">{assignment.listingName}</p>
-              <p className="text-gray-500">
-                Assignment ID: {assignment.assignmentId.slice(0, 8)}
-              </p>
-            </div>
+                  <h2 className="mt-2 text-xl font-semibold">
+                    Report Incident
+                  </h2>
 
-            <form action={handleSubmit} className="space-y-4">
-              <div>
-                <label className="text-sm font-medium">Incident Type</label>
-                <select
-                  name="type"
-                  required
-                  className="mt-1 w-full border rounded-lg p-2"
-                >
-                  <option value="">Select incident type</option>
-                  <option value="contaminated_waste">Contaminated Waste</option>
-                  <option value="access_issue">Access Issue</option>
-                  <option value="quantity_mismatch">Quantity Mismatch</option>
-                  <option value="damaged_load">Damaged Load</option>
-                  <option value="missed_collection">Missed Collection</option>
-                  <option value="health_and_safety">
-                    Health & Safety Concern
-                  </option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-white/55">
+                    Log an operational issue against this assignment. This will
+                    become part of the compliance record.
+                  </p>
+                </div>
 
-              <div>
-                <label className="text-sm font-medium">Incident Date</label>
-                <input
-                  type="datetime-local"
-                  name="incidentDate"
-                  className="mt-1 w-full border rounded-lg p-2"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Incident Location</label>
-                <input
-                  name="incidentLocation"
-                  placeholder="Where did this happen?"
-                  className="mt-1 w-full border rounded-lg p-2"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Summary</label>
-                <textarea
-                  name="summary"
-                  placeholder="Describe the incident..."
-                  required
-                  className="mt-1 w-full border rounded-lg p-2 min-h-28"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Immediate Action</label>
-                <textarea
-                  name="immediateAction"
-                  placeholder="What action was taken immediately?"
-                  className="mt-1 w-full border rounded-lg p-2 min-h-20"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">
-                  Responsible Person
-                </label>
-                <input
-                  name="responsiblePerson"
-                  placeholder="Name of responsible person, if known"
-                  className="mt-1 w-full border rounded-lg p-2"
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    if (!loading) setOpen(false);
+                  }}
                   disabled={loading}
-                  className="px-4 py-2 border rounded-lg disabled:opacity-50"
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/70 transition hover:border-orange-400/40 hover:text-orange-300 disabled:opacity-50"
                 >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-4 py-2 bg-black text-white rounded-lg disabled:opacity-50"
-                >
-                  {loading ? "Submitting..." : "Submit Incident"}
+                  ✕
                 </button>
               </div>
-            </form>
+            </div>
+
+            {/* SCROLLABLE BODY */}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {message && (
+                <div
+                  className={`mb-5 rounded-2xl border p-4 text-sm ${
+                    message.type === "success"
+                      ? "border-green-200 bg-green-50 text-green-700"
+                      : "border-red-200 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {message.text}
+                </div>
+              )}
+
+              <div className="mb-6 rounded-2xl border border-black/10 bg-[#f7f3ed] p-4 text-sm">
+                <p className="font-semibold text-black">
+                  {assignment.listingName}
+                </p>
+
+                <p className="mt-1 text-xs text-black/45">
+                  Assignment ID:{" "}
+                  <span className="font-mono">
+                    {assignment.assignmentId.slice(0, 8)}
+                  </span>
+                </p>
+              </div>
+
+              <form action={handleSubmit} className="space-y-5">
+                {/* INCIDENT TYPE */}
+                <div>
+                  <label className="text-sm font-medium text-black">
+                    Incident Type <span className="text-orange-600">*</span>
+                  </label>
+
+                  <select
+                    name="type"
+                    required
+                    disabled={loading}
+                    className="mt-2 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition focus:border-orange-500 focus:bg-white disabled:opacity-60"
+                  >
+                    <option value="">Select incident type</option>
+                    <option value="contaminated_waste">
+                      Contaminated Waste
+                    </option>
+                    <option value="access_issue">Access Issue</option>
+                    <option value="quantity_mismatch">Quantity Mismatch</option>
+                    <option value="damaged_load">Damaged Load</option>
+                    <option value="missed_collection">Missed Collection</option>
+                    <option value="health_and_safety">
+                      Health & Safety Concern
+                    </option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                {/* INCIDENT DATE */}
+                <div>
+                  <label className="text-sm font-medium text-black">
+                    Incident Date
+                  </label>
+
+                  <input
+                    type="datetime-local"
+                    name="incidentDate"
+                    disabled={loading}
+                    className="mt-2 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition focus:border-orange-500 focus:bg-white disabled:opacity-60"
+                  />
+                </div>
+
+                {/* LOCATION */}
+                <div>
+                  <label className="text-sm font-medium text-black">
+                    Incident Location
+                  </label>
+
+                  <input
+                    name="incidentLocation"
+                    placeholder="Where did this happen?"
+                    disabled={loading}
+                    className="mt-2 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white disabled:opacity-60"
+                  />
+                </div>
+
+                {/* SUMMARY */}
+                <div>
+                  <label className="text-sm font-medium text-black">
+                    Summary <span className="text-orange-600">*</span>
+                  </label>
+
+                  <textarea
+                    name="summary"
+                    placeholder="Describe the incident..."
+                    required
+                    disabled={loading}
+                    rows={4}
+                    className="mt-2 w-full resize-none rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white disabled:opacity-60"
+                  />
+                </div>
+
+                {/* IMMEDIATE ACTION */}
+                <div>
+                  <label className="text-sm font-medium text-black">
+                    Immediate Action
+                  </label>
+
+                  <textarea
+                    name="immediateAction"
+                    placeholder="What action was taken immediately?"
+                    disabled={loading}
+                    rows={3}
+                    className="mt-2 w-full resize-none rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white disabled:opacity-60"
+                  />
+                </div>
+
+                {/* RESPONSIBLE PERSON */}
+                <div>
+                  <label className="text-sm font-medium text-black">
+                    Responsible Person
+                  </label>
+
+                  <input
+                    name="responsiblePerson"
+                    placeholder="Name of responsible person, if known"
+                    disabled={loading}
+                    className="mt-2 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white disabled:opacity-60"
+                  />
+                </div>
+
+                {/* STICKY FOOTER */}
+                <div className="sticky bottom-0 -mx-6 -mb-6 mt-6 flex justify-end gap-3 border-t border-black/10 bg-white px-6 py-4">
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    disabled={loading}
+                    className="rounded-full border border-black/10 bg-white px-5 py-2.5 text-sm font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="rounded-full bg-black px-5 py-2.5 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loading ? "Submitting..." : "Submit Incident"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}

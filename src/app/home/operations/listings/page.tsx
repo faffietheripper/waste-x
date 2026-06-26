@@ -1,20 +1,14 @@
-import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { wasteListings } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import Link from "next/link";
 
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
+import { hasOperationalPermission } from "@/modules/auth/core/permissions";
+
 /* =========================================================
    TYPES
 ========================================================= */
-
-type ListingStatus =
-  | "draft"
-  | "open"
-  | "assigned"
-  | "in_progress"
-  | "completed"
-  | "cancelled";
 
 type StatusFilter =
   | "all"
@@ -91,8 +85,6 @@ function formatMode(value: string | null | undefined) {
 
 function getStatusLabel(status: string | null | undefined) {
   switch (status) {
-    case "draft":
-      return "Draft";
     case "open":
       return "Open";
     case "assigned":
@@ -110,8 +102,6 @@ function getStatusLabel(status: string | null | undefined) {
 
 function getStatusClass(status: string | null | undefined) {
   switch (status) {
-    case "draft":
-      return "border-gray-300 bg-gray-100 text-gray-700";
     case "open":
       return "border-green-300 bg-green-100 text-green-700";
     case "assigned":
@@ -136,20 +126,28 @@ export default async function ListingsPage({
 }: {
   searchParams: { status?: string };
 }) {
-  const session = await auth();
+  /* =========================================================
+     PAGE PERMISSION GUARD
 
-  if (!session?.user?.organisationId) {
-    return (
-      <main className="min-h-screen bg-[#f7f3ed] px-10">
-        <div className="rounded-3xl border border-red-200 bg-red-50 p-8 text-sm text-red-700">
-          Unauthorized. You must belong to an organisation to view waste
-          listings.
-        </div>
-      </main>
-    );
-  }
+     Only departments with listing:view can access this page.
 
-  const organisationId = session.user.organisationId;
+     Under the updated matrix:
+     - generator can access
+     - manager cannot access
+     - carrier cannot access
+     - compliance cannot access
+  ========================================================= */
+
+  const context = await requireOperationalPermission("listing:view");
+
+  const organisationId = context.user.organisationId!;
+
+  const canCreateListings = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType: context.departmentType,
+    permission: "listing:create",
+  });
+
   const status = (searchParams.status || "all") as StatusFilter;
 
   const filters = [eq(wasteListings.organisationId, organisationId)];
@@ -184,7 +182,7 @@ export default async function ListingsPage({
   };
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] py-32 px-10">
+    <main className="min-h-screen bg-[#f7f3ed] px-10 py-32">
       <div className="space-y-8">
         {/* HEADER */}
         <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
@@ -197,19 +195,30 @@ export default async function ListingsPage({
               <h1 className="mt-3 text-3xl font-semibold">Waste Listings</h1>
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Manage waste listings created by your organisation. Listings are
-                the pre-assignment layer of Waste X — once a manager or carrier
-                is assigned, the operational workflow continues through
-                assignments.
+                Manage waste listings created by your organisation. This area is
+                restricted to generator departments because waste listing
+                creation is a generator-side responsibility.
               </p>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
+                  Department: {context.department.name}
+                </span>
+
+                <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-4 py-2 text-xs font-medium text-orange-300">
+                  Current filter: {formatMode(status)}
+                </span>
+              </div>
             </div>
 
-            <Link
-              href="/home/operations/listings/create"
-              className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-            >
-              + Create Listing
-            </Link>
+            {canCreateListings && (
+              <Link
+                href="/home/operations/listings/create"
+                className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+              >
+                + Create Listing
+              </Link>
+            )}
           </div>
         </section>
 
@@ -287,6 +296,15 @@ export default async function ListingsPage({
               <p className="mt-2 text-sm text-black/45">
                 There are no waste listings matching this filter.
               </p>
+
+              {canCreateListings && (
+                <Link
+                  href="/home/operations/listings/create"
+                  className="mt-6 inline-flex rounded-full bg-black px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                >
+                  Create your first listing →
+                </Link>
+              )}
             </div>
           ) : (
             listings.map((listing) => (
@@ -308,6 +326,17 @@ function ListingCard({
 }: {
   listing: typeof wasteListings.$inferSelect;
 }) {
+  const isAssigned = Boolean(
+    listing.assignedCarrierOrganisationId ||
+      listing.assignedCarrierDepartmentId ||
+      listing.assignedByOrganisationId ||
+      listing.assignedAt ||
+      listing.winnerBidId ||
+      listing.status === "assigned" ||
+      listing.status === "in_progress" ||
+      listing.status === "completed",
+  );
+
   return (
     <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-md">
       <div className="flex items-start justify-between gap-8">
@@ -322,6 +351,12 @@ function ListingCard({
             >
               {getStatusLabel(listing.status)}
             </span>
+
+            {isAssigned && (
+              <span className="rounded-full border border-orange-300 bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
+                Assignment Locked
+              </span>
+            )}
 
             {listing.archived && (
               <span className="rounded-full border border-gray-300 bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-700">

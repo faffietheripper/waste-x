@@ -1,4 +1,3 @@
-import { auth } from "@/auth";
 import { database } from "@/db/database";
 import {
   listingTemplates,
@@ -6,8 +5,11 @@ import {
   listingTemplateFields,
   wasteListings,
 } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import Link from "next/link";
+
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
+import { hasOperationalPermission } from "@/modules/auth/core/permissions";
 
 /* =========================================================
    TYPES
@@ -40,7 +42,7 @@ function formatDate(date: Date | string | null | undefined) {
 function getTemplateStatusLabel(template: TemplateRecord) {
   if (!template.isActive) return "Inactive";
   if (template.isLocked) return "Locked";
-  return "Active";
+  return "Editable";
 }
 
 function getTemplateStatusClass(template: TemplateRecord) {
@@ -60,64 +62,68 @@ function getTemplateStatusClass(template: TemplateRecord) {
 ========================================================= */
 
 export default async function TemplatesPage() {
-  const session = await auth();
+  /*
+    PAGE PERMISSION GUARD
 
-  if (!session?.user?.organisationId) {
-    return (
-      <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
-        <div className="rounded-3xl border border-red-200 bg-red-50 p-8 text-sm text-red-700">
-          Unauthorized. You must belong to an organisation to view listing
-          templates.
-        </div>
-      </main>
-    );
-  }
+    Only users with template:view can access this page.
 
-  const organisationId = session.user.organisationId;
+    With the updated permission matrix:
+    - generator department can view templates
+    - manager cannot create/view generator listing templates
+    - carrier cannot access templates
+    - compliance cannot access templates
+  */
+
+  const context = await requireOperationalPermission("template:view");
+
+  const organisationId = context.user.organisationId!;
+
+  const canCreateTemplates = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType: context.departmentType,
+    permission: "template:create",
+  });
+
+  const canEditTemplates = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType: context.departmentType,
+    permission: "template:edit",
+  });
 
   const templates = await database.query.listingTemplates.findMany({
     where: eq(listingTemplates.organisationId, organisationId),
-    orderBy: desc(listingTemplates.createdAt),
+    orderBy: (templates, { desc }) => [desc(templates.createdAt)],
   });
 
-  /*
-    Your current schema uses isActive / isLocked.
-    There is no archived column on listingTemplates.
+  const templateIds = templates.map((template) => template.id);
 
-    Active templates:
-      isActive === true
+  const sections =
+    templateIds.length > 0
+      ? await database.query.listingTemplateSections.findMany({
+          where: inArray(listingTemplateSections.templateId, templateIds),
+        })
+      : [];
 
-    Inactive templates:
-      isActive === false
-
-    Locked templates:
-      cannot be safely edited without creating a new version.
-  */
-
-  const activeTemplates = templates.filter((template) => template.isActive);
-  const inactiveTemplates = templates.filter((template) => !template.isActive);
-  const lockedTemplates = templates.filter((template) => template.isLocked);
-
-  /*
-    Pull related records so we can show richer template cards:
-    - sections count
-    - fields count
-    - how many listings use each template
-
-    This keeps the page useful without hiding information.
-  */
-
-  const sections = await database.query.listingTemplateSections.findMany({
-    where: undefined,
-  });
-
-  const fields = await database.query.listingTemplateFields.findMany({
-    where: undefined,
-  });
+  const fields =
+    templateIds.length > 0
+      ? await database.query.listingTemplateFields.findMany({
+          where: inArray(listingTemplateFields.templateId, templateIds),
+        })
+      : [];
 
   const listings = await database.query.wasteListings.findMany({
     where: eq(wasteListings.organisationId, organisationId),
   });
+
+  const editableTemplates = templates.filter(
+    (template) => template.isActive && !template.isLocked,
+  );
+
+  const lockedTemplates = templates.filter(
+    (template) => template.isActive && template.isLocked,
+  );
+
+  const inactiveTemplates = templates.filter((template) => !template.isActive);
 
   const templateStatsById = templates.reduce<Record<string, TemplateStats>>(
     (acc, template) => {
@@ -141,15 +147,11 @@ export default async function TemplatesPage() {
 
   const metrics = {
     total: templates.length,
-    active: activeTemplates.length,
-    inactive: inactiveTemplates.length,
+    editable: editableTemplates.length,
     locked: lockedTemplates.length,
-    totalSections: sections.filter((section) =>
-      templates.some((template) => template.id === section.templateId),
-    ).length,
-    totalFields: fields.filter((field) =>
-      templates.some((template) => template.id === field.templateId),
-    ).length,
+    inactive: inactiveTemplates.length,
+    totalSections: sections.length,
+    totalFields: fields.length,
   };
 
   return (
@@ -167,31 +169,41 @@ export default async function TemplatesPage() {
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
                 Manage reusable listing templates for structured waste records.
-                Templates keep listings consistent, audit-ready and aligned with
-                your organisation’s operational data requirements.
+                Templates keep generator listings consistent, audit-ready and
+                aligned with your organisation’s operational requirements.
               </p>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <HeaderPill>Department: {context.department.name}</HeaderPill>
+                <HeaderPill>Permission: template:view</HeaderPill>
+                <HeaderPill>
+                  Edit Access: {canEditTemplates ? "Yes" : "No"}
+                </HeaderPill>
+              </div>
             </div>
 
-            <Link
-              href="/home/operations/templates/create"
-              className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-            >
-              + Create Template
-            </Link>
+            {canCreateTemplates && (
+              <Link
+                href="/home/operations/templates/create"
+                className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+              >
+                + Create Template
+              </Link>
+            )}
           </div>
         </section>
 
         {/* METRICS */}
         <section className="grid grid-cols-1 gap-5 md:grid-cols-3 xl:grid-cols-6">
           <MetricCard label="Total" value={metrics.total} />
-          <MetricCard label="Active" value={metrics.active} />
-          <MetricCard label="Inactive" value={metrics.inactive} />
+          <MetricCard label="Editable" value={metrics.editable} />
           <MetricCard label="Locked" value={metrics.locked} />
+          <MetricCard label="Inactive" value={metrics.inactive} />
           <MetricCard label="Sections" value={metrics.totalSections} />
           <MetricCard label="Fields" value={metrics.totalFields} />
         </section>
 
-        {/* TEMPLATE GUIDANCE */}
+        {/* GUIDANCE */}
         <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
           <div className="grid gap-6 lg:grid-cols-3">
             <GuidanceCard
@@ -203,51 +215,57 @@ export default async function TemplatesPage() {
             <GuidanceCard
               title="Version Control"
               label="Operational Safety"
-              text="Locked templates protect historical listing data. If a template is already used in live workflows, prefer creating a new version instead of editing the original."
+              text="Locked templates protect historical listing data. If a template is already used in live workflows, create a new version instead of editing the original."
             />
 
             <GuidanceCard
               title="Audit Readiness"
               label="Compliance"
-              text="Consistent template sections and fields make exports, reporting and chain-of-custody evidence easier to validate later."
+              text="Consistent sections and fields make exports, reports and chain-of-custody evidence easier to validate later."
             />
           </div>
         </section>
 
-        {/* ACTIVE TEMPLATES */}
+        {/* EDITABLE TEMPLATES */}
         <section className="space-y-5">
           <div className="flex items-end justify-between gap-6">
             <div>
               <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
-                Active Records
+                Editable Records
               </p>
+
               <h2 className="mt-2 text-xl font-semibold text-black">
-                Active Templates
+                Editable Templates
               </h2>
+
               <p className="mt-2 text-sm text-black/45">
-                Templates currently available for new waste listings.
+                Active templates that can still be edited before being locked
+                for operational use.
               </p>
             </div>
 
             <span className="rounded-full bg-black px-4 py-2 text-xs font-medium text-orange-400">
-              {activeTemplates.length} active
+              {editableTemplates.length} editable
             </span>
           </div>
 
-          {activeTemplates.length === 0 ? (
+          {editableTemplates.length === 0 ? (
             <EmptyState
-              title="No active templates"
-              text="Create your first template to start standardising waste listing data across your organisation."
-              actionHref="/home/operations/templates/create"
-              actionLabel="Create Template"
+              title="No editable templates"
+              text="Create a new template or review locked templates already available for waste listing creation."
+              actionHref={
+                canCreateTemplates ? "/home/operations/templates/create" : null
+              }
+              actionLabel={canCreateTemplates ? "Create Template" : null}
             />
           ) : (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-              {activeTemplates.map((template) => (
+              {editableTemplates.map((template) => (
                 <TemplateCard
                   key={template.id}
                   template={template}
                   stats={templateStatsById[template.id]}
+                  canEdit={canEditTemplates}
                 />
               ))}
             </div>
@@ -255,33 +273,40 @@ export default async function TemplatesPage() {
         </section>
 
         {/* LOCKED TEMPLATES */}
-        {lockedTemplates.length > 0 && (
-          <section className="space-y-5">
-            <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
-                Controlled Templates
-              </p>
-              <h2 className="mt-2 text-xl font-semibold text-black">
-                Locked Templates
-              </h2>
-              <p className="mt-2 text-sm text-black/45">
-                Locked templates are protected for operational consistency and
-                historical record safety.
-              </p>
-            </div>
+        <section className="space-y-5">
+          <div>
+            <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+              Published Records
+            </p>
 
+            <h2 className="mt-2 text-xl font-semibold text-black">
+              Locked Templates
+            </h2>
+
+            <p className="mt-2 text-sm text-black/45">
+              Locked templates are protected for operational consistency and can
+              be used to create waste listings.
+            </p>
+          </div>
+
+          {lockedTemplates.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-black/20 bg-white p-8 text-sm text-black/45 shadow-sm">
+              No locked templates yet.
+            </div>
+          ) : (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
               {lockedTemplates.map((template) => (
                 <TemplateCard
-                  key={`${template.id}-locked`}
+                  key={template.id}
                   template={template}
                   stats={templateStatsById[template.id]}
+                  canEdit={false}
                   compact
                 />
               ))}
             </div>
-          </section>
-        )}
+          )}
+        </section>
 
         {/* INACTIVE TEMPLATES */}
         <section className="space-y-5">
@@ -290,9 +315,11 @@ export default async function TemplatesPage() {
               <p className="text-xs uppercase tracking-[0.25em] text-black/35">
                 Inactive Records
               </p>
+
               <h2 className="mt-2 text-xl font-semibold text-black">
                 Inactive Templates
               </h2>
+
               <p className="mt-2 text-sm text-black/45">
                 Templates no longer active for new listings, but retained for
                 traceability and historical reference.
@@ -312,9 +339,10 @@ export default async function TemplatesPage() {
             <div className="grid grid-cols-1 gap-6 opacity-75 xl:grid-cols-3">
               {inactiveTemplates.map((template) => (
                 <TemplateCard
-                  key={`${template.id}-inactive`}
+                  key={template.id}
                   template={template}
                   stats={templateStatsById[template.id]}
+                  canEdit={false}
                   compact
                 />
               ))}
@@ -333,15 +361,19 @@ export default async function TemplatesPage() {
 function TemplateCard({
   template,
   stats,
+  canEdit,
   compact = false,
 }: {
   template: TemplateRecord;
   stats?: TemplateStats;
+  canEdit: boolean;
   compact?: boolean;
 }) {
   const sectionCount = stats?.sectionCount ?? 0;
   const fieldCount = stats?.fieldCount ?? 0;
   const listingUsageCount = stats?.listingUsageCount ?? 0;
+
+  const canOpenEditor = canEdit && template.isActive && !template.isLocked;
 
   return (
     <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-md">
@@ -391,9 +423,13 @@ function TemplateCard({
 
         <Link
           href={`/home/operations/templates/${template.id}`}
-          className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-500 hover:text-black"
+          className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+            canOpenEditor
+              ? "bg-black text-white hover:bg-orange-500 hover:text-black"
+              : "bg-[#f7f3ed] text-black/55 hover:bg-orange-100 hover:text-orange-700"
+          }`}
         >
-          View Template →
+          {canOpenEditor ? "Edit Template →" : "View Template →"}
         </Link>
       </div>
     </div>
@@ -403,6 +439,14 @@ function TemplateCard({
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
+
+function HeaderPill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
+      {children}
+    </span>
+  );
+}
 
 function MetricCard({ label, value }: { label: string; value: number }) {
   return (
@@ -452,8 +496,8 @@ function EmptyState({
 }: {
   title: string;
   text: string;
-  actionHref?: string;
-  actionLabel?: string;
+  actionHref?: string | null;
+  actionLabel?: string | null;
 }) {
   return (
     <div className="rounded-3xl border border-dashed border-black/20 bg-white p-10 text-center shadow-sm">

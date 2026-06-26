@@ -1,18 +1,19 @@
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
-import { eq, desc } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import { departments, organisations, users } from "@/db/schema";
 
 import {
-  createDepartmentAction,
   setActiveDepartmentAction,
   assignMemberToDepartmentAction,
   deleteDepartmentAction,
   ensureRecommendedDepartmentsAction,
   clearMemberDepartmentAction,
 } from "./actions";
+
+import CreateDepartmentForm from "./CreateDepartmentForm";
 
 /* =========================================================
    TYPES
@@ -38,6 +39,12 @@ type MemberRow = {
   status: string;
   departmentId: string | null;
 };
+
+/* =========================================================
+   CONSTANTS
+========================================================= */
+
+const MAX_DEPARTMENT_TYPES = 4;
 
 /* =========================================================
    HELPERS
@@ -75,7 +82,7 @@ function formatType(value: string | null | undefined) {
 function getTypeDescription(type: DepartmentType) {
   switch (type) {
     case "generator":
-      return "Creates listings, assigns jobs and confirms completion.";
+      return "Creates listings, assigns jobs and manages generator-side work.";
 
     case "manager":
       return "Accepts manager-assigned work, assigns carriers and receives waste.";
@@ -135,6 +142,20 @@ function getDepartmentMemberCount(departmentId: string, members: MemberRow[]) {
     .length;
 }
 
+function getDuplicateDepartmentTypes(departments: DepartmentRow[]) {
+  const counts = departments.reduce<Record<string, number>>(
+    (acc, department) => {
+      acc[department.type] = (acc[department.type] ?? 0) + 1;
+      return acc;
+    },
+    {},
+  );
+
+  return Object.entries(counts)
+    .filter(([, count]) => count > 1)
+    .map(([type]) => type as DepartmentType);
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -152,6 +173,21 @@ export default async function DepartmentsSettingsPage() {
 
   const organisationId = session.user.organisationId;
   const activeDepartmentId = session.user.departmentId ?? null;
+
+  const currentUser = await database.query.users.findFirst({
+    where: and(
+      eq(users.id, session.user.id),
+      eq(users.organisationId, organisationId),
+    ),
+    columns: {
+      id: true,
+      role: true,
+      name: true,
+      email: true,
+    },
+  });
+
+  const canManageDepartments = currentUser?.role === "administrator";
 
   const organisation = await database.query.organisations.findFirst({
     where: eq(organisations.id, organisationId),
@@ -182,10 +218,26 @@ export default async function DepartmentsSettingsPage() {
   })) as MemberRow[];
 
   const recommendedTypes = getRecommendedTypes(capabilities);
-  const existingTypes = new Set(orgDepartments.map((d) => d.type));
+  const existingTypes = new Set(orgDepartments.map((department) => department.type));
+
   const missingTypes = recommendedTypes.filter(
     (type) => !existingTypes.has(type),
   );
+
+  const duplicateTypes = getDuplicateDepartmentTypes(orgDepartments);
+
+  const availableTypesToCreate = recommendedTypes.filter(
+    (type) => !existingTypes.has(type),
+  );
+
+  const hasReachedDepartmentLimit =
+    existingTypes.size >= MAX_DEPARTMENT_TYPES ||
+    orgDepartments.length >= MAX_DEPARTMENT_TYPES;
+
+  const canCreateAnotherDepartment =
+    canManageDepartments &&
+    availableTypesToCreate.length > 0 &&
+    !hasReachedDepartmentLimit;
 
   const activeDepartment =
     orgDepartments.find((department) => department.id === activeDepartmentId) ??
@@ -195,6 +247,7 @@ export default async function DepartmentsSettingsPage() {
 
   const metrics = {
     totalDepartments: orgDepartments.length,
+    uniqueDepartmentTypes: existingTypes.size,
     totalMembers: members.length,
     unassignedMembers: unassignedMembers.length,
     missingRecommended: missingTypes.length,
@@ -214,48 +267,108 @@ export default async function DepartmentsSettingsPage() {
 
             <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
               Configure department access for generator, manager, carrier and
-              compliance workflows. Your active department controls which
-              operational perspective you use across assignments, incidents and
-              audit records.
+              compliance workflows. Each organisation can only have one
+              department for each manageable department type.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
-              <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
-                Organisation: {organisation.teamName}
-              </span>
+              <HeaderPill>Organisation: {organisation.teamName}</HeaderPill>
 
-              <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-4 py-2 text-xs font-medium text-orange-300">
+              <HeaderPill>
                 Active: {activeDepartment?.name ?? "Not selected"}
+              </HeaderPill>
+
+              <HeaderPill>
+                Types: {existingTypes.size}/{MAX_DEPARTMENT_TYPES}
+              </HeaderPill>
+
+              <span
+                className={`rounded-full border px-4 py-2 text-xs font-medium ${
+                  canManageDepartments
+                    ? "border-green-400/30 bg-green-500/10 text-green-300"
+                    : "border-orange-400/30 bg-orange-500/10 text-orange-300"
+                }`}
+              >
+                {canManageDepartments ? "Administrator Access" : "View Only"}
               </span>
             </div>
           </div>
 
-          <form action={ensureRecommendedDepartmentsAction}>
-            <button
-              type="submit"
-              className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-            >
-              Create Recommended
-            </button>
-          </form>
+          {canManageDepartments && missingTypes.length > 0 ? (
+            <form action={ensureRecommendedDepartmentsAction}>
+              <button
+                type="submit"
+                className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+              >
+                Create Recommended
+              </button>
+            </form>
+          ) : canManageDepartments ? (
+            <div className="rounded-2xl border border-green-400/20 bg-green-500/10 px-5 py-4 text-sm text-green-300">
+              Recommended departments are already created.
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm text-white/60">
+              Administrator role required for changes.
+            </div>
+          )}
         </div>
       </section>
 
       {/* METRICS */}
-      <section className="grid grid-cols-1 gap-5 md:grid-cols-4">
+      <section className="grid grid-cols-1 gap-5 md:grid-cols-5">
         <MetricCard label="Departments" value={metrics.totalDepartments} />
+
+        <MetricCard
+          label="Unique Types"
+          value={metrics.uniqueDepartmentTypes}
+        />
+
         <MetricCard label="Members" value={metrics.totalMembers} />
+
         <MetricCard
           label="Unassigned"
           value={metrics.unassignedMembers}
           danger={metrics.unassignedMembers > 0}
         />
+
         <MetricCard
           label="Missing Recommended"
           value={metrics.missingRecommended}
           danger={metrics.missingRecommended > 0}
         />
       </section>
+
+      {/* DUPLICATE WARNING */}
+      {duplicateTypes.length > 0 && (
+        <section className="rounded-3xl border border-red-200 bg-red-50 p-6 shadow-sm">
+          <p className="text-sm font-semibold text-red-800">
+            Duplicate department types detected
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-red-700">
+            This organisation has more than one department for the same type:{" "}
+            <strong>{duplicateTypes.map(formatType).join(", ")}</strong>. The
+            new rules prevent this going forward. Please move members away from
+            duplicate departments and delete the extras.
+          </p>
+        </section>
+      )}
+
+      {/* VIEW ONLY NOTICE */}
+      {!canManageDepartments && (
+        <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+          <p className="text-sm font-semibold text-orange-800">
+            View-only access
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-orange-700">
+            You can review departments and member assignments, but only an
+            organisation administrator can create departments, delete
+            departments, assign members or clear department assignments.
+          </p>
+        </section>
+      )}
 
       {/* WORKFLOW NOTICE */}
       <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
@@ -264,11 +377,10 @@ export default async function DepartmentsSettingsPage() {
         </p>
 
         <p className="mt-2 text-sm leading-6 text-orange-700">
-          Manager organisations now need their own department type. This lets a
-          manager accept assigned listings, assign carriers, and receive waste
-          without being forced into generator or carrier logic. A logistics team
-          should usually be created as a <strong>Carrier / Logistics</strong>{" "}
-          department.
+          Each department type should exist once only. A generator department
+          handles listing-side work, a manager department handles waste receipt,
+          a carrier department handles collection/logistics and a compliance
+          department handles review, incidents and audit.
         </p>
       </section>
 
@@ -287,47 +399,16 @@ export default async function DepartmentsSettingsPage() {
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-black/45">
-              Create a department for the operational role this team performs.
+              Create a missing department type. You cannot create duplicate
+              department types such as two Logistics departments.
             </p>
 
-            <form action={createDepartmentAction} className="mt-6 space-y-5">
-              <div>
-                <label className="text-sm font-semibold text-black">
-                  Department Name
-                </label>
-
-                <input
-                  required
-                  name="name"
-                  placeholder="e.g. Manager Operations"
-                  className="mt-2 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-black">
-                  Department Type
-                </label>
-
-                <select
-                  required
-                  name="type"
-                  className="mt-2 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition focus:border-orange-500 focus:bg-white"
-                >
-                  <option value="generator">Generator</option>
-                  <option value="manager">Manager</option>
-                  <option value="carrier">Carrier / Logistics</option>
-                  <option value="compliance">Compliance</option>
-                </select>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-              >
-                Create Department
-              </button>
-            </form>
+            <CreateDepartmentForm
+              canManageDepartments={canManageDepartments}
+              canCreateAnotherDepartment={canCreateAnotherDepartment}
+              availableTypesToCreate={availableTypesToCreate}
+              hasReachedDepartmentLimit={hasReachedDepartmentLimit}
+            />
           </div>
 
           {/* RECOMMENDED */}
@@ -342,7 +423,7 @@ export default async function DepartmentsSettingsPage() {
 
             <p className="mt-2 text-sm leading-6 text-black/45">
               These departments are recommended from your organisation
-              capabilities.
+              capabilities. Each type should appear once.
             </p>
 
             <div className="mt-6 space-y-3">
@@ -358,6 +439,7 @@ export default async function DepartmentsSettingsPage() {
                       <p className="text-sm font-semibold text-black">
                         {formatType(type)}
                       </p>
+
                       <p className="mt-1 text-xs text-black/40">
                         {exists ? "Created" : "Missing"}
                       </p>
@@ -393,7 +475,7 @@ export default async function DepartmentsSettingsPage() {
               </h2>
 
               <p className="mt-2 text-sm leading-6 text-black/45">
-                Choose your active department or manage department records.
+                Review department records and member counts.
               </p>
             </div>
 
@@ -406,9 +488,14 @@ export default async function DepartmentsSettingsPage() {
               <div className="grid grid-cols-1 gap-5">
                 {orgDepartments.map((department) => {
                   const isActive = department.id === activeDepartmentId;
+
                   const memberCount = getDepartmentMemberCount(
                     department.id,
                     members,
+                  );
+
+                  const isDuplicateType = duplicateTypes.includes(
+                    department.type,
                   );
 
                   return (
@@ -417,6 +504,8 @@ export default async function DepartmentsSettingsPage() {
                       department={department}
                       isActive={isActive}
                       memberCount={memberCount}
+                      canManageDepartments={canManageDepartments}
+                      isDuplicateType={isDuplicateType}
                     />
                   );
                 })}
@@ -453,6 +542,7 @@ export default async function DepartmentsSettingsPage() {
                     key={member.id}
                     member={member}
                     departments={orgDepartments}
+                    canManageDepartments={canManageDepartments}
                   />
                 ))}
               </div>
@@ -472,17 +562,23 @@ function DepartmentCard({
   department,
   isActive,
   memberCount,
+  canManageDepartments,
+  isDuplicateType,
 }: {
   department: DepartmentRow;
   isActive: boolean;
   memberCount: number;
+  canManageDepartments: boolean;
+  isDuplicateType: boolean;
 }) {
   return (
     <div
       className={`rounded-3xl border p-5 ${
-        isActive
-          ? "border-orange-300 bg-orange-50"
-          : "border-black/10 bg-[#fbfaf7]"
+        isDuplicateType
+          ? "border-red-300 bg-red-50"
+          : isActive
+            ? "border-orange-300 bg-orange-50"
+            : "border-black/10 bg-[#fbfaf7]"
       }`}
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -505,6 +601,12 @@ function DepartmentCard({
                 Active
               </span>
             )}
+
+            {isDuplicateType && (
+              <span className="rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+                Duplicate Type
+              </span>
+            )}
           </div>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-black/45">
@@ -515,38 +617,46 @@ function DepartmentCard({
             <span>
               {memberCount} member{memberCount === 1 ? "" : "s"}
             </span>
+
             <span>Created {formatDate(department.createdAt)}</span>
+
             <span className="font-mono">
               ID: {department.id.slice(0, 10)}...
             </span>
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap gap-2">
-          {!isActive && (
-            <form action={setActiveDepartmentAction}>
+        {canManageDepartments ? (
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {!isActive && (
+              <form action={setActiveDepartmentAction}>
+                <input type="hidden" name="departmentId" value={department.id} />
+
+                <button
+                  type="submit"
+                  className="rounded-full bg-orange-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-orange-400"
+                >
+                  Set Active
+                </button>
+              </form>
+            )}
+
+            <form action={deleteDepartmentAction}>
               <input type="hidden" name="departmentId" value={department.id} />
 
               <button
                 type="submit"
-                className="rounded-full bg-orange-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-orange-400"
+                className="rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
               >
-                Set Active
+                Delete
               </button>
             </form>
-          )}
-
-          <form action={deleteDepartmentAction}>
-            <input type="hidden" name="departmentId" value={department.id} />
-
-            <button
-              type="submit"
-              className="rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
-            >
-              Delete
-            </button>
-          </form>
-        </div>
+          </div>
+        ) : (
+          <span className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/40">
+            View only
+          </span>
+        )}
       </div>
     </div>
   );
@@ -559,9 +669,11 @@ function DepartmentCard({
 function MemberRow({
   member,
   departments,
+  canManageDepartments,
 }: {
   member: MemberRow;
   departments: DepartmentRow[];
+  canManageDepartments: boolean;
 }) {
   const currentDepartment = departments.find(
     (department) => department.id === member.departmentId,
@@ -571,6 +683,7 @@ function MemberRow({
     <div className="grid grid-cols-12 items-center gap-4 py-5">
       <div className="col-span-12 md:col-span-4">
         <p className="font-semibold text-black">{member.name}</p>
+
         <p className="mt-1 text-sm text-black/45">{member.email}</p>
       </div>
 
@@ -597,47 +710,53 @@ function MemberRow({
       </div>
 
       <div className="col-span-12 md:col-span-4">
-        <div className="flex flex-wrap gap-2 md:justify-end">
-          <form action={assignMemberToDepartmentAction} className="flex gap-2">
-            <input type="hidden" name="memberId" value={member.id} />
-
-            <select
-              name="departmentId"
-              defaultValue={member.departmentId ?? ""}
-              className="rounded-full border border-black/10 bg-[#fbfaf7] px-4 py-2 text-sm outline-none focus:border-orange-500"
-            >
-              <option value="" disabled>
-                Select department
-              </option>
-
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>
-                  {department.name}
-                </option>
-              ))}
-            </select>
-
-            <button
-              type="submit"
-              className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-500 hover:text-black"
-            >
-              Save
-            </button>
-          </form>
-
-          {member.departmentId && (
-            <form action={clearMemberDepartmentAction}>
+        {canManageDepartments ? (
+          <div className="flex flex-wrap gap-2 md:justify-end">
+            <form action={assignMemberToDepartmentAction} className="flex gap-2">
               <input type="hidden" name="memberId" value={member.id} />
+
+              <select
+                name="departmentId"
+                defaultValue={member.departmentId ?? ""}
+                className="rounded-full border border-black/10 bg-[#fbfaf7] px-4 py-2 text-sm outline-none focus:border-orange-500"
+              >
+                <option value="" disabled>
+                  Select department
+                </option>
+
+                {departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
 
               <button
                 type="submit"
-                className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-black/55 transition hover:bg-orange-100 hover:text-orange-700"
+                className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-500 hover:text-black"
               >
-                Clear
+                Save
               </button>
             </form>
-          )}
-        </div>
+
+            {member.departmentId && (
+              <form action={clearMemberDepartmentAction}>
+                <input type="hidden" name="memberId" value={member.id} />
+
+                <button
+                  type="submit"
+                  className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-black/55 transition hover:bg-orange-100 hover:text-orange-700"
+                >
+                  Clear
+                </button>
+              </form>
+            )}
+          </div>
+        ) : (
+          <p className="text-right text-sm text-black/35">
+            Administrator role required to change member departments.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -646,6 +765,14 @@ function MemberRow({
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
+
+function HeaderPill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
+      {children}
+    </span>
+  );
+}
 
 function MetricCard({
   label,
@@ -685,6 +812,7 @@ function EmptyState({ title, text }: { title: string; text: string }) {
   return (
     <div className="rounded-3xl border border-dashed border-black/20 bg-[#fbfaf7] p-8 text-center">
       <p className="text-sm font-semibold text-black">{title}</p>
+
       <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-black/45">
         {text}
       </p>

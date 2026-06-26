@@ -1,10 +1,13 @@
 import { database } from "@/db/database";
 import { wasteListings } from "@/db/schema";
 import { desc } from "drizzle-orm";
+import { redirect } from "next/navigation";
+
 import ListingsFilters from "@/components/app/ListingsFilter";
 import ListingCard from "@/components/ListingCard";
-import { auth } from "@/auth";
+
 import { canUserAccessListing } from "@/modules/listings/core/canUserAccessListing";
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 
 /* =========================================================
    HELPERS
@@ -30,16 +33,26 @@ function formatStatus(status: string | undefined) {
 
 export default async function BrowsePage({ searchParams }: any) {
   /* =========================================================
-     AUTH
+     DEPARTMENT PERMISSION GUARD
+
+     Marketplace browsing is an operational bidding area.
+
+     This means:
+     - carrier department can access
+     - manager department can access
+     - generator department cannot access
+     - compliance department cannot access
+
+     The organisation must also have the matching capability.
   ========================================================= */
 
-  const session = await auth();
+  const context = await requireOperationalPermission("listing:bid");
 
-  if (!session?.user) {
-    throw new Error("User not authenticated");
+  const userOrganisationId = context.user.organisationId;
+
+  if (!userOrganisationId) {
+    redirect("/home/settings/organisation?reason=no-organisation");
   }
-
-  const userOrganisationId = session.user.organisationId;
 
   /* =========================================================
      FETCH
@@ -57,12 +70,14 @@ export default async function BrowsePage({ searchParams }: any) {
      that should not see them.
   ========================================================= */
 
-  let filtered = listings.filter((listing: any) =>
+  const visibleListings = listings.filter((listing: any) =>
     canUserAccessListing({
       listing,
       userOrganisationId,
     }),
   );
+
+  let filtered = visibleListings;
 
   /* =========================================================
      PARAMS
@@ -130,38 +145,18 @@ export default async function BrowsePage({ searchParams }: any) {
      METRICS
   ========================================================= */
 
-  const visibleTotal = listings.filter((listing: any) =>
-    canUserAccessListing({
-      listing,
-      userOrganisationId,
-    }),
+  const visibleTotal = visibleListings.length;
+
+  const openCount = visibleListings.filter(
+    (listing: any) => listing.status === "open",
   ).length;
 
-  const openCount = listings.filter(
-    (listing: any) =>
-      listing.status === "open" &&
-      canUserAccessListing({
-        listing,
-        userOrganisationId,
-      }),
+  const assignedCount = visibleListings.filter(
+    (listing: any) => listing.status === "assigned",
   ).length;
 
-  const assignedCount = listings.filter(
-    (listing: any) =>
-      listing.status === "assigned" &&
-      canUserAccessListing({
-        listing,
-        userOrganisationId,
-      }),
-  ).length;
-
-  const completedCount = listings.filter(
-    (listing: any) =>
-      listing.status === "completed" &&
-      canUserAccessListing({
-        listing,
-        userOrganisationId,
-      }),
+  const completedCount = visibleListings.filter(
+    (listing: any) => listing.status === "completed",
   ).length;
 
   /* =========================================================
@@ -182,9 +177,9 @@ export default async function BrowsePage({ searchParams }: any) {
               <h1 className="mt-3 text-3xl font-semibold">Browse Listings</h1>
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Discover available waste listings your organisation can access.
-                Open listings can receive bids, while assigned listings remain
-                visible for transparency where access rules allow.
+                Discover available waste listings your department is allowed to
+                access. Marketplace access is restricted to departments that can
+                participate in bidding or waste management operations.
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
@@ -197,6 +192,10 @@ export default async function BrowsePage({ searchParams }: any) {
                     Location: {location}
                   </span>
                 )}
+
+                <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-4 py-2 text-xs font-medium text-orange-300">
+                  Department: {context.department.name}
+                </span>
               </div>
             </div>
 
@@ -236,7 +235,7 @@ export default async function BrowsePage({ searchParams }: any) {
             </h2>
             <p className="mt-2 text-sm text-black/45">
               Showing {filtered.length} listing
-              {filtered.length === 1 ? "" : "s"} available to your organisation.
+              {filtered.length === 1 ? "" : "s"} available to your department.
             </p>
           </div>
         </section>
@@ -250,7 +249,7 @@ export default async function BrowsePage({ searchParams }: any) {
 
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-black/45">
               No listings matched your current filters, or your organisation
-              does not have access to any listings under this view.
+              does not have access to any marketplace listings under this view.
             </p>
           </section>
         ) : (

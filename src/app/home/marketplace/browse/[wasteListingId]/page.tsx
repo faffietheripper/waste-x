@@ -1,21 +1,37 @@
 import { auth } from "@/auth";
+import { database } from "@/db/database";
+import { users, carrierAssignments } from "@/db/schema";
+import { desc, eq } from "drizzle-orm";
+
 import PlaceBid from "@/components/app/MarketPlace/PlaceBid";
 import InternalAssignPanel from "@/components/app/Listings/InternalAssignPanel";
+import BidWinner from "@/components/app/BidWinner";
+import AssignListingButton from "@/components/app/Listings/AssignListingButton";
+
+import { Badge } from "@/components/ui/badge";
+
 import { getBidsForListing } from "@/data-access/bids";
 import { getWasteListing } from "@/data-access/wasteListings";
 import { getOrganisationById } from "@/data-access/organisations";
 import { getCarrierDepartments } from "@/data-access/departments";
+import { getWinningBid } from "@/data-access/getWinningBid";
+
 import { getImageUrl } from "@/util/files";
+import { isBidOver } from "@/util/bids";
+
 import { formatDistance } from "date-fns";
 import Image from "next/image";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { isBidOver } from "@/util/bids";
-import BidWinner from "@/components/app/BidWinner";
-import { getWinningBid } from "@/data-access/getWinningBid";
-import AssignListingButton from "@/components/app/Listings/AssignListingButton";
+import { notFound, redirect } from "next/navigation";
+
 import { canUserAccessListing } from "@/modules/listings/core/canUserAccessListing";
-import { notFound } from "next/navigation";
+
+import {
+  type Capability,
+  type DepartmentType,
+  type Permission,
+  hasOperationalPermission,
+} from "@/modules/auth/core/permissions";
 
 /* =========================================================
    HELPERS
@@ -38,6 +54,26 @@ function formatMoney(value: number | string | null | undefined) {
   }).format(Number(value));
 }
 
+function formatDepartment(type: DepartmentType | null) {
+  if (!type) return "Unknown";
+
+  if (type === "generator") return "Generator";
+  if (type === "carrier") return "Logistics";
+  if (type === "manager") return "Waste Manager";
+  if (type === "compliance") return "Compliance";
+
+  return "Department";
+}
+
+function formatLabel(value: string | null | undefined) {
+  if (!value) return "Not set";
+
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -49,17 +85,52 @@ export default async function ListingPage({ params }: any) {
     notFound();
   }
 
+  /* =========================================================
+     AUTH + OPERATIONAL CONTEXT
+  ========================================================= */
+
   const session = await auth();
 
-  if (!session?.user) {
-    throw new Error("User not authenticated");
+  if (!session?.user?.id) {
+    redirect("/login");
   }
 
-  const userOrg = session.user.organisationId;
+  const user = await database.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+    with: {
+      organisation: true,
+      department: true,
+    },
+  });
 
-  if (!userOrg) {
-    notFound();
+  if (!user?.organisationId || !user.organisation) {
+    redirect("/home/settings/organisation?reason=no-organisation");
   }
+
+  if (!user.department) {
+    redirect("/home/settings/departments?reason=no-active-department");
+  }
+
+  const userOrg = user.organisationId;
+
+  const capabilities =
+    (user.organisation.capabilities as Capability[] | null) ?? [];
+
+  const departmentType = user.department.type as DepartmentType;
+
+  function can(permission: Permission) {
+    return hasOperationalPermission({
+      capabilities,
+      departmentType,
+      permission,
+    });
+  }
+
+  const canViewListingByDepartment = can("listing:view");
+  const canBidByDepartment = can("listing:bid");
+  const canAssignBidByDepartment = can("listing:assign");
+  const canDirectAssignByDepartment = can("listing:direct_assign");
+  const canViewAssignmentByDepartment = can("assignment:view");
 
   /* =========================================================
      FETCH LISTING
@@ -72,7 +143,7 @@ export default async function ListingPage({ params }: any) {
   }
 
   /* =========================================================
-     ACCESS CONTROL
+     ORGANISATION-LEVEL LISTING VISIBILITY
   ========================================================= */
 
   if (!canUserAccessListing({ listing, userOrganisationId: userOrg })) {
@@ -80,15 +151,107 @@ export default async function ListingPage({ params }: any) {
   }
 
   /* =========================================================
+     FETCH EXISTING ASSIGNMENT
+
+     This is important.
+
+     We do not rely only on listing.assignedCarrierOrganisationId because
+     internal assignments may be represented by:
+     - assignedCarrierDepartmentId
+     - assignedAt
+     - listing.status = "assigned"
+     - carrierAssignments row
+  ========================================================= */
+
+  const [existingAssignment] = await database
+    .select({
+      id: carrierAssignments.id,
+      status: carrierAssignments.status,
+      carrierOrganisationId: carrierAssignments.carrierOrganisationId,
+      managerOrganisationId: carrierAssignments.managerOrganisationId,
+      assignedAt: carrierAssignments.assignedAt,
+    })
+    .from(carrierAssignments)
+    .where(eq(carrierAssignments.listingId, listing.id))
+    .orderBy(desc(carrierAssignments.assignedAt))
+    .limit(1);
+
+  /* =========================================================
+     ASSIGNMENT LOCK
+
+     This is the important bit.
+
+     Once any of these are true, the listing is operationally locked:
+     - assignment row exists
+     - assigned carrier org exists
+     - assigned internal department exists
+     - assignedBy exists
+     - assignedAt exists
+     - winnerBid exists
+     - listing lifecycle has moved beyond open
+  ========================================================= */
+
+  const assignedCarrierOrganisationId =
+    listing.assignedCarrierOrganisationId ?? null;
+
+  const isLockedByAssignmentRecord = Boolean(existingAssignment);
+
+  const isLockedByListingSnapshot = Boolean(
+    listing.assignedCarrierOrganisationId ||
+      listing.assignedCarrierDepartmentId ||
+      listing.assignedByOrganisationId ||
+      listing.assignedAt ||
+      listing.winnerBidId,
+  );
+
+  const isLockedByLifecycle = [
+    "assigned",
+    "in_progress",
+    "completed",
+    "cancelled",
+  ].includes(listing.status ?? "");
+
+  const isAssignmentLocked =
+    isLockedByAssignmentRecord ||
+    isLockedByListingSnapshot ||
+    isLockedByLifecycle;
+
+  const isOwner = listing.organisationId === userOrg;
+
+  const isAssignedToCurrentOrganisation =
+    assignedCarrierOrganisationId === userOrg ||
+    existingAssignment?.carrierOrganisationId === userOrg ||
+    existingAssignment?.managerOrganisationId === userOrg;
+
+  /* =========================================================
+     PAGE-LEVEL DEPARTMENT ACCESS
+  ========================================================= */
+
+  const canAccessThisPage =
+    canBidByDepartment ||
+    (isOwner && canViewListingByDepartment) ||
+    (isAssignedToCurrentOrganisation && canViewAssignmentByDepartment);
+
+  if (!canAccessThisPage) {
+    notFound();
+  }
+
+  /* =========================================================
      FETCH RELATED DATA
   ========================================================= */
+
+  const shouldLoadInternalCarriers =
+    isOwner &&
+    canDirectAssignByDepartment &&
+    listing.marketMode === "internal_only" &&
+    !isAssignmentLocked;
 
   const [organisation, bids, winningBidResult, internalCarriers] =
     await Promise.all([
       getOrganisationById(listing.organisationId),
       getBidsForListing(listing.id),
       getWinningBid(listingId),
-      getCarrierDepartments(userOrg),
+      shouldLoadInternalCarriers ? getCarrierDepartments(userOrg) : [],
     ]);
 
   const { winningBid } = winningBidResult;
@@ -98,16 +261,6 @@ export default async function ListingPage({ params }: any) {
   ========================================================= */
 
   const bidOver = await isBidOver(listing);
-
-  const isOwner = listing.organisationId === userOrg;
-
-  const assignedCarrierOrganisationId =
-    listing.assignedCarrierOrganisationId ?? null;
-
-  const isAssigned = Boolean(assignedCarrierOrganisationId);
-
-  const isAssignedToCurrentOrganisation =
-    assignedCarrierOrganisationId === userOrg;
 
   const allowedCarrierIds =
     listing.allowedCarrierIds?.split(",").filter(Boolean) ?? [];
@@ -124,20 +277,37 @@ export default async function ListingPage({ params }: any) {
     (listing.participationMode === "mixed" && isAllowedCarrier);
 
   /*
-    IMPORTANT RULE:
-    Once a listing is assigned, bidding must stop immediately.
-    This is true even when the assigned carrier has not accepted yet.
+    FINAL RULES:
+
+    - If listing is locked, nobody can bid.
+    - If listing is locked, nobody can assign/reassign.
+    - This applies to internal and external listings.
   */
+
   const canBid =
+    canBidByDepartment &&
     !isOwner &&
-    !isAssigned &&
+    !isAssignmentLocked &&
     !bidOver &&
     isBiddableMarket &&
     participationAllowsExternalCarrier;
 
-  const canAssign = isOwner && !isAssigned;
+  const canAssignBid =
+    canAssignBidByDepartment &&
+    isOwner &&
+    !isAssignmentLocked &&
+    isBiddableMarket;
 
-  const showBiddingPanel = isBiddableMarket;
+  const canAssignInternal =
+    canDirectAssignByDepartment &&
+    isOwner &&
+    !isAssignmentLocked &&
+    isInternal;
+
+  const showInternalAssignmentPanel = isInternal && isOwner;
+
+  const showBiddingPanel =
+    isBiddableMarket && (canBidByDepartment || isOwner || bids.length > 0);
 
   const fileKeys = listing.fileKey?.split(",").filter(Boolean) ?? [];
 
@@ -185,14 +355,20 @@ export default async function ListingPage({ params }: any) {
                     {listing.participationMode}
                   </Badge>
 
-                  {bidOver && (
+                  <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100">
+                    {formatDepartment(departmentType)}
+                  </Badge>
+
+                  {bidOver && !isAssignmentLocked && (
                     <Badge className="bg-red-500 text-white">
                       Bidding Closed
                     </Badge>
                   )}
 
-                  {isAssigned && (
-                    <Badge className="bg-orange-500 text-black">Assigned</Badge>
+                  {isAssignmentLocked && (
+                    <Badge className="bg-orange-500 text-black">
+                      Assignment Locked
+                    </Badge>
                   )}
                 </div>
               </div>
@@ -217,7 +393,13 @@ export default async function ListingPage({ params }: any) {
 
               <InfoCard
                 label="Status"
-                value={isAssigned ? "Assigned" : bidOver ? "Closed" : "Open"}
+                value={
+                  isAssignmentLocked
+                    ? formatLabel(listing.status ?? "assigned")
+                    : bidOver
+                      ? "Closed"
+                      : "Open"
+                }
               />
             </div>
 
@@ -233,10 +415,11 @@ export default async function ListingPage({ params }: any) {
               </div>
             )}
 
-            {isAssigned && (
-              <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
-                This listing has already been assigned. Bidding is closed while
-                the assignment is awaiting carrier action or completion.
+            {isAssignmentLocked && (
+              <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm leading-6 text-orange-800">
+                This listing has already entered the assignment workflow.
+                Bidding, internal assignment and external reassignment are now
+                locked to protect the chain-of-custody record.
               </div>
             )}
 
@@ -246,6 +429,22 @@ export default async function ListingPage({ params }: any) {
                 assignment from your operations dashboard.
               </div>
             )}
+
+            {!canBidByDepartment && !isOwner && (
+              <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                Your current department can view this record, but it cannot bid
+                on marketplace listings.
+              </div>
+            )}
+
+            {isOwner &&
+              !canAssignBidByDepartment &&
+              !canDirectAssignByDepartment && (
+                <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                  Your department can view this listing, but it cannot assign
+                  work or perform operational listing actions.
+                </div>
+              )}
           </section>
 
           {/* IMAGES */}
@@ -328,7 +527,7 @@ export default async function ListingPage({ params }: any) {
         ===================================================== */}
         <aside className="col-span-2 sticky top-32 h-fit space-y-6">
           {/* INTERNAL ASSIGNMENT */}
-          {isInternal && isOwner && (
+          {showInternalAssignmentPanel && (
             <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
               <div className="mb-5">
                 <h2 className="text-xl font-semibold text-black">
@@ -339,13 +538,15 @@ export default async function ListingPage({ params }: any) {
                 </p>
               </div>
 
-              {canAssign ? (
+              {canAssignInternal ? (
                 <InternalAssignPanel
                   listingId={listing.id}
                   carriers={internalCarriers}
                 />
-              ) : (
+              ) : isAssignmentLocked ? (
                 <AssignedNotice />
+              ) : (
+                <DepartmentBlockedNotice message="Your current department cannot directly assign internal carrier departments." />
               )}
             </section>
           )}
@@ -371,14 +572,23 @@ export default async function ListingPage({ params }: any) {
                     />
                   ) : (
                     <BidBlockedNotice
-                      isAssigned={isAssigned}
+                      isAssignmentLocked={isAssignmentLocked}
                       bidOver={bidOver}
                       isBiddableMarket={isBiddableMarket}
                       participationAllowsExternalCarrier={
                         participationAllowsExternalCarrier
                       }
+                      canBidByDepartment={canBidByDepartment}
                     />
                   )}
+                </div>
+              )}
+
+              {isOwner && isAssignmentLocked && (
+                <div className="mb-5 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                  This listing is already assigned. You can review bids for
+                  audit context, but you cannot accept another bid or reassign
+                  this listing from here.
                 </div>
               )}
 
@@ -402,7 +612,7 @@ export default async function ListingPage({ params }: any) {
                           </div>
                         </div>
 
-                        {isAssigned && (
+                        {isAssignmentLocked && (
                           <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100">
                             Locked
                           </Badge>
@@ -431,7 +641,7 @@ export default async function ListingPage({ params }: any) {
 
                       {isOwner && (
                         <div className="mt-4">
-                          {canAssign ? (
+                          {canAssignBid ? (
                             <AssignListingButton
                               listingId={listing.id}
                               bidId={bid.id}
@@ -439,10 +649,15 @@ export default async function ListingPage({ params }: any) {
                                 listing.assignedCarrierOrganisationId
                               }
                             />
-                          ) : (
+                          ) : isAssignmentLocked ? (
                             <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-800">
                               Assignment already created. Further assignment is
                               locked.
+                            </div>
+                          ) : (
+                            <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-800">
+                              Your department can review bids but cannot assign
+                              this listing.
                             </div>
                           )}
                         </div>
@@ -493,20 +708,33 @@ function AssignedNotice() {
   );
 }
 
+function DepartmentBlockedNotice({ message }: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+      {message}
+    </div>
+  );
+}
+
 function BidBlockedNotice({
-  isAssigned,
+  isAssignmentLocked,
   bidOver,
   isBiddableMarket,
   participationAllowsExternalCarrier,
+  canBidByDepartment,
 }: {
-  isAssigned: boolean;
+  isAssignmentLocked: boolean;
   bidOver: boolean;
   isBiddableMarket: boolean;
   participationAllowsExternalCarrier: boolean;
+  canBidByDepartment: boolean;
 }) {
   let message = "You cannot place a bid on this listing.";
 
-  if (isAssigned) {
+  if (!canBidByDepartment) {
+    message =
+      "Your current department is not allowed to place marketplace bids.";
+  } else if (isAssignmentLocked) {
     message =
       "This listing has already been assigned, so new bids are no longer accepted.";
   } else if (bidOver) {

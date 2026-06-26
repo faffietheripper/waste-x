@@ -1,84 +1,70 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { createTemplateAction } from "@/modules/templates/actions/templateActions";
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 
 /* =========================================================
-   TYPES
+   SERVER ACTION
 ========================================================= */
 
-type Message = {
-  type: "success" | "error";
-  text: string;
-};
+async function createTemplate(formData: FormData) {
+  "use server";
+
+  /*
+    Server-side protection.
+
+    This prevents users without template:create from bypassing the UI
+    and manually submitting a request.
+  */
+  await requireOperationalPermission("template:create");
+
+  const name = String(formData.get("name") ?? "").trim();
+
+  if (!name) {
+    redirect("/home/operations/templates/create?error=missing-name");
+  }
+
+  /*
+    Your existing createTemplateAction currently accepts only name.
+
+    If you later update it to accept description too, you can also read:
+    const description = String(formData.get("description") ?? "").trim();
+  */
+  const template = await createTemplateAction(name);
+
+  if (!template?.id) {
+    redirect("/home/operations/templates/create?error=create-failed");
+  }
+
+  redirect(`/home/operations/templates/${template.id}`);
+}
 
 /* =========================================================
    PAGE
 ========================================================= */
 
-export default function CreateTemplatePage() {
-  const router = useRouter();
+export default async function CreateTemplatePage({
+  searchParams,
+}: {
+  searchParams?: {
+    error?: string;
+  };
+}) {
+  /*
+    Page-level protection.
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<Message | null>(null);
+    Only users with template:create can access this page.
 
-  const isDisabled = loading || !name.trim();
+    Under the updated matrix:
+    - generator department can create templates
+    - manager cannot create listing templates
+    - carrier cannot create templates
+    - compliance cannot create templates
+  */
+  const context = await requireOperationalPermission("template:create");
 
-  async function handleCreate() {
-    if (loading) return;
-
-    setMessage(null);
-
-    if (!name.trim()) {
-      setMessage({
-        type: "error",
-        text: "Template name is required.",
-      });
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      /*
-        Your existing createTemplateAction currently appears to accept only name
-        and returns the raw template object.
-
-        If you later update the action to accept description too, change this to:
-        createTemplateAction({ name, description })
-      */
-      const template = await createTemplateAction(name.trim());
-
-      if (!template?.id) {
-        throw new Error("Failed to create template.");
-      }
-
-      setMessage({
-        type: "success",
-        text: "Template created successfully. Opening template builder...",
-      });
-
-      setTimeout(() => {
-        router.push(`/home/operations/templates/${template.id}`);
-      }, 500);
-    } catch (err: any) {
-      console.error("Create template error:", err);
-
-      setMessage({
-        type: "error",
-        text:
-          err?.message ||
-          "Something went wrong while creating the template. Please try again.",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }
+  const error = searchParams?.error;
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
@@ -106,6 +92,12 @@ export default function CreateTemplatePage() {
             Templates help your organisation keep listings consistent,
             audit-ready and aligned with operational requirements.
           </p>
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <HeaderPill>Organisation: {context.organisation.teamName}</HeaderPill>
+            <HeaderPill>Department: {context.department.name}</HeaderPill>
+            <HeaderPill>Permission: template:create</HeaderPill>
+          </div>
         </section>
 
         {/* GRID */}
@@ -129,22 +121,26 @@ export default function CreateTemplatePage() {
                 </p>
               </div>
 
-              {message && (
-                <div
-                  className={`mb-6 rounded-2xl border p-4 text-sm ${
-                    message.type === "success"
-                      ? "border-green-200 bg-green-50 text-green-700"
-                      : "border-red-200 bg-red-50 text-red-700"
-                  }`}
-                >
-                  {message.text}
+              {error === "missing-name" && (
+                <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  Template name is required.
                 </div>
               )}
 
-              <div className="space-y-6">
+              {error === "create-failed" && (
+                <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  Something went wrong while creating the template. Please try
+                  again.
+                </div>
+              )}
+
+              <form action={createTemplate} className="space-y-6">
                 {/* NAME */}
                 <div>
-                  <label className="text-sm font-medium text-black">
+                  <label
+                    htmlFor="name"
+                    className="text-sm font-medium text-black"
+                  >
                     Template Name <span className="text-orange-600">*</span>
                   </label>
 
@@ -154,8 +150,9 @@ export default function CreateTemplatePage() {
                   </p>
 
                   <input
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
+                    id="name"
+                    name="name"
+                    required
                     placeholder="Example: Construction Waste Collection"
                     className="mt-3 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white"
                   />
@@ -163,18 +160,21 @@ export default function CreateTemplatePage() {
 
                 {/* DESCRIPTION */}
                 <div>
-                  <label className="text-sm font-medium text-black">
+                  <label
+                    htmlFor="description"
+                    className="text-sm font-medium text-black"
+                  >
                     Description
                   </label>
 
                   <p className="mt-1 text-xs text-black/40">
-                    Optional for now. This is kept locally on this page until
-                    the create action supports saving descriptions.
+                    Optional for now. This is included in the form, but your
+                    current create action only saves the template name.
                   </p>
 
                   <textarea
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
+                    id="description"
+                    name="description"
                     placeholder="Describe what this template should be used for..."
                     rows={4}
                     className="mt-3 w-full resize-none rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-500 focus:bg-white"
@@ -189,19 +189,13 @@ export default function CreateTemplatePage() {
                   </div>
 
                   <button
-                    type="button"
-                    onClick={handleCreate}
-                    disabled={isDisabled}
-                    className={`rounded-full px-6 py-3 text-sm font-semibold transition ${
-                      isDisabled
-                        ? "cursor-not-allowed bg-black/20 text-black/40"
-                        : "bg-orange-500 text-black hover:bg-orange-400"
-                    }`}
+                    type="submit"
+                    className="rounded-full bg-orange-500 px-6 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
                   >
-                    {loading ? "Creating..." : "Create Template"}
+                    Create Template
                   </button>
                 </div>
-              </div>
+              </form>
             </div>
           </section>
 
@@ -241,6 +235,14 @@ export default function CreateTemplatePage() {
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
+
+function HeaderPill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
+      {children}
+    </span>
+  );
+}
 
 function GuidanceCard({
   label,

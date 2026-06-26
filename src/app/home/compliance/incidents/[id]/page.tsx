@@ -1,34 +1,33 @@
-import { auth } from "@/auth";
-import { redirect, notFound } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { alias } from "drizzle-orm/pg-core";
-import { eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import {
-  incidents,
+  auditEvents,
   carrierAssignments,
-  wasteListings,
+  incidents,
   organisations,
   users,
+  wasteEvents,
+  wasteListings,
 } from "@/db/schema";
 
 import IncidentResolutionForm from "@/components/app/CarrierHub/IncidentResolutionForm";
 
-/* =========================================================
-   TYPES
-========================================================= */
-
-type DepartmentType = "generator" | "carrier" | "manager" | "compliance" | null;
-
-type IncidentStatus = "open" | "under_review" | "resolved" | "rejected";
+import {
+  type DepartmentType,
+  hasOperationalPermission,
+} from "@/modules/auth/core/permissions";
+import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 
 /* =========================================================
    FORMATTERS
 ========================================================= */
 
 function formatDate(date: Date | string | null | undefined) {
-  if (!date) return "Not yet";
+  if (!date) return "Not recorded";
 
   return new Date(date).toLocaleString("en-GB", {
     day: "2-digit",
@@ -43,7 +42,10 @@ function formatLabel(value: string | null | undefined) {
   if (!value) return "Unknown";
 
   return value
-    .split("_")
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .split(" ")
+    .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
@@ -90,23 +92,55 @@ function getAssignmentStatusClass(status: string | null | undefined) {
   }
 }
 
+function getVerificationStatus({
+  verificationCode,
+  codeGeneratedAt,
+  codeUsedAt,
+}: {
+  verificationCode: string | null;
+  codeGeneratedAt: Date | null;
+  codeUsedAt: Date | null;
+}) {
+  if (codeUsedAt) return "Used";
+  if (codeGeneratedAt) return "Generated";
+  if (verificationCode) return "Present";
+  return "Missing";
+}
+
+function getVerificationClass(status: string) {
+  switch (status) {
+    case "Used":
+      return "border-green-300 bg-green-100 text-green-700";
+
+    case "Generated":
+    case "Present":
+      return "border-orange-300 bg-orange-100 text-orange-700";
+
+    case "Missing":
+      return "border-red-300 bg-red-100 text-red-700";
+
+    default:
+      return "border-gray-300 bg-gray-100 text-gray-700";
+  }
+}
+
 function getIncidentWorkflowMessage({
   status,
-  departmentType,
+  canResolve,
 }: {
   status: string;
-  departmentType: DepartmentType;
+  canResolve: boolean;
 }) {
   if (status === "open") {
-    if (departmentType === "compliance") {
-      return "This incident has been reported and needs compliance review. Investigation, corrective action and preventative measures should be recorded before resolution.";
+    if (canResolve) {
+      return "This incident has been reported and requires compliance review. Investigation findings, corrective actions, preventative measures and closure evidence should be recorded before resolution.";
     }
 
-    return "This incident has been reported and is waiting for review.";
+    return "This incident has been reported and is waiting for compliance review.";
   }
 
   if (status === "under_review") {
-    return "This incident is under review. Resolution should include findings, corrective actions, preventative measures and a compliance review note.";
+    return "This incident is under review. The record should include findings, corrective actions, preventative measures and a compliance review note before closure.";
   }
 
   if (status === "resolved") {
@@ -120,6 +154,16 @@ function getIncidentWorkflowMessage({
   return "Incident record available for review.";
 }
 
+function safeJsonPreview(value: string | null | undefined) {
+  if (!value) return "No data recorded.";
+
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -129,19 +173,25 @@ export default async function IncidentDetailPage({
 }: {
   params: { id: string };
 }) {
-  const session = await auth();
+  /* =========================================================
+     PERMISSION GUARD
 
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
+     Anyone with incident:view can view an incident if their organisation
+     is involved in the incident/assignment.
 
-  if (!session.user.organisationId) {
-    redirect("/home");
-  }
+     Only users with incident:resolve can resolve it.
+  ========================================================= */
 
-  const organisationId = session.user.organisationId;
-  const departmentType =
-    (session.user.activeDepartment?.type as DepartmentType) ?? null;
+  const context = await requireOperationalPermission("incident:view");
+
+  const organisationId = context.user.organisationId!;
+  const departmentType = context.departmentType as DepartmentType;
+
+  const canResolveByPermission = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType: context.departmentType,
+    permission: "incident:resolve",
+  });
 
   const carrierOrg = alias(organisations, "carrierOrg");
   const managerOrg = alias(organisations, "managerOrg");
@@ -149,16 +199,7 @@ export default async function IncidentDetailPage({
   const reporterOrg = alias(organisations, "reporterOrg");
   const assignedByOrg = alias(organisations, "assignedByOrg");
   const reportedByUser = alias(users, "reportedByUser");
-
-  /*
-    IMPORTANT:
-    Use leftJoin for manager/carrier organisations.
-
-    In the new flow:
-    - managerOrganisationId can exist before carrierOrganisationId
-    - carrierOrganisationId can be null until manager assigns carrier
-    - using innerJoin on carrier would hide valid records
-  */
+  const resolvedByUser = alias(users, "resolvedByUser");
 
   const [incident] = await database
     .select({
@@ -198,6 +239,10 @@ export default async function IncidentDetailPage({
       assignmentCollectedAt: carrierAssignments.collectedAt,
       assignmentCompletedAt: carrierAssignments.completedAt,
 
+      verificationCode: carrierAssignments.verificationCode,
+      codeGeneratedAt: carrierAssignments.codeGeneratedAt,
+      codeUsedAt: carrierAssignments.codeUsedAt,
+
       assignmentCarrierOrgId: carrierAssignments.carrierOrganisationId,
       assignmentManagerOrgId: carrierAssignments.managerOrganisationId,
       assignmentGeneratorOrgId: carrierAssignments.organisationId,
@@ -206,6 +251,9 @@ export default async function IncidentDetailPage({
       listingName: wasteListings.name,
       listingLocation: wasteListings.location,
       listingStatus: wasteListings.status,
+      listingMarketMode: wasteListings.marketMode,
+      listingParticipationMode: wasteListings.participationMode,
+      listingAssignedAt: wasteListings.assignedAt,
 
       carrierOrgName: carrierOrg.teamName,
       managerOrgName: managerOrg.teamName,
@@ -215,6 +263,9 @@ export default async function IncidentDetailPage({
 
       reportedByUserName: reportedByUser.name,
       reportedByUserEmail: reportedByUser.email,
+
+      resolvedByUserName: resolvedByUser.name,
+      resolvedByUserEmail: resolvedByUser.email,
     })
     .from(incidents)
     .leftJoin(
@@ -243,6 +294,7 @@ export default async function IncidentDetailPage({
       eq(incidents.reportedByOrganisationId, reporterOrg.id),
     )
     .leftJoin(reportedByUser, eq(incidents.reportedByUserId, reportedByUser.id))
+    .leftJoin(resolvedByUser, eq(incidents.resolvedByUserId, resolvedByUser.id))
     .where(eq(incidents.id, params.id));
 
   if (!incident) {
@@ -272,30 +324,52 @@ export default async function IncidentDetailPage({
   }
 
   const isResolved = incident.status === "resolved";
-
-  /*
-    Resolution authority:
-
-    For now:
-    - compliance can resolve
-    - generator can resolve
-    - manager can resolve if they are the assigned manager organisation
-
-    Carrier should report incidents, but not close them.
-  */
-
-  const isAssignedManager = incident.assignmentManagerOrgId === organisationId;
+  const isRejected = incident.status === "rejected";
 
   const canResolve =
-    !isResolved &&
-    incident.status !== "rejected" &&
-    (departmentType === "compliance" ||
-      departmentType === "generator" ||
-      (departmentType === "manager" && isAssignedManager));
+    canResolveByPermission && !isResolved && !isRejected && canAccess;
+
+  const verificationStatus = getVerificationStatus({
+    verificationCode: incident.verificationCode,
+    codeGeneratedAt: incident.codeGeneratedAt,
+    codeUsedAt: incident.codeUsedAt,
+  });
 
   const workflowMessage = getIncidentWorkflowMessage({
     status: incident.status,
-    departmentType,
+    canResolve,
+  });
+
+  /* =========================================================
+     COMPLIANCE SUPPORTING RECORDS
+  ========================================================= */
+
+  const chainEvents = await database.query.wasteEvents.findMany({
+    where: or(
+      eq(wasteEvents.carrierAssignmentId, incident.assignmentId),
+      eq(wasteEvents.listingId, incident.listingId),
+    ),
+    with: {
+      user: true,
+      listing: true,
+    },
+    orderBy: (events, { desc }) => [desc(events.createdAt)],
+  });
+
+  const auditRows = await database.query.auditEvents.findMany({
+    where: and(
+      eq(auditEvents.organisationId, organisationId),
+      or(
+        eq(auditEvents.entityId, incident.id),
+        eq(auditEvents.entityId, incident.assignmentId),
+        eq(auditEvents.entityId, String(incident.listingId)),
+      ),
+    ),
+    with: {
+      user: true,
+    },
+    orderBy: (events, { desc }) => [desc(events.createdAt)],
+    limit: 25,
   });
 
   return (
@@ -318,6 +392,15 @@ export default async function IncidentDetailPage({
           >
             View assignment →
           </Link>
+
+          <span className="text-black/20">/</span>
+
+          <Link
+            href="/home/compliance/reports/download?type=incidents"
+            className="text-sm font-medium text-black/45 transition hover:text-orange-600"
+          >
+            Download incident report →
+          </Link>
         </div>
 
         {/* HEADER */}
@@ -336,6 +419,14 @@ export default async function IncidentDetailPage({
                 {incident.listingName ?? "Unknown listing"} ·{" "}
                 {incident.listingLocation ?? "Unknown location"}
               </p>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <HeaderPill>Department: {context.department.name}</HeaderPill>
+                <HeaderPill>Permission: incident:view</HeaderPill>
+                <HeaderPill>
+                  Resolve Access: {canResolve ? "Yes" : "No"}
+                </HeaderPill>
+              </div>
             </div>
 
             <div className="flex flex-col items-end gap-2">
@@ -347,8 +438,12 @@ export default async function IncidentDetailPage({
                 {formatLabel(incident.status)}
               </span>
 
-              <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium capitalize text-white/70">
-                Department: {departmentType ?? "not selected"}
+              <span
+                className={`rounded-full border px-4 py-2 text-xs font-semibold ${getVerificationClass(
+                  verificationStatus,
+                )}`}
+              >
+                Verification: {verificationStatus}
               </span>
             </div>
           </div>
@@ -356,6 +451,17 @@ export default async function IncidentDetailPage({
           <div className="mt-6 rounded-2xl border border-orange-400/20 bg-orange-500/10 p-4 text-sm leading-6 text-orange-100">
             {workflowMessage}
           </div>
+        </section>
+
+        {/* METRICS */}
+        <section className="grid grid-cols-1 gap-5 md:grid-cols-4">
+          <MetricCard label="Incident Status" value={formatLabel(incident.status)} />
+          <MetricCard
+            label="Assignment Status"
+            value={formatLabel(incident.assignmentStatus)}
+          />
+          <MetricCard label="Chain Events" value={String(chainEvents.length)} />
+          <MetricCard label="Audit Events" value={String(auditRows.length)} />
         </section>
 
         {/* GRID */}
@@ -421,6 +527,16 @@ export default async function IncidentDetailPage({
                   label="Assignment Method"
                   value={formatLabel(incident.assignmentMethod)}
                 />
+
+                <InfoCard
+                  label="Market Mode"
+                  value={formatLabel(incident.listingMarketMode)}
+                />
+
+                <InfoCard
+                  label="Participation"
+                  value={formatLabel(incident.listingParticipationMode)}
+                />
               </div>
             </div>
 
@@ -482,19 +598,15 @@ export default async function IncidentDetailPage({
                   />
                 </div>
 
-                {incident.immediateAction && (
-                  <TextBlock
-                    label="Immediate Action"
-                    value={incident.immediateAction}
-                  />
-                )}
+                <TextBlock
+                  label="Immediate Action"
+                  value={incident.immediateAction ?? "Not recorded."}
+                />
 
-                {incident.responsiblePerson && (
-                  <InfoCard
-                    label="Responsible Person"
-                    value={incident.responsiblePerson}
-                  />
-                )}
+                <InfoCard
+                  label="Responsible Person"
+                  value={incident.responsiblePerson ?? "Not assigned"}
+                />
               </div>
             </div>
 
@@ -516,42 +628,25 @@ export default async function IncidentDetailPage({
               </div>
 
               <div className="space-y-6">
-                {incident.investigationFindings && (
-                  <TextBlock
-                    label="Investigation Findings"
-                    value={incident.investigationFindings}
-                  />
-                )}
+                <TextBlock
+                  label="Investigation Findings"
+                  value={incident.investigationFindings ?? "Not recorded."}
+                />
 
-                {incident.correctiveActions && (
-                  <TextBlock
-                    label="Corrective Actions"
-                    value={incident.correctiveActions}
-                  />
-                )}
+                <TextBlock
+                  label="Corrective Actions"
+                  value={incident.correctiveActions ?? "Not recorded."}
+                />
 
-                {incident.preventativeMeasures && (
-                  <TextBlock
-                    label="Preventative Measures"
-                    value={incident.preventativeMeasures}
-                  />
-                )}
+                <TextBlock
+                  label="Preventative Measures"
+                  value={incident.preventativeMeasures ?? "Not recorded."}
+                />
 
-                {incident.complianceReview && (
-                  <TextBlock
-                    label="Compliance Review"
-                    value={incident.complianceReview}
-                  />
-                )}
-
-                {!incident.investigationFindings &&
-                  !incident.correctiveActions &&
-                  !incident.preventativeMeasures &&
-                  !incident.complianceReview && (
-                    <div className="rounded-2xl border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-sm text-black/45">
-                      No review information has been added yet.
-                    </div>
-                  )}
+                <TextBlock
+                  label="Compliance Review"
+                  value={incident.complianceReview ?? "Not recorded."}
+                />
 
                 {isResolved && (
                   <div className="rounded-2xl border border-green-200 bg-green-50 p-5 text-sm text-green-800">
@@ -562,10 +657,14 @@ export default async function IncidentDetailPage({
                     <p className="mt-1">
                       Resolved at: {formatDate(incident.resolvedAt)}
                     </p>
+                    <p className="mt-1">
+                      Resolved by:{" "}
+                      {incident.resolvedByUserName ?? "Unknown user"}
+                    </p>
                   </div>
                 )}
 
-                {incident.status === "rejected" && (
+                {isRejected && (
                   <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5 text-sm text-gray-700">
                     <p className="font-semibold">Incident Rejected</p>
                     <p className="mt-1">
@@ -577,7 +676,138 @@ export default async function IncidentDetailPage({
               </div>
             </div>
 
-            {/* AUDIT TIMELINE */}
+            {/* CHAIN OF CUSTODY EVENTS */}
+            <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
+              <div className="mb-6">
+                <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                  Chain of Custody
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-black">
+                  Waste Event History
+                </h2>
+
+                <p className="mt-2 text-sm text-black/45">
+                  Waste events connected to this listing or assignment.
+                </p>
+              </div>
+
+              {chainEvents.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-sm text-black/45">
+                  No waste events have been recorded for this incident’s linked
+                  listing or assignment.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {chainEvents.map((event) => (
+                    <div
+                      key={event.id}
+                      className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-5"
+                    >
+                      <div className="flex items-start justify-between gap-6">
+                        <div>
+                          <p className="text-sm font-semibold text-black">
+                            {formatLabel(event.eventType)}
+                          </p>
+
+                          <p className="mt-1 text-xs text-black/45">
+                            {formatDate(event.createdAt)} · Actor role:{" "}
+                            {formatLabel(event.actorRole)}
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-black/50">
+                          {event.wasteQuantity ?? "No quantity"} recorded
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <InfoCard
+                          label="Actor Organisation"
+                          value={event.actorOrganisationId}
+                        />
+
+                        <InfoCard
+                          label="Target Organisation"
+                          value={event.targetOrganisationId ?? "Not recorded"}
+                        />
+
+                        <InfoCard
+                          label="Performed By"
+                          value={event.user?.name ?? "System"}
+                        />
+                      </div>
+
+                      {event.metadata && (
+                        <pre className="mt-4 max-h-52 overflow-auto whitespace-pre-wrap rounded-xl bg-black p-4 text-xs leading-5 text-orange-300">
+                          {safeJsonPreview(event.metadata)}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* AUDIT TRAIL */}
+            <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
+              <div className="mb-6">
+                <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                  Audit Trail
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-black">
+                  Related System Activity
+                </h2>
+
+                <p className="mt-2 text-sm text-black/45">
+                  Audit records linked to this incident, assignment or listing.
+                </p>
+              </div>
+
+              {auditRows.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-sm text-black/45">
+                  No related audit records were found.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {auditRows.map((event) => (
+                    <div
+                      key={event.id}
+                      className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-5"
+                    >
+                      <div className="flex items-start justify-between gap-6">
+                        <div>
+                          <p className="text-sm font-semibold text-black">
+                            {formatLabel(event.action)}
+                          </p>
+
+                          <p className="mt-1 text-xs text-black/45">
+                            {formatLabel(event.entityType)} ·{" "}
+                            {formatDate(event.createdAt)}
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-black/50">
+                          {event.user?.name ?? "System"}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <InfoCard label="Entity ID" value={event.entityId} />
+                        <InfoCard
+                          label="IP Address"
+                          value={event.ipAddress ?? "Not captured"}
+                        />
+                        <InfoCard label="Audit ID" value={event.id} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* TIMELINE */}
             <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
               <div className="mb-6">
                 <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
@@ -635,6 +865,41 @@ export default async function IncidentDetailPage({
 
           {/* RIGHT */}
           <aside className="col-span-2 space-y-6">
+            {/* VERIFICATION */}
+            <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+              <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                Verification
+              </p>
+
+              <h2 className="mt-2 text-lg font-semibold text-black">
+                Collection Code Status
+              </h2>
+
+              <div className="mt-5 space-y-5 text-sm">
+                <InfoCard
+                  label="Verification Status"
+                  value={verificationStatus}
+                  badgeClass={getVerificationClass(verificationStatus)}
+                />
+
+                <MetaBlock
+                  label="Code Generated At"
+                  value={formatDate(incident.codeGeneratedAt)}
+                />
+
+                <MetaBlock
+                  label="Code Used At"
+                  value={formatDate(incident.codeUsedAt)}
+                />
+
+                <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm leading-6 text-orange-800">
+                  The actual verification code is not displayed here. Compliance
+                  can confirm whether a code was generated and used without
+                  exposing the pickup code.
+                </div>
+              </div>
+            </div>
+
             {/* METADATA */}
             <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
               <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
@@ -684,6 +949,11 @@ export default async function IncidentDetailPage({
                 />
 
                 <MetaBlock
+                  label="Active Department"
+                  value={departmentType ?? "Not selected"}
+                />
+
+                <MetaBlock
                   label="Created"
                   value={formatDate(incident.createdAt)}
                 />
@@ -703,12 +973,16 @@ export default async function IncidentDetailPage({
               />
             )}
 
-            {!canResolve && !isResolved && incident.status !== "rejected" && (
+            {!canResolve && !isResolved && !isRejected && (
               <div className="rounded-3xl border border-black/10 bg-white p-6 text-sm text-black/50 shadow-sm">
                 <p className="font-semibold text-black">Awaiting review</p>
                 <p className="mt-2 leading-6">
                   This incident is not currently resolvable from your active
-                  department context.
+                  department context. Resolution requires the{" "}
+                  <span className="font-semibold text-black">
+                    incident:resolve
+                  </span>{" "}
+                  permission.
                 </p>
               </div>
             )}
@@ -743,6 +1017,20 @@ export default async function IncidentDetailPage({
                 >
                   View Listing →
                 </Link>
+
+                <Link
+                  href="/home/compliance/reports"
+                  className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
+                >
+                  View Reports →
+                </Link>
+
+                <Link
+                  href="/home/compliance/audit"
+                  className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
+                >
+                  View Audit Trail →
+                </Link>
               </div>
             </div>
           </aside>
@@ -755,6 +1043,23 @@ export default async function IncidentDetailPage({
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
+
+function HeaderPill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
+      {children}
+    </span>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
+      <p className="text-xs uppercase tracking-widest text-black/40">{label}</p>
+      <p className="mt-3 text-lg font-semibold text-black">{value}</p>
+    </div>
+  );
+}
 
 function InfoCard({
   label,
@@ -778,7 +1083,9 @@ function InfoCard({
           {value}
         </span>
       ) : (
-        <p className="mt-2 text-sm font-semibold text-black">{value}</p>
+        <p className="mt-2 break-words text-sm font-semibold text-black">
+          {value}
+        </p>
       )}
     </div>
   );

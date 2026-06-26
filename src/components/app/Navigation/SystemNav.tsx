@@ -8,11 +8,16 @@ import Image from "next/image";
 import { getProfileByUserId } from "@/data-access/profiles";
 import SignOutButton from "../SignOutButton";
 
+import {
+  type Capability,
+  type DepartmentType,
+  type Permission,
+  hasOperationalPermission,
+} from "@/modules/auth/core/permissions";
+
 /* =========================================================
    TYPES
 ========================================================= */
-
-type Capability = "generator" | "carrier" | "manager";
 
 type NavItem = {
   label: string;
@@ -48,47 +53,91 @@ function getInitials(name: string) {
     .join("");
 }
 
+function formatDepartmentType(type: DepartmentType | null) {
+  if (!type) return "Not assigned";
+
+  if (type === "generator") return "Generator";
+  if (type === "carrier") return "Logistics";
+  if (type === "manager") return "Waste Manager";
+  if (type === "compliance") return "Compliance";
+
+  return "Department";
+}
+
+function getDepartmentContextMessage(type: DepartmentType | null) {
+  if (!type) {
+    return "Assign a department to unlock operational navigation.";
+  }
+
+  if (type === "generator") {
+    return "Generator workspace: create listings, assign jobs and complete work.";
+  }
+
+  if (type === "carrier") {
+    return "Logistics workspace: manage assigned collections and incidents.";
+  }
+
+  if (type === "manager") {
+    return "Waste manager workspace: bid for handling work and manage assigned jobs.";
+  }
+
+  if (type === "compliance") {
+    return "Compliance workspace: review incidents, reports and audit records.";
+  }
+
+  return "Operational workspace.";
+}
+
 /* =========================================================
-   CAPABILITY NAV
+   OPERATIONAL NAV
 ========================================================= */
 
-function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
-  const isGenerator = capabilities.includes("generator");
-  const isCarrier = capabilities.includes("carrier");
-  const isManager = capabilities.includes("manager");
+function OperationalNav({
+  capabilities,
+  activeDepartmentType,
+  hasOrganisation,
+}: {
+  capabilities: Capability[];
+  activeDepartmentType: DepartmentType | null;
+  hasOrganisation: boolean;
+}) {
+  function can(permission: Permission) {
+    return hasOperationalPermission({
+      capabilities,
+      departmentType: activeDepartmentType,
+      permission,
+    });
+  }
 
   /*
-    Capability meaning:
+    Important model:
 
-    generator:
-      creates listings, assigns work, completes assignments
+    organisation.capabilities = what the company is allowed to do
+    activeDepartmentType = what this user is allowed to do right now
 
-    manager:
-      bids on listings, accepts manager work, assigns carrier/logistics,
-      receives waste, can use marketplace
-
-    carrier:
-      sees assigned logistics/collection jobs, accepts/rejects, verifies
-      collection
-
-    compliance:
-      not a capability on organisation, but every organisation gets compliance
-      department internally. Compliance links stay visible once the org has any
-      operational capability.
+    Example:
+    A company can have generator + carrier + manager capabilities,
+    but a compliance user still only sees compliance/audit work.
   */
 
-  const hasAnyCapability = isGenerator || isCarrier || isManager;
+  const canViewListings = can("listing:view");
+  const canCreateListings = can("listing:create");
 
-  const canUseOperations = hasAnyCapability;
-  const canUseListings = isGenerator || isManager;
-  const canUseAssignments = hasAnyCapability;
-  const canUseActiveAssignments = isCarrier || isManager || isGenerator;
-  const canUseTemplates = isGenerator || isManager;
+  const canViewTemplates = can("template:view");
+  const canCreateTemplates = can("template:create");
 
-  const canUseMarketplace = isCarrier || isManager;
-  const canUseBids = isCarrier || isManager;
+  const canViewMarketplace = can("marketplace:view");
+  const canBid = can("listing:bid");
 
-  const canUseCompliance = hasAnyCapability;
+  const canViewAssignments = can("assignment:view");
+
+  const canViewIncidents = can("incident:view");
+  const canViewComplianceReports = can("compliance:reports");
+  const canViewComplianceAudit = can("compliance:audit");
+
+  const canViewTeam = can("team:view") || hasOrganisation;
+  const canViewSupport = can("support:view") || hasOrganisation;
+  const canViewNotifications = can("notification:view") || hasOrganisation;
 
   const sections: NavSection[] = [
     {
@@ -107,27 +156,27 @@ function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
         {
           label: "My Listings",
           href: "/home/operations/listings",
-          show: canUseListings,
+          show: canViewListings || canCreateListings,
         },
         {
           label: "Assignments Overview",
           href: "/home/operations/assignments",
-          show: canUseAssignments,
+          show: canViewAssignments,
         },
         {
           label: "Active Assignments",
           href: "/home/operations/assignments/active",
-          show: canUseActiveAssignments,
+          show: canViewAssignments,
         },
         {
           label: "Completed Jobs",
           href: "/home/operations/assignments/completed",
-          show: canUseCompliance,
+          show: canViewAssignments,
         },
         {
           label: "Templates",
           href: "/home/operations/templates",
-          show: canUseTemplates,
+          show: canViewTemplates || canCreateTemplates,
         },
       ],
     },
@@ -137,12 +186,12 @@ function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
         {
           label: "Browse Listings",
           href: "/home/marketplace/browse",
-          show: canUseMarketplace,
+          show: canViewMarketplace,
         },
         {
           label: "My Bids",
           href: "/home/marketplace/bids",
-          show: canUseBids,
+          show: canBid,
         },
       ],
     },
@@ -150,9 +199,19 @@ function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
       label: "Compliance",
       items: [
         {
-          label: "Incidents",
+          label: "Incident Review",
           href: "/home/compliance/incidents",
-          show: canUseCompliance,
+          show: canViewIncidents,
+        },
+        {
+          label: "Compliance Reports",
+          href: "/home/compliance/reports",
+          show: canViewComplianceReports,
+        },
+        {
+          label: "Audit Trail",
+          href: "/home/compliance/audit",
+          show: canViewComplianceAudit,
         },
       ],
     },
@@ -162,7 +221,7 @@ function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
         {
           label: "Members",
           href: "/home/team/members",
-          show: true,
+          show: canViewTeam,
         },
         {
           label: "Organisation",
@@ -182,12 +241,12 @@ function CapabilityNav({ capabilities }: { capabilities: Capability[] }) {
         {
           label: "Notifications",
           href: "/home/notifications",
-          show: true,
+          show: canViewNotifications,
         },
         {
           label: "Support",
           href: "/home/support",
-          show: true,
+          show: canViewSupport,
         },
         {
           label: "Settings",
@@ -257,6 +316,43 @@ function CapabilityPills({ capabilities }: { capabilities: Capability[] }) {
 }
 
 /* =========================================================
+   ACTIVE DEPARTMENT PILL
+========================================================= */
+
+function ActiveDepartmentPill({
+  activeDepartment,
+}: {
+  activeDepartment: {
+    id: string;
+    name: string;
+    type: string;
+  } | null;
+}) {
+  if (!activeDepartment) {
+    return (
+      <Link
+        href="/home/settings/departments"
+        className="hidden rounded-full border border-orange-300 bg-orange-50 px-4 py-2 text-xs font-medium text-orange-700 transition hover:border-orange-400 hover:bg-orange-100 lg:block"
+      >
+        Department setup required
+      </Link>
+    );
+  }
+
+  return (
+    <Link
+      href="/home/settings/departments"
+      className="hidden rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-medium text-black/55 transition hover:border-orange-300 hover:text-orange-600 lg:block"
+    >
+      Active:{" "}
+      <span className="font-semibold capitalize text-black">
+        {activeDepartment.name}
+      </span>
+    </Link>
+  );
+}
+
+/* =========================================================
    MAIN NAV
 ========================================================= */
 
@@ -280,6 +376,13 @@ export default async function SystemNav() {
   const capabilities =
     (user?.organisation?.capabilities as Capability[] | null) ?? [];
 
+  const hasOrganisation = Boolean(user?.organisationId && user?.organisation);
+
+  const activeDepartment = user?.department ?? null;
+
+  const activeDepartmentType =
+    (activeDepartment?.type as DepartmentType | undefined) ?? null;
+
   /* =========================================================
      PROFILE
   ========================================================= */
@@ -289,8 +392,6 @@ export default async function SystemNav() {
   const fullName = profile?.fullName ?? user?.name ?? "Unknown User";
 
   const profileImage = profile?.profilePicture ?? null;
-
-  const activeDepartment = user?.department ?? null;
 
   /* =========================================================
      SUPPORT BADGE
@@ -335,17 +436,7 @@ export default async function SystemNav() {
         {/* RIGHT */}
         <div className="flex items-center gap-5">
           {/* ACTIVE DEPARTMENT */}
-          {activeDepartment && (
-            <Link
-              href="/home/settings/departments"
-              className="hidden rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-medium text-black/55 transition hover:border-orange-300 hover:text-orange-600 lg:block"
-            >
-              Active:{" "}
-              <span className="font-semibold capitalize text-black">
-                {activeDepartment.name}
-              </span>
-            </Link>
-          )}
+          <ActiveDepartmentPill activeDepartment={activeDepartment} />
 
           {/* PROFILE */}
           <Link
@@ -403,6 +494,24 @@ export default async function SystemNav() {
               <CapabilityPills capabilities={capabilities} />
             </div>
 
+            <div className="mt-4 rounded-2xl border border-black/10 bg-[#f7f3ed] p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-black/35">
+                Current Department
+              </p>
+
+              <p className="mt-2 text-sm font-semibold text-black">
+                {activeDepartment?.name ?? "No department assigned"}
+              </p>
+
+              <p className="mt-1 text-xs text-black/45">
+                {formatDepartmentType(activeDepartmentType)}
+              </p>
+
+              <p className="mt-3 text-xs leading-5 text-black/45">
+                {getDepartmentContextMessage(activeDepartmentType)}
+              </p>
+            </div>
+
             {!user?.organisationId && (
               <Link
                 href="/home/settings/organisation?reason=no-organisation"
@@ -411,10 +520,23 @@ export default async function SystemNav() {
                 Create Organisation →
               </Link>
             )}
+
+            {user?.organisationId && !activeDepartment && (
+              <Link
+                href="/home/settings/departments?reason=no-active-department"
+                className="mt-5 inline-flex rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
+              >
+                Assign Department →
+              </Link>
+            )}
           </section>
 
           {/* NAV */}
-          <CapabilityNav capabilities={capabilities} />
+          <OperationalNav
+            capabilities={capabilities}
+            activeDepartmentType={activeDepartmentType}
+            hasOrganisation={hasOrganisation}
+          />
 
           {/* FOOTER CONTEXT */}
           <section className="mt-auto pt-8">

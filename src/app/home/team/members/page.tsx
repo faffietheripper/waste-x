@@ -27,10 +27,11 @@ export default async function MembersPage() {
   const invited = allUsers.filter((u) => u.status === "INVITED");
 
   return (
-    <MembersClient
-      members={members}
-      invited={invited}
-      departments={orgDepartments}
-    />
+   <MembersClient
+  members={members}
+  invited={invited}
+  departments={orgDepartments}
+  canInviteMembers={session.user.role === "administrator"}
+/>
   );
 }
