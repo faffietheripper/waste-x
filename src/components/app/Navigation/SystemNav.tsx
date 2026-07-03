@@ -70,19 +70,19 @@ function getDepartmentContextMessage(type: DepartmentType | null) {
   }
 
   if (type === "generator") {
-    return "Generator workspace: create listings, assign jobs and complete work.";
+    return "Generator workspace: create listings, assign jobs and manage pre-collection work.";
   }
 
   if (type === "carrier") {
-    return "Logistics workspace: manage assigned collections and incidents.";
+    return "Logistics workspace: manage assigned collections, verification and incidents.";
   }
 
   if (type === "manager") {
-    return "Waste manager workspace: bid for handling work and manage assigned jobs.";
+    return "Waste manager workspace: bid for handling work, receive waste and manage intake records.";
   }
 
   if (type === "compliance") {
-    return "Compliance workspace: review incidents, reports and audit records.";
+    return "Compliance workspace: review incidents, audit trails, reports and Digital Waste Tracking records.";
   }
 
   return "Operational workspace.";
@@ -112,29 +112,55 @@ function OperationalNav({
   /*
     Important model:
 
-    organisation.capabilities = what the company is allowed to do
+    organisation.capabilities = what the company is allowed to do overall
     activeDepartmentType = what this user is allowed to do right now
 
     Example:
     A company can have generator + carrier + manager capabilities,
-    but a compliance user still only sees compliance/audit work.
+    but a compliance user still only sees compliance/audit/DWT work.
   */
 
+  /* Listings */
   const canViewListings = can("listing:view");
   const canCreateListings = can("listing:create");
 
+  /* Templates */
   const canViewTemplates = can("template:view");
   const canCreateTemplates = can("template:create");
 
+  /* Marketplace */
   const canViewMarketplace = can("marketplace:view");
   const canBid = can("listing:bid");
 
+  /* Assignments */
   const canViewAssignments = can("assignment:view");
 
+  /* Receiving / intake */
+  const canViewReceiving = can("receiving:view");
+  const canCreateReceiving = can("receiving:create");
+  const canSubmitReceiving = can("receiving:submit");
+
+  /* Digital Waste Tracking */
+  const canViewDigitalWasteTracking = can("dwt:view");
+  const canSubmitDigitalWasteTracking = can("dwt:submit_receive_movement");
+  const canUpdateDigitalWasteTracking = can("dwt:update_receive_movement");
+  const canViewDwtReferenceData = can("dwt:reference_data:view");
+  const canSyncDwtReferenceData = can("dwt:reference_data:sync");
+
+  const canAccessDwtArea =
+    canViewDigitalWasteTracking ||
+    canSubmitDigitalWasteTracking ||
+    canUpdateDigitalWasteTracking ||
+    canViewDwtReferenceData ||
+    canSyncDwtReferenceData;
+
+  /* Incidents / Compliance */
   const canViewIncidents = can("incident:view");
+  const canViewCompliance = can("compliance:view");
   const canViewComplianceReports = can("compliance:reports");
   const canViewComplianceAudit = can("compliance:audit");
 
+  /* Shared */
   const canViewTeam = can("team:view") || hasOrganisation;
   const canViewSupport = can("support:view") || hasOrganisation;
   const canViewNotifications = can("notification:view") || hasOrganisation;
@@ -181,6 +207,29 @@ function OperationalNav({
       ],
     },
     {
+      label: "Receiving",
+      items: [
+        {
+          label: "Intake Queue",
+          href: "/home/receiving/intake",
+          show: canViewReceiving,
+        },
+        {
+          label: "New Intake",
+          href: "/home/receiving/intake/new",
+          show: canCreateReceiving,
+        },
+        {
+          label: "DWT Submissions",
+          href: "/home/receiving/submissions",
+          show:
+            canViewReceiving ||
+            canSubmitReceiving ||
+            canAccessDwtArea,
+        },
+      ],
+    },
+    {
       label: "Marketplace",
       items: [
         {
@@ -198,6 +247,11 @@ function OperationalNav({
     {
       label: "Compliance",
       items: [
+        {
+          label: "Digital Waste Tracking",
+          href: "/home/compliance/digital-waste-tracking",
+          show: canAccessDwtArea,
+        },
         {
           label: "Incident Review",
           href: "/home/compliance/incidents",

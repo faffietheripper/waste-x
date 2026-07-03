@@ -8,6 +8,7 @@ import {
   serial,
   uniqueIndex,
   index,
+  numeric,
 } from "drizzle-orm/pg-core";
 import type { AdapterAccount } from "next-auth/adapters";
 import { ChainOfCustodyType } from "@/util/types";
@@ -699,6 +700,449 @@ export const incidents = pgTable(
   }),
 );
 
+/* =========================================================
+   DIGITAL WASTE TRACKING - ORGANISATION SETTINGS
+========================================================= */
+
+export const wasteTrackingOrganisationSettings = pgTable(
+  "bb_waste_tracking_organisation_setting",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    /*
+      This is the receiving organisation API code issued through
+      the Waste Tracking Service registration/test programme.
+      Do not store API secrets here.
+    */
+    apiCode: text("apiCode"),
+
+    environment: text("environment")
+      .$type<"test" | "production">()
+      .notNull()
+      .default("test"),
+
+    isEnabled: boolean("isEnabled").notNull().default(false),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgUnique: uniqueIndex("waste_tracking_org_setting_org_unique").on(
+      table.organisationId,
+    ),
+    orgIdx: index("waste_tracking_org_setting_org_idx").on(
+      table.organisationId,
+    ),
+    environmentIdx: index("waste_tracking_org_setting_environment_idx").on(
+      table.environment,
+    ),
+  }),
+);
+
+/* =========================================================
+   DIGITAL WASTE TRACKING - REFERENCE DATA CACHE
+========================================================= */
+
+export const wasteTrackingReferenceData = pgTable(
+  "bb_waste_tracking_reference_data",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    type: text("type")
+      .$type<
+        | "ewc_codes"
+        | "hazardous_property_codes"
+        | "disposal_or_recovery_codes"
+        | "container_types"
+        | "pop_names"
+      >()
+      .notNull(),
+
+    code: text("code").notNull(),
+
+    description: text("description"),
+
+    /*
+      Used mainly for EWC codes.
+      Example:
+      170904 = non-hazardous
+      170903 = hazardous
+    */
+    isHazardous: boolean("isHazardous"),
+
+    /*
+      Keep flexible reference fields here as a JSON string.
+      Examples:
+      - EWC chapter/subChapter/entryTypeDesc
+      - POP chemicalName
+      - disposal/recovery isNotRecoveryToFinalProduct
+      - hazardous shortDesc/longDesc
+    */
+    metadata: text("metadata"),
+
+    environment: text("environment")
+      .$type<"test" | "production">()
+      .notNull()
+      .default("test"),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    syncedAt: timestamp("syncedAt", { mode: "date" }).defaultNow(),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    typeCodeEnvironmentUnique: uniqueIndex(
+      "waste_tracking_reference_type_code_env_unique",
+    ).on(table.type, table.code, table.environment),
+
+    typeIdx: index("waste_tracking_reference_type_idx").on(table.type),
+    codeIdx: index("waste_tracking_reference_code_idx").on(table.code),
+    environmentIdx: index("waste_tracking_reference_environment_idx").on(
+      table.environment,
+    ),
+  }),
+);
+
+/* =========================================================
+   WASTE RECEIPTS
+   Receiver-confirmed intake record before/alongside Defra submission.
+========================================================= */
+
+export const wasteReceipts = pgTable(
+  "bb_waste_receipt",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    /*
+      Tenant organisation context.
+      For manager/receiver workflows, this is usually the manager organisation.
+    */
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    assignmentId: text("assignmentId")
+      .notNull()
+      .references(() => carrierAssignments.id, { onDelete: "cascade" }),
+
+    listingId: integer("listingId")
+      .notNull()
+      .references(() => wasteListings.id, { onDelete: "cascade" }),
+
+    receivedByUserId: text("receivedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    carrierOrganisationId: text("carrierOrganisationId").references(
+      () => organisations.id,
+      { onDelete: "set null" },
+    ),
+
+    receiverOrganisationId: text("receiverOrganisationId").references(
+      () => organisations.id,
+      { onDelete: "set null" },
+    ),
+
+    receivedAt: timestamp("receivedAt", { mode: "date" }),
+
+    status: text("status")
+      .$type<"draft" | "confirmed" | "submitted">()
+      .notNull()
+      .default("draft"),
+
+    /*
+      Movement-level compliance fields.
+    */
+    hazardousWasteConsignmentCode: text("hazardousWasteConsignmentCode"),
+
+    reasonForNoConsignmentCode: text("reasonForNoConsignmentCode").$type<
+      "NON_HAZ_WASTE_TRANSFER" | "NO_DOC_WITH_WASTE" | "HWRC_RECEIPT"
+    >(),
+
+    yourUniqueReference: text("yourUniqueReference"),
+
+    /*
+      JSON string array:
+      [{ label: "PO Number", reference: "PO-12345" }]
+    */
+    otherReferencesForMovement: text("otherReferencesForMovement"),
+
+    specialHandlingRequirements: text("specialHandlingRequirements"),
+
+    /*
+      Carrier snapshot at receipt time.
+      This protects the audit record if organisation details change later.
+    */
+    carrierRegistrationNumber: text("carrierRegistrationNumber"),
+
+    carrierReasonForNoRegistrationNumber: text(
+      "carrierReasonForNoRegistrationNumber",
+    ).$type<"ON_SITE" | "HOUSEHOLD" | "ONE_OFF" | "MARINE">(),
+
+    carrierOrganisationName: text("carrierOrganisationName"),
+    carrierFullAddress: text("carrierFullAddress"),
+    carrierPostcode: text("carrierPostcode"),
+    carrierEmailAddress: text("carrierEmailAddress"),
+    carrierPhoneNumber: text("carrierPhoneNumber"),
+    carrierVehicleRegistration: text("carrierVehicleRegistration"),
+
+    carrierMeansOfTransport: text("carrierMeansOfTransport").$type<
+      | "Road"
+      | "Rail"
+      | "Air"
+      | "Sea"
+      | "Inland Waterway"
+      | "Piped"
+      | "Other"
+    >(),
+
+    /*
+      Receiver/site snapshot at receipt time.
+    */
+    receiverSiteName: text("receiverSiteName"),
+    receiverEmailAddress: text("receiverEmailAddress"),
+    receiverPhoneNumber: text("receiverPhoneNumber"),
+    receiverAuthorisationNumber: text("receiverAuthorisationNumber"),
+
+    /*
+      JSON string integer array:
+      [343, 456, 789]
+    */
+    receiverRegulatoryPositionStatements: text(
+      "receiverRegulatoryPositionStatements",
+    ),
+
+    receiptFullAddress: text("receiptFullAddress"),
+    receiptPostcode: text("receiptPostcode"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("waste_receipt_org_idx").on(table.organisationId),
+    assignmentIdx: index("waste_receipt_assignment_idx").on(
+      table.assignmentId,
+    ),
+    listingIdx: index("waste_receipt_listing_idx").on(table.listingId),
+    statusIdx: index("waste_receipt_status_idx").on(table.status),
+    receivedAtIdx: index("waste_receipt_received_at_idx").on(table.receivedAt),
+  }),
+);
+
+/* =========================================================
+   WASTE RECEIPT ITEMS
+   Actual received waste items confirmed by the manager/receiver.
+========================================================= */
+
+export const wasteReceiptItems = pgTable(
+  "bb_waste_receipt_item",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    receiptId: text("receiptId")
+      .notNull()
+      .references(() => wasteReceipts.id, { onDelete: "cascade" }),
+
+    /*
+      JSON string array of EWC codes:
+      ["170904", "150109"]
+    */
+    ewcCodes: text("ewcCodes").notNull(),
+
+    wasteDescription: text("wasteDescription").notNull(),
+
+    physicalForm: text("physicalForm")
+      .$type<"Gas" | "Liquid" | "Solid" | "Powder" | "Sludge" | "Mixed">()
+      .notNull(),
+
+    numberOfContainers: integer("numberOfContainers").notNull(),
+
+    typeOfContainers: text("typeOfContainers").notNull(),
+
+    weightMetric: text("weightMetric")
+      .$type<"Grams" | "Kilograms" | "Tonnes">()
+      .notNull(),
+
+    weightAmount: numeric("weightAmount", {
+      precision: 14,
+      scale: 3,
+    }).notNull(),
+
+    weightIsEstimate: boolean("weightIsEstimate").notNull().default(false),
+
+    containsPops: boolean("containsPops").notNull().default(false),
+
+    popsSourceOfComponents: text("popsSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+
+    /*
+      JSON string array:
+      [{ code: "PFHXS", concentration: 12.5 }]
+    */
+    popsComponents: text("popsComponents"),
+
+    containsHazardous: boolean("containsHazardous")
+      .notNull()
+      .default(false),
+
+    hazardousSourceOfComponents: text("hazardousSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+
+    /*
+      JSON string array:
+      ["HP_5", "HP_10"]
+    */
+    hazardousHazCodes: text("hazardousHazCodes"),
+
+    /*
+      JSON string array:
+      [{ name: "lead", concentration: 25.5 }]
+    */
+    hazardousComponents: text("hazardousComponents"),
+
+    /*
+      JSON string array:
+      [
+        {
+          code: "R1",
+          weight: {
+            metric: "Tonnes",
+            amount: 1.2,
+            isEstimate: false
+          }
+        }
+      ]
+    */
+    disposalOrRecoveryCodes: text("disposalOrRecoveryCodes"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("waste_receipt_item_org_idx").on(table.organisationId),
+    receiptIdx: index("waste_receipt_item_receipt_idx").on(table.receiptId),
+  }),
+);
+
+/* =========================================================
+   DIGITAL WASTE TRACKING SUBMISSIONS
+
+   Formal audit trail of requests/responses sent to Defra.
+========================================================= */
+
+export const wasteTrackingSubmissions = pgTable(
+  "bb_waste_tracking_submission",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    assignmentId: text("assignmentId")
+      .notNull()
+      .references(() => carrierAssignments.id, { onDelete: "cascade" }),
+
+    listingId: integer("listingId").references(() => wasteListings.id, {
+      onDelete: "set null",
+    }),
+
+    receiptId: text("receiptId").references(() => wasteReceipts.id, {
+      onDelete: "set null",
+    }),
+
+    submittedByUserId: text("submittedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    wasteTrackingId: text("wasteTrackingId"),
+
+    submissionType: text("submissionType")
+      .$type<"receive">()
+      .notNull()
+      .default("receive"),
+
+    status: text("status")
+      .$type<
+        | "draft"
+        | "submitted"
+        | "accepted"
+        | "accepted_with_warnings"
+        | "rejected"
+        | "failed"
+      >()
+      .notNull()
+      .default("draft"),
+
+    method: text("method").$type<"POST" | "PUT">().notNull(),
+
+    endpoint: text("endpoint").notNull(),
+
+    /*
+      JSON string of the exact payload submitted.
+      Keep this as text to stay consistent with your current schema style.
+    */
+    payloadSnapshot: text("payloadSnapshot").notNull(),
+
+    /*
+      JSON string of the exact response returned by Defra.
+    */
+    responseSnapshot: text("responseSnapshot"),
+
+    /*
+      JSON string arrays from Defra validation response.
+    */
+    validationWarnings: text("validationWarnings"),
+    validationErrors: text("validationErrors"),
+
+    submittedAt: timestamp("submittedAt", { mode: "date" }),
+    lastAttemptedAt: timestamp("lastAttemptedAt", { mode: "date" }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("waste_tracking_submission_org_idx").on(
+      table.organisationId,
+    ),
+    assignmentIdx: index("waste_tracking_submission_assignment_idx").on(
+      table.assignmentId,
+    ),
+    listingIdx: index("waste_tracking_submission_listing_idx").on(
+      table.listingId,
+    ),
+    receiptIdx: index("waste_tracking_submission_receipt_idx").on(
+      table.receiptId,
+    ),
+    wasteTrackingIdIdx: index("waste_tracking_submission_tracking_id_idx").on(
+      table.wasteTrackingId,
+    ),
+    statusIdx: index("waste_tracking_submission_status_idx").on(table.status),
+  }),
+);
+
+
 export const notifications = pgTable(
   "bb_notification",
   {
@@ -1128,6 +1572,10 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   }),
 
   reviewsWritten: many(reviews),
+
+  wasteReceiptsReceived: many(wasteReceipts),
+
+  wasteTrackingSubmissionsSubmitted: many(wasteTrackingSubmissions),
 }));
 
 /* ================= USER PROFILES ================= */
@@ -1141,35 +1589,58 @@ export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
 
 /* ================= ORGANISATIONS ================= */
 
-/* ================= ORGANISATIONS ================= */
+export const organisationsRelations = relations(
+  organisations,
+  ({ one, many }) => ({
+    members: many(users),
 
-export const organisationsRelations = relations(organisations, ({ many }) => ({
-  members: many(users),
+    listings: many(wasteListings, {
+      relationName: "ownerOrganisation",
+    }),
 
-  listings: many(wasteListings, {
-    relationName: "ownerOrganisation",
+    bids: many(bids),
+
+    carrierAssignmentsReceived: many(carrierAssignments, {
+      relationName: "carrierOrganisation",
+    }),
+
+    managerAssignmentsReceived: many(carrierAssignments, {
+      relationName: "managerOrganisation",
+    }),
+
+    assignmentsCreated: many(carrierAssignments, {
+      relationName: "assignedByOrganisation",
+    }),
+
+    departments: many(departments),
+
+    reviews: many(reviews),
+    subscriptions: many(organisationSubscriptions),
+    invoices: many(invoices),
+
+    wasteTrackingSettings: one(wasteTrackingOrganisationSettings, {
+      fields: [organisations.id],
+      references: [wasteTrackingOrganisationSettings.organisationId],
+    }),
+
+    wasteReceipts: many(wasteReceipts, {
+      relationName: "wasteReceiptTenantOrganisation",
+    }),
+
+    carrierWasteReceipts: many(wasteReceipts, {
+      relationName: "wasteReceiptCarrierOrganisation",
+    }),
+
+    receiverWasteReceipts: many(wasteReceipts, {
+      relationName: "wasteReceiptReceiverOrganisation",
+    }),
+
+    wasteReceiptItems: many(wasteReceiptItems),
+
+    wasteTrackingSubmissions: many(wasteTrackingSubmissions),
   }),
+);
 
-  bids: many(bids),
-
-  carrierAssignmentsReceived: many(carrierAssignments, {
-    relationName: "carrierOrganisation",
-  }),
-
-  managerAssignmentsReceived: many(carrierAssignments, {
-    relationName: "managerOrganisation",
-  }),
-
-  assignmentsCreated: many(carrierAssignments, {
-    relationName: "assignedByOrganisation",
-  }),
-
-  departments: many(departments),
-
-  reviews: many(reviews),
-  subscriptions: many(organisationSubscriptions),
-  invoices: many(invoices),
-}));
 /* ================= WASTE LISTINGS ================= */
 
 export const wasteListingsRelations = relations(
@@ -1197,8 +1668,13 @@ export const wasteListingsRelations = relations(
     reviews: many(reviews),
 
     templateData: many(listingTemplateData),
+
+    wasteReceipts: many(wasteReceipts),
+
+    wasteTrackingSubmissions: many(wasteTrackingSubmissions),
   }),
 );
+
 /* ================= BIDS ================= */
 
 export const bidsRelations = relations(bids, ({ one }) => ({
@@ -1257,6 +1733,10 @@ export const carrierAssignmentsRelations = relations(
     }),
 
     incidents: many(incidents),
+
+    wasteReceipts: many(wasteReceipts),
+
+    wasteTrackingSubmissions: many(wasteTrackingSubmissions),
   }),
 );
 /* ================= INCIDENTS ================= */
@@ -1432,3 +1912,115 @@ export const departmentsRelations = relations(departments, ({ one, many }) => ({
 
   members: many(users),
 }));
+
+/* ================= DIGITAL WASTE TRACKING SETTINGS ================= */
+
+export const wasteTrackingOrganisationSettingsRelations = relations(
+  wasteTrackingOrganisationSettings,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [wasteTrackingOrganisationSettings.organisationId],
+      references: [organisations.id],
+    }),
+  }),
+);
+
+/* ================= DIGITAL WASTE TRACKING REFERENCE DATA ================= */
+
+export const wasteTrackingReferenceDataRelations = relations(
+  wasteTrackingReferenceData,
+  () => ({}),
+);
+
+/* ================= WASTE RECEIPTS ================= */
+
+export const wasteReceiptsRelations = relations(
+  wasteReceipts,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      relationName: "wasteReceiptTenantOrganisation",
+      fields: [wasteReceipts.organisationId],
+      references: [organisations.id],
+    }),
+
+    assignment: one(carrierAssignments, {
+      fields: [wasteReceipts.assignmentId],
+      references: [carrierAssignments.id],
+    }),
+
+    listing: one(wasteListings, {
+      fields: [wasteReceipts.listingId],
+      references: [wasteListings.id],
+    }),
+
+    receivedByUser: one(users, {
+      fields: [wasteReceipts.receivedByUserId],
+      references: [users.id],
+    }),
+
+    carrierOrganisation: one(organisations, {
+      relationName: "wasteReceiptCarrierOrganisation",
+      fields: [wasteReceipts.carrierOrganisationId],
+      references: [organisations.id],
+    }),
+
+    receiverOrganisation: one(organisations, {
+      relationName: "wasteReceiptReceiverOrganisation",
+      fields: [wasteReceipts.receiverOrganisationId],
+      references: [organisations.id],
+    }),
+
+    items: many(wasteReceiptItems),
+
+    submissions: many(wasteTrackingSubmissions),
+  }),
+);
+
+/* ================= WASTE RECEIPT ITEMS ================= */
+
+export const wasteReceiptItemsRelations = relations(
+  wasteReceiptItems,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [wasteReceiptItems.organisationId],
+      references: [organisations.id],
+    }),
+
+    receipt: one(wasteReceipts, {
+      fields: [wasteReceiptItems.receiptId],
+      references: [wasteReceipts.id],
+    }),
+  }),
+);
+
+/* ================= DIGITAL WASTE TRACKING SUBMISSIONS ================= */
+
+export const wasteTrackingSubmissionsRelations = relations(
+  wasteTrackingSubmissions,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [wasteTrackingSubmissions.organisationId],
+      references: [organisations.id],
+    }),
+
+    assignment: one(carrierAssignments, {
+      fields: [wasteTrackingSubmissions.assignmentId],
+      references: [carrierAssignments.id],
+    }),
+
+    listing: one(wasteListings, {
+      fields: [wasteTrackingSubmissions.listingId],
+      references: [wasteListings.id],
+    }),
+
+    receipt: one(wasteReceipts, {
+      fields: [wasteTrackingSubmissions.receiptId],
+      references: [wasteReceipts.id],
+    }),
+
+    submittedByUser: one(users, {
+      fields: [wasteTrackingSubmissions.submittedByUserId],
+      references: [users.id],
+    }),
+  }),
+);

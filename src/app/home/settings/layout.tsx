@@ -12,6 +12,7 @@ type SettingsNavItem = {
   href: string;
   description: string;
   icon: React.ReactNode;
+  featured?: boolean;
 };
 
 /* =========================================================
@@ -44,6 +45,13 @@ const settingsNavItems: SettingsNavItem[] = [
     icon: <DepartmentsIcon />,
   },
   {
+    label: "Digital Waste Tracking",
+    href: "/home/settings/digital-waste-tracking",
+    description: "Receiver API code",
+    icon: <DigitalWasteTrackingIcon />,
+    featured: true,
+  },
+  {
     label: "Billing",
     href: "/home/settings/billing",
     description: "Plan and payments",
@@ -73,7 +81,7 @@ export default async function SettingsLayout({
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] pl-[24vw]">
+    <main className="min-h-screen bg-[#f7f3ed] pl-[22vw]">
       {/* SETTINGS HEADER BAR */}
       <section className="sticky top-[13vh] z-30 border-b border-black/10 bg-[#f7f3ed]/95 px-10 py-5 backdrop-blur">
         <div className="flex items-center justify-between gap-8">
@@ -82,44 +90,64 @@ export default async function SettingsLayout({
               Waste X Settings
             </p>
 
-            <h1 className="mt-1 text-2xl font-semibold text-black">Settings</h1>
+            <h1 className="mt-1 text-2xl font-semibold text-black">
+              Settings
+            </h1>
           </div>
 
           <div className="hidden rounded-full bg-black px-4 py-2 text-xs font-medium text-orange-400 lg:block">
-            Account controls and organisation setup
+            Account controls, organisation setup and compliance configuration
           </div>
         </div>
 
         {/* HORIZONTAL NAV */}
-        <nav className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          {settingsNavItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="group rounded-2xl border border-black/10 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-md"
-            >
-              <div className="flex items-start gap-3">
-                <div className="rounded-xl border border-black/10 bg-[#fbfaf7] p-2 text-black/55 transition group-hover:border-orange-300 group-hover:bg-orange-50 group-hover:text-orange-600">
+        <nav className="mt-5 overflow-x-auto pb-2 py-10">
+          <div className="flex gap-3">
+            {settingsNavItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`group flex shrink-0 items-center gap-3 rounded-2xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                  item.featured
+                    ? "w-[270px] border-orange-200 bg-orange-50 hover:border-orange-400"
+                    : "w-[190px] border-black/10 bg-white hover:border-orange-300"
+                }`}
+              >
+                <div
+                  className={`flex size-10 shrink-0 items-center justify-center rounded-xl border transition ${
+                    item.featured
+                      ? "border-orange-200 bg-white text-orange-600 group-hover:border-orange-400 group-hover:bg-orange-100"
+                      : "border-black/10 bg-[#fbfaf7] text-black/55 group-hover:border-orange-300 group-hover:bg-orange-50 group-hover:text-orange-600"
+                  }`}
+                >
                   {item.icon}
                 </div>
 
-                <div>
-                  <p className="text-sm font-semibold text-black">
-                    {item.label}
-                  </p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-black">
+                      {item.label}
+                    </p>
 
-                  <p className="mt-1 text-xs text-black/40">
+                    {item.featured && (
+                      <span className="shrink-0 rounded-full bg-black px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-400">
+                        DWT
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="mt-1 truncate text-xs text-black/40">
                     {item.description}
                   </p>
                 </div>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            ))}
+          </div>
         </nav>
       </section>
 
       {/* PAGE CONTENT */}
-      <section className="px-10 py-10 mt-32">{children}</section>
+      <section className="mt-32 px-10 py-10">{children}</section>
     </main>
   );
 }
@@ -204,6 +232,30 @@ function DepartmentsIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M6.75 7.5h10.5M6.75 12h10.5M6.75 16.5h10.5M3.75 5.25A2.25 2.25 0 0 1 6 3h12a2.25 2.25 0 0 1 2.25 2.25v13.5A2.25 2.25 0 0 1 18 21H6a2.25 2.25 0 0 1-2.25-2.25V5.25Z"
+      />
+    </svg>
+  );
+}
+
+function DigitalWasteTrackingIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="size-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth="1.7"
+      stroke="currentColor"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 12.75 11.25 15 15 9.75"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 3.75 5.25 6.75v5.25c0 4.125 2.7 7.95 6.75 9 4.05-1.05 6.75-4.875 6.75-9V6.75L12 3.75Z"
       />
     </svg>
   );

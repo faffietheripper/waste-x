@@ -2,15 +2,19 @@ import { database } from "@/db/database";
 import { carrierAssignments, incidents, wasteListings } from "@/db/schema";
 import { and, eq, ne } from "drizzle-orm";
 
+type DepartmentType = "generator" | "manager" | "carrier" | "compliance";
+
 type ReceiveWasteInput = {
   assignmentId: string;
   organisationId: string;
+  departmentType: DepartmentType;
   verificationCode: string;
 };
 
 export async function receiveWaste({
   assignmentId,
   organisationId,
+  departmentType,
   verificationCode,
 }: ReceiveWasteInput) {
   const assignment = await database.query.carrierAssignments.findFirst({
@@ -24,12 +28,31 @@ export async function receiveWaste({
     };
   }
 
-  const isManager = assignment.managerOrganisationId === organisationId;
+  /*
+    Simpler internal + external manager rule:
 
-  if (!isManager) {
+    A user can confirm receipt if:
+    - they are using the manager department
+    - their organisation is involved in the assignment
+    - they have already passed assignment:receive_waste permission
+    - the correct verification code is entered
+
+    We do NOT require managerOrganisationId to be populated.
+    This is important for internal assignments.
+  */
+  const organisationIsInAssignment =
+    assignment.organisationId === organisationId ||
+    assignment.assignedByOrganisationId === organisationId ||
+    assignment.managerOrganisationId === organisationId ||
+    assignment.carrierOrganisationId === organisationId;
+
+  const isManagerDepartment = departmentType === "manager";
+
+  if (!isManagerDepartment || !organisationIsInAssignment) {
     return {
       success: false,
-      message: "Only the assigned manager can confirm waste receipt.",
+      message:
+        "Only a manager department user from an involved organisation can confirm waste receipt.",
     };
   }
 
@@ -40,6 +63,24 @@ export async function receiveWaste({
     };
   }
 
+  /*
+    The carrier should have verified collection before manager receipt.
+    For older/internal records, status in_progress is already strong evidence,
+    but we still prefer collectedAt or codeUsedAt when present.
+  */
+  const collectionVerified =
+    Boolean(assignment.collectedAt) ||
+    Boolean(assignment.codeUsedAt) ||
+    assignment.status === "in_progress";
+
+  if (!collectionVerified) {
+    return {
+      success: false,
+      message:
+        "Collection must be verified by the carrier before the manager can confirm receipt.",
+    };
+  }
+
   if (!assignment.verificationCode) {
     return {
       success: false,
@@ -47,7 +88,16 @@ export async function receiveWaste({
     };
   }
 
-  if (assignment.verificationCode !== verificationCode.trim()) {
+  const cleanedCode = verificationCode.trim();
+
+  if (!cleanedCode) {
+    return {
+      success: false,
+      message: "Verification code is required.",
+    };
+  }
+
+  if (assignment.verificationCode !== cleanedCode) {
     return {
       success: false,
       message: "Incorrect verification code.",

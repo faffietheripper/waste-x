@@ -19,6 +19,8 @@ import {
   hasOperationalPermission,
 } from "@/modules/auth/core/permissions";
 
+import { getLatestWasteTrackingSubmissionByAssignment } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingSubmissionByAssignment";
+
 /* =========================================================
    TYPES
 ========================================================= */
@@ -86,6 +88,29 @@ function getStatusClass(status: string | null | undefined) {
   }
 }
 
+function getDwtStatusClass(status: string | null | undefined) {
+  switch (status) {
+    case "accepted":
+      return "border-green-300 bg-green-100 text-green-700";
+
+    case "accepted_with_warnings":
+      return "border-orange-300 bg-orange-100 text-orange-700";
+
+    case "submitted":
+      return "border-blue-300 bg-blue-100 text-blue-700";
+
+    case "rejected":
+    case "failed":
+      return "border-red-300 bg-red-100 text-red-700";
+
+    case "draft":
+      return "border-gray-300 bg-gray-100 text-gray-700";
+
+    default:
+      return "border-black/10 bg-[#fbfaf7] text-black/50";
+  }
+}
+
 function getCollectionStatus({
   verificationCode,
   codeGeneratedAt,
@@ -99,7 +124,12 @@ function getCollectionStatus({
   collectedAt: Date | string | null | undefined;
   status: string | null | undefined;
 }) {
-  if (codeUsedAt || collectedAt || status === "in_progress" || status === "completed") {
+  if (
+    codeUsedAt ||
+    collectedAt ||
+    status === "in_progress" ||
+    status === "completed"
+  ) {
     return "Collection verified";
   }
 
@@ -220,12 +250,12 @@ function getWorkflowMessage({
   }
 
   if (assignment.status === "completed") {
-    return "The manager has confirmed receipt and this assignment is complete.";
+    return "The manager has confirmed receipt and this assignment is complete. If needed, review or update the Digital Waste Tracking receive movement record.";
   }
 
   if (assignment.status === "in_progress" || collectionVerified) {
     if (perspective === "manager") {
-      return "The carrier has verified collection. You can now confirm receipt using the verification code.";
+      return "The carrier has verified collection. You can confirm operational receipt, then submit or review the Digital Waste Tracking receive movement.";
     }
 
     if (perspective === "carrier") {
@@ -236,7 +266,7 @@ function getWorkflowMessage({
       return "The carrier has collected the waste. Cancellation is now locked. Any issue must go through the incident workflow.";
     }
 
-    return "Collection has been recorded. Compliance can review the chain-of-custody evidence.";
+    return "Collection has been recorded. Compliance can review the chain-of-custody evidence and Digital Waste Tracking records.";
   }
 
   if (assignment.status === "accepted") {
@@ -314,7 +344,9 @@ function getCollectionCodeDisplay({
   }
 
   if (perspective === "compliance") {
-    return assignment.codeUsedAt || assignment.collectedAt ? "Used" : "Generated";
+    return assignment.codeUsedAt || assignment.collectedAt
+      ? "Used"
+      : "Generated";
   }
 
   return "Protected";
@@ -390,6 +422,24 @@ export default async function AssignmentDetailPage({
     permission: "assignment:receive_waste",
   });
 
+  const canViewReceiving = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType,
+    permission: "receiving:view",
+  });
+
+  const canSubmitDwt = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType,
+    permission: "dwt:submit_receive_movement",
+  });
+
+  const canViewDwt = hasOperationalPermission({
+    capabilities: context.capabilities,
+    departmentType,
+    permission: "dwt:view",
+  });
+
   const canCreateIncident = hasOperationalPermission({
     capabilities: context.capabilities,
     departmentType,
@@ -402,10 +452,16 @@ export default async function AssignmentDetailPage({
     permission: "compliance:view",
   });
 
+  const latestDwtSubmission =
+    await getLatestWasteTrackingSubmissionByAssignment({
+      organisationId,
+      assignmentId: assignment.id,
+    });
+
   const hasUnresolvedIncident = Boolean(
     assignment.hasUnresolvedIncident ??
       assignment.hasOpenIncident ??
-      (Number(assignment.unresolvedIncidentCount ?? 0) > 0),
+      Number(assignment.unresolvedIncidentCount ?? 0) > 0,
   );
 
   const collectionVerified = Boolean(
@@ -521,6 +577,9 @@ export default async function AssignmentDetailPage({
 
   const showCompliancePanel = perspective === "compliance" && canViewCompliance;
 
+  const showDigitalWasteTrackingPanel =
+    canViewReceiving || canViewDwt || canSubmitDwt;
+
   const showAssignmentActions =
     generatorCanCancelAssignment ||
     managerCanRespondToAssignment ||
@@ -535,7 +594,8 @@ export default async function AssignmentDetailPage({
     !managerReceiptBlockedByIncident &&
     !managerReceiptBlockedByMissingCode &&
     !carrierCanReportIncident &&
-    !showCompliancePanel;
+    !showCompliancePanel &&
+    !showDigitalWasteTrackingPanel;
 
   const workflowMessage = getWorkflowMessage({
     assignment,
@@ -609,6 +669,15 @@ export default async function AssignmentDetailPage({
                 <HeaderPill>Department: {context.department.name}</HeaderPill>
                 <HeaderPill>Perspective: {formatLabel(perspective)}</HeaderPill>
                 <HeaderPill>Permission: assignment:view</HeaderPill>
+
+                {showDigitalWasteTrackingPanel && (
+                  <HeaderPill>
+                    DWT:{" "}
+                    {latestDwtSubmission
+                      ? formatLabel(latestDwtSubmission.status)
+                      : "Not submitted"}
+                  </HeaderPill>
+                )}
               </div>
             </div>
 
@@ -628,6 +697,16 @@ export default async function AssignmentDetailPage({
               >
                 {collectionStatus}
               </span>
+
+              {latestDwtSubmission && (
+                <span
+                  className={`rounded-full border px-4 py-2 text-xs font-semibold ${getDwtStatusClass(
+                    latestDwtSubmission.status,
+                  )}`}
+                >
+                  DWT: {formatLabel(latestDwtSubmission.status)}
+                </span>
+              )}
             </div>
           </div>
 
@@ -637,7 +716,7 @@ export default async function AssignmentDetailPage({
         </section>
 
         {/* PERMISSION / ACTION SUMMARY */}
-        <section className="grid grid-cols-1 gap-5 md:grid-cols-4">
+        <section className="grid grid-cols-1 gap-5 md:grid-cols-5">
           <PermissionCard
             label="Verify Collection"
             allowed={carrierCanVerifyCollection}
@@ -657,6 +736,20 @@ export default async function AssignmentDetailPage({
                 : managerReceiptBlockedByMissingCode
                   ? "Verification code missing"
                   : "Manager only after collection"
+            }
+          />
+
+          <PermissionCard
+            label="DWT Intake"
+            allowed={showDigitalWasteTrackingPanel && collectionVerified}
+            note={
+              !showDigitalWasteTrackingPanel
+                ? "No DWT permission"
+                : !collectionVerified
+                  ? "Available after collection"
+                  : latestDwtSubmission
+                    ? `Latest: ${formatLabel(latestDwtSubmission.status)}`
+                    : "Ready for receive movement"
             }
           />
 
@@ -859,6 +952,101 @@ export default async function AssignmentDetailPage({
               )}
             </div>
 
+            {/* DIGITAL WASTE TRACKING SUMMARY */}
+            {showDigitalWasteTrackingPanel && (
+              <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                      Digital Waste Tracking
+                    </p>
+
+                    <h2 className="mt-3 text-xl font-semibold text-black">
+                      Receive movement record
+                    </h2>
+
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-black/45">
+                      Submit or review the formal Waste Tracking Service receive
+                      movement connected to this assignment.
+                    </p>
+                  </div>
+
+                  <span
+                    className={`rounded-full border px-4 py-2 text-xs font-semibold ${getDwtStatusClass(
+                      latestDwtSubmission?.status,
+                    )}`}
+                  >
+                    {latestDwtSubmission
+                      ? formatLabel(latestDwtSubmission.status)
+                      : "Not submitted"}
+                  </span>
+                </div>
+
+                <div className="mt-6 grid grid-cols-2 gap-6 text-sm">
+                  <Detail
+                    label="Waste Tracking ID"
+                    value={latestDwtSubmission?.wasteTrackingId ?? "Not issued"}
+                    breakAll
+                  />
+
+                  <Detail
+                    label="Submission Method"
+                    value={latestDwtSubmission?.method ?? "Not submitted"}
+                  />
+
+                  <Detail
+                    label="Submitted At"
+                    value={formatDate(latestDwtSubmission?.submittedAt)}
+                  />
+
+                  <Detail
+                    label="Last Attempted At"
+                    value={formatDate(latestDwtSubmission?.lastAttemptedAt)}
+                  />
+                </div>
+
+                {!collectionVerified && (
+                  <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-800">
+                    <p className="font-semibold">DWT intake not ready</p>
+                    <p className="mt-1">
+                      The carrier must verify collection before the receive
+                      movement can be submitted.
+                    </p>
+                  </div>
+                )}
+
+                {hasUnresolvedIncident && (
+                  <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-5 text-sm leading-6 text-red-800">
+                    <p className="font-semibold">DWT submission blocked</p>
+                    <p className="mt-1">
+                      Resolve the unresolved incident before submitting or
+                      updating the receive movement.
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-6 flex flex-wrap gap-3">
+                  {canViewReceiving && (
+                    <Link
+                      href={`/home/receiving/intake/${assignment.id}`}
+                      className="inline-flex rounded-full bg-black px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                    >
+                      Open receiving intake →
+                    </Link>
+                  )}
+
+                  {(canViewDwt || canSubmitDwt || canViewReceiving) && (
+                    <Link
+                      href="/home/receiving/submissions"
+                      className="inline-flex rounded-full border border-black/10 bg-[#fbfaf7] px-5 py-3 text-sm font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600"
+                    >
+                      View DWT submissions
+                    </Link>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* OPERATIONAL TIMELINE */}
             <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
               <h2 className="text-xl font-semibold text-black">
@@ -904,7 +1092,9 @@ export default async function AssignmentDetailPage({
                 <TimelineItem
                   title="Carrier Verified Collection"
                   date={formatDate(assignment.collectedAt)}
-                  active={Boolean(assignment.collectedAt || assignment.codeUsedAt)}
+                  active={Boolean(
+                    assignment.collectedAt || assignment.codeUsedAt,
+                  )}
                 />
 
                 <TimelineItem
@@ -917,6 +1107,12 @@ export default async function AssignmentDetailPage({
                   title="Manager Confirmed Receipt"
                   date={formatDate(assignment.completedAt)}
                   active={Boolean(assignment.completedAt)}
+                />
+
+                <TimelineItem
+                  title="DWT Receive Movement"
+                  date={formatDate(latestDwtSubmission?.submittedAt)}
+                  active={Boolean(latestDwtSubmission?.submittedAt)}
                 />
               </div>
             </div>
@@ -982,6 +1178,18 @@ export default async function AssignmentDetailPage({
               </div>
             )}
 
+            {showDigitalWasteTrackingPanel && (
+              <DigitalWasteTrackingSidebarPanel
+                assignmentId={assignment.id}
+                collectionVerified={collectionVerified}
+                hasUnresolvedIncident={hasUnresolvedIncident}
+                canViewReceiving={canViewReceiving}
+                canSubmitDwt={canSubmitDwt}
+                canViewDwt={canViewDwt}
+                latestSubmission={latestDwtSubmission}
+              />
+            )}
+
             {showCompliancePanel && (
               <AssignmentCompliancePanel assignment={assignment} />
             )}
@@ -1025,6 +1233,33 @@ export default async function AssignmentDetailPage({
                 >
                   View Listing →
                 </Link>
+
+                {canViewReceiving && (
+                  <Link
+                    href={`/home/receiving/intake/${assignment.id}`}
+                    className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
+                  >
+                    Receiving Intake →
+                  </Link>
+                )}
+
+                {(canViewDwt || canSubmitDwt || canViewReceiving) && (
+                  <Link
+                    href="/home/receiving/submissions"
+                    className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
+                  >
+                    DWT Submissions →
+                  </Link>
+                )}
+
+                {canViewDwt && (
+                  <Link
+                    href="/home/compliance/digital-waste-tracking"
+                    className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
+                  >
+                    DWT Dashboard →
+                  </Link>
+                )}
 
                 {canViewCompliance && (
                   <Link
@@ -1132,6 +1367,110 @@ function TimelineItem({
         {title}
       </p>
       <p className="mt-1 text-black/45">{date}</p>
+    </div>
+  );
+}
+
+function DigitalWasteTrackingSidebarPanel({
+  assignmentId,
+  collectionVerified,
+  hasUnresolvedIncident,
+  canViewReceiving,
+  canSubmitDwt,
+  canViewDwt,
+  latestSubmission,
+}: {
+  assignmentId: string;
+  collectionVerified: boolean;
+  hasUnresolvedIncident: boolean;
+  canViewReceiving: boolean;
+  canSubmitDwt: boolean;
+  canViewDwt: boolean;
+  latestSubmission: Awaited<
+    ReturnType<typeof getLatestWasteTrackingSubmissionByAssignment>
+  >;
+}) {
+  const isBlocked = !collectionVerified || hasUnresolvedIncident;
+
+  return (
+    <div className="rounded-3xl border border-black/10 bg-white p-6 text-sm shadow-sm">
+      <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+        Digital Waste Tracking
+      </p>
+
+      <h3 className="mt-3 text-lg font-semibold text-black">
+        Receive movement
+      </h3>
+
+      <p className="mt-2 leading-6 text-black/50">
+        Connect this assignment to a formal Waste Tracking Service receive
+        movement record.
+      </p>
+
+      <div className="mt-5 space-y-3">
+        <div className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-4">
+          <p className="text-xs uppercase tracking-widest text-black/35">
+            Status
+          </p>
+          <p className="mt-2 font-semibold text-black">
+            {latestSubmission
+              ? formatLabel(latestSubmission.status)
+              : "Not submitted"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-4">
+          <p className="text-xs uppercase tracking-widest text-black/35">
+            Tracking ID
+          </p>
+          <p className="mt-2 break-all font-semibold text-black">
+            {latestSubmission?.wasteTrackingId ?? "Not issued"}
+          </p>
+        </div>
+      </div>
+
+      {!collectionVerified && (
+        <div className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-orange-800">
+          <p className="font-semibold">Waiting for collection</p>
+          <p className="mt-1 leading-6">
+            DWT receive movement submission unlocks after collection is
+            verified.
+          </p>
+        </div>
+      )}
+
+      {hasUnresolvedIncident && (
+        <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800">
+          <p className="font-semibold">Blocked by incident</p>
+          <p className="mt-1 leading-6">
+            Resolve the incident before submitting or updating the DWT record.
+          </p>
+        </div>
+      )}
+
+      <div className="mt-5 space-y-3">
+        {canViewReceiving && (
+          <Link
+            href={`/home/receiving/intake/${assignmentId}`}
+            className={`block rounded-2xl p-4 text-center font-semibold transition ${
+              isBlocked
+                ? "border border-black/10 bg-[#fbfaf7] text-black/45 hover:border-orange-300 hover:text-orange-600"
+                : "bg-black text-orange-400 hover:bg-orange-500 hover:text-black"
+            }`}
+          >
+            {canSubmitDwt ? "Open DWT intake →" : "View DWT intake →"}
+          </Link>
+        )}
+
+        {(canViewDwt || canSubmitDwt || canViewReceiving) && (
+          <Link
+            href="/home/receiving/submissions"
+            className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-center font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600"
+          >
+            Submission log →
+          </Link>
+        )}
+      </div>
     </div>
   );
 }
