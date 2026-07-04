@@ -1,19 +1,31 @@
-export type WasteXErrorContext = {
-  userId?: string;
-  organisationId?: string;
-  route?: string;
-  method?: string;
-};
+export type ErrorSeverity = "low" | "medium" | "high" | "critical";
 
-export type WasteXErrorSystem = {
-  layer: "api" | "db" | "auth" | "validation" | "external";
-  service?: string;
-};
+export type ErrorLayer =
+  | "api"
+  | "db"
+  | "auth"
+  | "validation"
+  | "external";
 
 export type HandleErrorOptions = {
   code?: string;
-  severity?: "low" | "medium" | "high" | "critical";
-  context?: WasteXErrorContext;
-  system?: WasteXErrorSystem;
-  metadata?: Record<string, any>;
+  severity?: ErrorSeverity;
+
+  system?: {
+    layer?: ErrorLayer;
+  };
+
+  context?: {
+    userId?: string | null;
+    organisationId?: string | null;
+    route?: string | null;
+    method?: string | null;
+  };
+
+  metadata?: Record<string, unknown>;
+};
+
+export type ClientError = Error & {
+  code?: string;
+  id?: string;
 };

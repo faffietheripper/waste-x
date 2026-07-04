@@ -9,7 +9,6 @@ export async function handleError(
   const id = crypto.randomUUID();
 
   const message = error instanceof Error ? error.message : "Unknown error";
-
   const stack = error instanceof Error ? error.stack : null;
 
   try {
@@ -20,15 +19,17 @@ export async function handleError(
       severity: options?.severity || "medium",
       layer: options?.system?.layer || "api",
 
-      userId: options?.context?.userId,
-      organisationId: options?.context?.organisationId,
-      route: options?.context?.route,
-      method: options?.context?.method,
+      userId: options?.context?.userId ?? null,
+      organisationId: options?.context?.organisationId ?? null,
+      route: options?.context?.route ?? null,
+      method: options?.context?.method ?? null,
 
       metadata: JSON.stringify({
         stack,
         ...options?.metadata,
       }),
+
+      resolved: false,
     });
   } catch (loggingError) {
     console.error("❌ Failed to log error:", loggingError);

@@ -2,32 +2,60 @@ import { database } from "@/db/database";
 import { notifications } from "@/db/schema";
 import { getUserOrganisationId } from "./getUserOrganisationId";
 
-export async function createNotification({
-  recipientId,
-  title,
-  message,
-  type,
-  listingId,
-}: {
+type CreateNotificationInput = {
   recipientId: string;
   title: string;
   message: string;
   type?: string;
-  listingId?: number;
-}) {
+  listingId?: number | null;
+  actorId?: string | null;
+
+  /*
+    Optional override.
+
+    If you already know the organisationId, pass it in.
+    If not, we safely derive it from recipientId.
+  */
+  organisationId?: string | null;
+};
+
+export async function createNotification({
+  recipientId,
+  title,
+  message,
+  type = "system",
+  listingId = null,
+  actorId = null,
+  organisationId = null,
+}: CreateNotificationInput) {
   if (!recipientId) {
     throw new Error("RECIPIENT_REQUIRED");
   }
 
-  const organisationId = await getUserOrganisationId(recipientId);
+  if (!title?.trim()) {
+    throw new Error("NOTIFICATION_TITLE_REQUIRED");
+  }
 
-  await database.insert(notifications).values({
-    organisationId,
-    recipientId,
-    title,
-    message,
-    type: type ?? "system",
-    listingId: listingId ?? null,
-    isRead: false,
-  });
+  if (!message?.trim()) {
+    throw new Error("NOTIFICATION_MESSAGE_REQUIRED");
+  }
+
+  const resolvedOrganisationId =
+    organisationId ?? (await getUserOrganisationId(recipientId));
+
+  const [notification] = await database
+    .insert(notifications)
+    .values({
+      organisationId: resolvedOrganisationId,
+      recipientId,
+      actorId,
+      listingId,
+      type,
+      title,
+      message,
+      isRead: false,
+    })
+    .returning();
+
+  return notification;
 }

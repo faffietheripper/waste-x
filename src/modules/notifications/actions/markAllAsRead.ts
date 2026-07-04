@@ -6,17 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getUserOrganisationId } from "../services/getUserOrganisationId";
 
-export async function markNotificationAsRead({
-  notificationId,
-  userId,
-}: {
-  notificationId: string;
-  userId: string;
-}) {
-  if (!notificationId) {
-    throw new Error("NOTIFICATION_ID_REQUIRED");
-  }
-
+export async function markAllNotificationsAsRead(userId: string) {
   if (!userId) {
     throw new Error("USER_ID_REQUIRED");
   }
@@ -28,7 +18,6 @@ export async function markNotificationAsRead({
     .set({ isRead: true })
     .where(
       and(
-        eq(notifications.id, notificationId),
         eq(notifications.recipientId, userId),
         eq(notifications.organisationId, organisationId),
       ),

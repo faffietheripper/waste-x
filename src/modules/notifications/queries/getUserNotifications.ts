@@ -1,9 +1,11 @@
 import { database } from "@/db/database";
 import { notifications } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { getUserOrganisationId } from "../services/getUserOrganisationId";
 
 export async function getUserNotifications(userId: string) {
+  if (!userId) return [];
+
   const organisationId = await getUserOrganisationId(userId);
 
   return database
@@ -15,5 +17,5 @@ export async function getUserNotifications(userId: string) {
         eq(notifications.organisationId, organisationId),
       ),
     )
-    .orderBy(notifications.createdAt);
+    .orderBy(desc(notifications.createdAt));
 }

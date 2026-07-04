@@ -1,7 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+import { markNotificationAsRead } from "@/modules/notifications/actions/markAsRead";
+import { markAllNotificationsAsRead } from "@/modules/notifications/actions/markAllAsRead";
 
 /* =========================================================
    TYPES
@@ -17,7 +21,18 @@ type NotificationRecord = {
   listingId?: number | null;
   actorId?: string | null;
   organisationId?: string | null;
+
+  /*
+    Old compatibility flag.
+  */
   system?: boolean;
+
+  /*
+    New temporary system notification flag.
+    These are generated in checkSystemNotifications and do not exist in db.
+  */
+  isSystemGenerated?: boolean;
+
   priority?: "low" | "medium" | "high";
 };
 
@@ -48,8 +63,37 @@ function formatType(type: string | null | undefined) {
     .join(" ");
 }
 
+function isSystemNotification(notification: NotificationRecord) {
+  return Boolean(notification.system || notification.isSystemGenerated);
+}
+
+function getNotificationPriority(notification: NotificationRecord) {
+  if (notification.priority) return notification.priority;
+
+  if (isSystemNotification(notification)) {
+    return "high";
+  }
+
+  switch (notification.type) {
+    case "incident_reported":
+    case "incident_created":
+    case "verification_code_generated":
+    case "support_waiting_on_user":
+      return "high";
+
+    case "manager_assigned":
+    case "manager_rejected":
+    case "carrier_assigned":
+    case "carrier_rejected":
+      return "medium";
+
+    default:
+      return "low";
+  }
+}
+
 function getTypeBadgeClass(notification: NotificationRecord) {
-  if (notification.system) {
+  if (isSystemNotification(notification)) {
     return "border-black bg-black text-orange-400";
   }
 
@@ -67,6 +111,7 @@ function getTypeBadgeClass(notification: NotificationRecord) {
     case "assignment_created":
     case "assignment_assigned":
     case "manager_assigned":
+    case "manager_accepted":
       return "border-orange-300 bg-orange-100 text-orange-700";
 
     case "carrier_assigned":
@@ -74,30 +119,78 @@ function getTypeBadgeClass(notification: NotificationRecord) {
     case "collection_verified":
       return "border-blue-300 bg-blue-100 text-blue-700";
 
+    case "waste_received_completed":
+    case "assignment_completed":
+      return "border-green-300 bg-green-100 text-green-700";
+
+    case "support_reply_added":
+    case "support_waiting_on_user":
+      return "border-purple-300 bg-purple-100 text-purple-700";
+
     default:
       return "border-gray-300 bg-gray-100 text-gray-700";
   }
 }
 
 function getNotificationHref(notification: NotificationRecord) {
-  if (notification.system) {
-    if (notification.id === "profile-setup") {
-      return "/home/me/account";
+  const system = isSystemNotification(notification);
+
+  if (system) {
+    if (
+      notification.id === "profile-setup" ||
+      notification.id === "system-profile-setup" ||
+      notification.type === "system_profile_setup"
+    ) {
+      return "/home/settings/profile";
     }
 
-    if (notification.id === "organisation-setup") {
+    if (
+      notification.id === "organisation-setup" ||
+      notification.id === "system-organisation-setup" ||
+      notification.type === "system_organisation_setup"
+    ) {
       return "/home/settings/organisation?reason=no-organisation";
     }
 
-    if (notification.id === "department-setup") {
+    if (
+      notification.id === "department-setup" ||
+      notification.id === "system-department-setup" ||
+      notification.type === "system_department_setup"
+    ) {
       return "/home/settings/departments";
     }
 
-    return "/home/settings";
+    if (
+      notification.id === "role-setup" ||
+      notification.id === "system-role-setup" ||
+      notification.type === "system_role_setup"
+    ) {
+      return "/home/settings/account";
+    }
+
+    return "/home/settings/profile";
   }
 
   if (notification.listingId) {
     return `/home/marketplace/browse/${notification.listingId}`;
+  }
+
+  if (notification.type?.startsWith("support_")) {
+    return "/home/support";
+  }
+
+  if (notification.type?.includes("incident")) {
+    return "/home/compliance/incidents";
+  }
+
+  if (
+    notification.type?.includes("assignment") ||
+    notification.type?.includes("carrier") ||
+    notification.type?.includes("manager") ||
+    notification.type?.includes("collection") ||
+    notification.type?.includes("waste_received")
+  ) {
+    return "/home/operations/assignments/active";
   }
 
   return "/home/notifications";
@@ -114,29 +207,51 @@ export default function NotificationsClient({
   notifications: NotificationRecord[];
   userId: string;
 }) {
-  const [filter, setFilter] = useState<Filter>("all");
+  const router = useRouter();
 
-  const unreadNotifications = notifications.filter(
+  const [filter, setFilter] = useState<Filter>("all");
+  const [localReadIds, setLocalReadIds] = useState<string[]>([]);
+  const [isPending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
+
+  const normalisedNotifications = useMemo(() => {
+    return notifications.map((notification) => ({
+      ...notification,
+      isRead:
+        notification.isRead ||
+        localReadIds.includes(notification.id) ||
+        false,
+      system: isSystemNotification(notification),
+      priority: getNotificationPriority(notification),
+    }));
+  }, [notifications, localReadIds]);
+
+  const unreadNotifications = normalisedNotifications.filter(
     (notification) => !notification.isRead,
   );
 
-  const readNotifications = notifications.filter(
+  const readNotifications = normalisedNotifications.filter(
     (notification) => notification.isRead,
   );
 
-  const systemNotifications = notifications.filter(
-    (notification) => notification.system,
+  const systemNotifications = normalisedNotifications.filter((notification) =>
+    isSystemNotification(notification),
   );
 
-  const workflowNotifications = notifications.filter(
-    (notification) => !notification.system,
+  const workflowNotifications = normalisedNotifications.filter(
+    (notification) => !isSystemNotification(notification),
   );
 
-  const priorityNotifications = notifications.filter(
+  const storedUnreadNotifications = normalisedNotifications.filter(
+    (notification) =>
+      !notification.isRead && !isSystemNotification(notification),
+  );
+
+  const priorityNotifications = normalisedNotifications.filter(
     (notification) =>
       !notification.isRead ||
-      notification.priority === "high" ||
-      notification.system,
+      getNotificationPriority(notification) === "high" ||
+      isSystemNotification(notification),
   );
 
   const filteredNotifications = useMemo(() => {
@@ -155,16 +270,78 @@ export default function NotificationsClient({
 
       case "all":
       default:
-        return notifications;
+        return normalisedNotifications;
     }
   }, [
     filter,
-    notifications,
+    normalisedNotifications,
     unreadNotifications,
     readNotifications,
     systemNotifications,
     workflowNotifications,
   ]);
+
+  function markLocalRead(notificationId: string) {
+    setLocalReadIds((prev) =>
+      prev.includes(notificationId) ? prev : [...prev, notificationId],
+    );
+  }
+
+  function handleMarkOneAsRead(notification: NotificationRecord) {
+    if (notification.isRead) return;
+
+    /*
+      System notifications are temporary UI alerts.
+      They are not stored in bb_notification, so we only mark them locally.
+    */
+    if (isSystemNotification(notification)) {
+      markLocalRead(notification.id);
+      setMessage("System notification marked as read for this session.");
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        await markNotificationAsRead({
+          notificationId: notification.id,
+          userId,
+        });
+
+        markLocalRead(notification.id);
+        setMessage("Notification marked as read.");
+        router.refresh();
+      } catch (error) {
+        console.error(error);
+        setMessage("Failed to mark notification as read.");
+      }
+    });
+  }
+
+  function handleMarkAllAsRead() {
+    if (storedUnreadNotifications.length === 0) {
+      setMessage("No stored unread notifications to mark as read.");
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        await markAllNotificationsAsRead(userId);
+
+        setLocalReadIds((prev) => [
+          ...prev,
+          ...storedUnreadNotifications
+            .map((notification) => notification.id)
+            .filter((id) => !prev.includes(id)),
+        ]);
+
+        setMessage("Stored notifications marked as read.");
+        router.refresh();
+      } catch (error) {
+        console.error(error);
+        setMessage("Failed to mark all notifications as read.");
+      }
+    });
+  }
 
   return (
     <section className="grid grid-cols-1 gap-8 xl:grid-cols-12">
@@ -195,6 +372,30 @@ export default function NotificationsClient({
             </span>
           </div>
 
+          {message && (
+            <div className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+              {message}
+            </div>
+          )}
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={handleMarkAllAsRead}
+              disabled={isPending || storedUnreadNotifications.length === 0}
+              className="rounded-full bg-black px-4 py-2 text-xs font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isPending ? "Working..." : "Mark stored as read"}
+            </button>
+
+            <Link
+              href="/home/settings/profile"
+              className="rounded-full border border-black/10 bg-[#fbfaf7] px-4 py-2 text-xs font-semibold text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
+            >
+              Account setup
+            </Link>
+          </div>
+
           <div className="mt-6 space-y-3">
             {priorityNotifications.length === 0 ? (
               <EmptyState
@@ -207,6 +408,8 @@ export default function NotificationsClient({
                   key={notification.id}
                   notification={notification}
                   prominent
+                  isPending={isPending}
+                  onMarkAsRead={() => handleMarkOneAsRead(notification)}
                 />
               ))
             )}
@@ -307,6 +510,8 @@ export default function NotificationsClient({
                 <NotificationCard
                   key={`${notification.id}-feed`}
                   notification={notification}
+                  isPending={isPending}
+                  onMarkAsRead={() => handleMarkOneAsRead(notification)}
                 />
               ))
             )}
@@ -324,16 +529,20 @@ export default function NotificationsClient({
 function NotificationCard({
   notification,
   prominent = false,
+  isPending,
+  onMarkAsRead,
 }: {
   notification: NotificationRecord;
   prominent?: boolean;
+  isPending: boolean;
+  onMarkAsRead: () => void;
 }) {
   const href = getNotificationHref(notification);
+  const system = isSystemNotification(notification);
 
   return (
-    <Link
-      href={href}
-      className={`block rounded-2xl border p-5 transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-sm ${
+    <article
+      className={`rounded-2xl border p-5 transition ${
         notification.isRead
           ? "border-black/10 bg-white"
           : "border-orange-300 bg-orange-50"
@@ -347,7 +556,7 @@ function NotificationCard({
                 notification,
               )}`}
             >
-              {notification.system ? "System" : formatType(notification.type)}
+              {system ? "System" : formatType(notification.type)}
             </span>
 
             {!notification.isRead && (
@@ -356,7 +565,7 @@ function NotificationCard({
               </span>
             )}
 
-            {notification.priority === "high" && (
+            {getNotificationPriority(notification) === "high" && (
               <span className="rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
                 Priority
               </span>
@@ -383,14 +592,37 @@ function NotificationCard({
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between gap-4 border-t border-black/5 pt-4">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-black/5 pt-4">
         <p className="text-xs text-black/35">
-          ID: <span className="font-mono">{notification.id.slice(0, 12)}</span>
+          ID:{" "}
+          <span className="font-mono">
+            {notification.id.length > 12
+              ? notification.id.slice(0, 12)
+              : notification.id}
+          </span>
         </p>
 
-        <span className="text-sm font-semibold text-orange-600">Open →</span>
+        <div className="flex items-center gap-3">
+          {!notification.isRead && (
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={onMarkAsRead}
+              className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Mark read
+            </button>
+          )}
+
+          <Link
+            href={href}
+            className="rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
+          >
+            Open →
+          </Link>
+        </div>
       </div>
-    </Link>
+    </article>
   );
 }
 
