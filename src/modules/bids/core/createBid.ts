@@ -14,22 +14,58 @@ export async function createBid({
   userId: string;
   organisationId: string;
 }) {
+  if (!listingId) {
+    throw new Error("LISTING_ID_REQUIRED");
+  }
+
+  if (!amount || amount <= 0) {
+    throw new Error("INVALID_BID_AMOUNT");
+  }
+
   const listing = await database.query.wasteListings.findFirst({
     where: eq(wasteListings.id, listingId),
   });
 
-  if (!listing) throw new Error("LISTING_NOT_FOUND");
+  if (!listing) {
+    throw new Error("LISTING_NOT_FOUND");
+  }
+
+  if (listing.organisationId === organisationId) {
+    throw new Error("You cannot bid on your own listing.");
+  }
+
+  if (listing.status !== "open") {
+    throw new Error("Only open listings can receive bids.");
+  }
+
+  if (listing.assignedCarrierOrganisationId) {
+    throw new Error("This listing has already been assigned.");
+  }
 
   if (await isBidOver(listing)) {
     throw new Error("BIDDING_CLOSED");
   }
 
-  await database.transaction(async (tx) => {
+  const result = await database.transaction(async (tx) => {
     const latestListing = await tx.query.wasteListings.findFirst({
       where: eq(wasteListings.id, listingId),
     });
 
-    if (!latestListing) throw new Error("LISTING_NOT_FOUND");
+    if (!latestListing) {
+      throw new Error("LISTING_NOT_FOUND");
+    }
+
+    if (latestListing.organisationId === organisationId) {
+      throw new Error("You cannot bid on your own listing.");
+    }
+
+    if (latestListing.status !== "open") {
+      throw new Error("Only open listings can receive bids.");
+    }
+
+    if (latestListing.assignedCarrierOrganisationId) {
+      throw new Error("This listing has already been assigned.");
+    }
 
     const currentBid = latestListing.currentBid ?? 0;
 
@@ -37,13 +73,16 @@ export async function createBid({
       throw new Error("BID_TOO_LOW");
     }
 
-    await tx.insert(bids).values({
-      amount,
-      listingId,
-      userId,
-      organisationId,
-      status: "active",
-    });
+    const [createdBid] = await tx
+      .insert(bids)
+      .values({
+        amount,
+        listingId,
+        userId,
+        organisationId,
+        status: "active",
+      })
+      .returning();
 
     await tx
       .update(wasteListings)
@@ -51,7 +90,16 @@ export async function createBid({
         currentBid: amount,
       })
       .where(eq(wasteListings.id, listingId));
+
+    return {
+      bid: createdBid,
+      listing: latestListing,
+    };
   });
 
-  return { success: true };
+  return {
+    success: true,
+    bid: result.bid,
+    listing: result.listing,
+  };
 }

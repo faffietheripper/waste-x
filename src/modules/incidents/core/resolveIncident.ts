@@ -1,5 +1,9 @@
 import { database } from "@/db/database";
-import { incidents, carrierAssignments } from "@/db/schema";
+import {
+  incidents,
+  carrierAssignments,
+  wasteListings,
+} from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 
 export async function resolveIncident({
@@ -54,9 +58,24 @@ export async function resolveIncident({
     throw new Error("ASSIGNMENT_NOT_FOUND");
   }
 
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, assignment.listingId),
+  });
+
+  if (!listing) {
+    throw new Error("LISTING_NOT_FOUND");
+  }
+
+  /*
+    Generator/compliance or assigned manager can resolve an incident.
+
+    Carrier reports the incident, but the receiving/generator side should
+    formally close it after review.
+  */
   const canResolve =
     assignment.organisationId === organisationId ||
-    assignment.assignedByOrganisationId === organisationId;
+    assignment.assignedByOrganisationId === organisationId ||
+    assignment.managerOrganisationId === organisationId;
 
   if (!canResolve) {
     throw new Error("UNAUTHORISED_TO_RESOLVE_INCIDENT");
@@ -82,7 +101,7 @@ export async function resolveIncident({
 
   const now = new Date();
 
-  await database
+  const [updatedIncident] = await database
     .update(incidents)
     .set({
       investigationFindings: investigationFindings.trim(),
@@ -95,10 +114,17 @@ export async function resolveIncident({
       resolvedByUserId: userId,
       resolvedAt: now,
     })
-    .where(eq(incidents.id, incidentId));
+    .where(eq(incidents.id, incidentId))
+    .returning();
 
   return {
     success: true,
     message: "Incident resolved successfully",
+    incident: updatedIncident,
+    assignment,
+    listing,
+    generatorOrganisationId: assignment.organisationId,
+    managerOrganisationId: assignment.managerOrganisationId,
+    carrierOrganisationId: assignment.carrierOrganisationId,
   };
 }

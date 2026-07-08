@@ -18,39 +18,35 @@ export async function assignCarrierToAssignment({
   });
 
   if (!assignment) {
-    return {
-      success: false,
-      message: "Assignment not found.",
-    };
+    throw new Error("Assignment not found.");
+  }
+
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, assignment.listingId),
+  });
+
+  if (!listing) {
+    throw new Error("Listing not found.");
   }
 
   if (assignment.managerOrganisationId !== managerOrganisationId) {
-    return {
-      success: false,
-      message: "Only the assigned manager can assign a carrier.",
-    };
+    throw new Error("Only the assigned manager can assign a carrier.");
   }
 
   if (!assignment.managerAcceptedAt) {
-    return {
-      success: false,
-      message:
-        "You must accept the manager assignment before assigning a carrier.",
-    };
+    throw new Error(
+      "You must accept the manager assignment before assigning a carrier.",
+    );
   }
 
-  if (assignment.status !== "pending") {
-    return {
-      success: false,
-      message: "Carrier can only be assigned while the assignment is pending.",
-    };
+  if (assignment.status !== "accepted") {
+    throw new Error(
+      "Carrier can only be assigned after the manager has accepted the assignment.",
+    );
   }
 
   if (assignment.carrierOrganisationId) {
-    return {
-      success: false,
-      message: "A carrier has already been assigned.",
-    };
+    throw new Error("A carrier has already been assigned.");
   }
 
   const carrierOrg = await database.query.organisations.findFirst({
@@ -58,10 +54,7 @@ export async function assignCarrierToAssignment({
   });
 
   if (!carrierOrg) {
-    return {
-      success: false,
-      message: "Carrier organisation not found.",
-    };
+    throw new Error("Carrier organisation not found.");
   }
 
   const capabilities = (carrierOrg.capabilities ?? []) as (
@@ -71,32 +64,26 @@ export async function assignCarrierToAssignment({
   )[];
 
   if (!capabilities.includes("carrier")) {
-    return {
-      success: false,
-      message: "Selected organisation does not have carrier capability.",
-    };
+    throw new Error("Selected organisation does not have carrier capability.");
   }
 
   if (carrierOrg.status !== "ACTIVE") {
-    return {
-      success: false,
-      message: "Selected carrier organisation is not active.",
-    };
+    throw new Error("Selected carrier organisation is not active.");
   }
 
-  await database
+  const [updatedAssignment] = await database
     .update(carrierAssignments)
     .set({
       carrierOrganisationId,
       carrierAssignedAt: new Date(),
 
       /*
-        Keep status as pending.
-        It now means waiting for the carrier response.
+        Pending now means waiting for carrier response.
       */
       status: "pending",
     })
-    .where(eq(carrierAssignments.id, assignmentId));
+    .where(eq(carrierAssignments.id, assignmentId))
+    .returning();
 
   await database
     .update(wasteListings)
@@ -111,5 +98,10 @@ export async function assignCarrierToAssignment({
       carrierOrganisationId === managerOrganisationId
         ? "Carrier assigned internally to your organisation logistics team."
         : "Carrier organisation assigned. Waiting for carrier response.",
+    assignment: updatedAssignment,
+    listing,
+    generatorOrganisationId: assignment.organisationId,
+    managerOrganisationId: assignment.managerOrganisationId,
+    carrierOrganisationId,
   };
 }

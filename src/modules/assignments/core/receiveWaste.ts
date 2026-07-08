@@ -22,24 +22,17 @@ export async function receiveWaste({
   });
 
   if (!assignment) {
-    return {
-      success: false,
-      message: "Assignment not found.",
-    };
+    throw new Error("Assignment not found.");
   }
 
-  /*
-    Simpler internal + external manager rule:
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, assignment.listingId),
+  });
 
-    A user can confirm receipt if:
-    - they are using the manager department
-    - their organisation is involved in the assignment
-    - they have already passed assignment:receive_waste permission
-    - the correct verification code is entered
+  if (!listing) {
+    throw new Error("Listing not found.");
+  }
 
-    We do NOT require managerOrganisationId to be populated.
-    This is important for internal assignments.
-  */
   const organisationIsInAssignment =
     assignment.organisationId === organisationId ||
     assignment.assignedByOrganisationId === organisationId ||
@@ -49,59 +42,41 @@ export async function receiveWaste({
   const isManagerDepartment = departmentType === "manager";
 
   if (!isManagerDepartment || !organisationIsInAssignment) {
-    return {
-      success: false,
-      message:
-        "Only a manager department user from an involved organisation can confirm waste receipt.",
-    };
+    throw new Error(
+      "Only a manager department user from an involved organisation can confirm waste receipt.",
+    );
   }
 
   if (assignment.status !== "in_progress") {
-    return {
-      success: false,
-      message: "Waste can only be received once collection is in progress.",
-    };
+    throw new Error("Waste can only be received once collection is in progress.");
   }
 
-  /*
-    The carrier should have verified collection before manager receipt.
-    For older/internal records, status in_progress is already strong evidence,
-    but we still prefer collectedAt or codeUsedAt when present.
-  */
   const collectionVerified =
     Boolean(assignment.collectedAt) ||
     Boolean(assignment.codeUsedAt) ||
     assignment.status === "in_progress";
 
   if (!collectionVerified) {
-    return {
-      success: false,
-      message:
-        "Collection must be verified by the carrier before the manager can confirm receipt.",
-    };
+    throw new Error(
+      "Collection must be verified by the carrier before the manager can confirm receipt.",
+    );
   }
 
   if (!assignment.verificationCode) {
-    return {
-      success: false,
-      message: "No verification code has been generated for this assignment.",
-    };
+    throw new Error("No verification code has been generated for this assignment.");
   }
 
   const cleanedCode = verificationCode.trim();
 
   if (!cleanedCode) {
-    return {
-      success: false,
-      message: "Verification code is required.",
-    };
+    throw new Error("Verification code is required.");
   }
 
+  /*
+    Manager receives waste using the SAME code generated when carrier accepted.
+  */
   if (assignment.verificationCode !== cleanedCode) {
-    return {
-      success: false,
-      message: "Incorrect verification code.",
-    };
+    throw new Error("Incorrect verification code.");
   }
 
   const unresolvedIncident = await database.query.incidents.findFirst({
@@ -112,22 +87,21 @@ export async function receiveWaste({
   });
 
   if (unresolvedIncident) {
-    return {
-      success: false,
-      message:
-        "This assignment cannot be completed while there is an unresolved incident.",
-    };
+    throw new Error(
+      "This assignment cannot be completed while there is an unresolved incident.",
+    );
   }
 
   const now = new Date();
 
-  await database
+  const [updatedAssignment] = await database
     .update(carrierAssignments)
     .set({
       status: "completed",
       completedAt: now,
     })
-    .where(eq(carrierAssignments.id, assignmentId));
+    .where(eq(carrierAssignments.id, assignmentId))
+    .returning();
 
   await database
     .update(wasteListings)
@@ -139,5 +113,10 @@ export async function receiveWaste({
   return {
     success: true,
     message: "Waste receipt confirmed. Assignment completed.",
+    assignment: updatedAssignment,
+    listing,
+    generatorOrganisationId: assignment.organisationId,
+    managerOrganisationId: assignment.managerOrganisationId,
+    carrierOrganisationId: assignment.carrierOrganisationId,
   };
 }

@@ -13,6 +13,14 @@ type Context = {
 };
 
 export async function selectBid(input: Input, ctx: Context) {
+  if (!input.listingId) {
+    throw new Error("LISTING_ID_REQUIRED");
+  }
+
+  if (!input.bidId) {
+    throw new Error("BID_ID_REQUIRED");
+  }
+
   const listing = await database.query.wasteListings.findFirst({
     where: eq(wasteListings.id, input.listingId),
   });
@@ -49,7 +57,7 @@ export async function selectBid(input: Input, ctx: Context) {
     throw new Error("You cannot assign your own organisation.");
   }
 
-  await assignManagerFromBid({
+  const assignmentResult = await assignManagerFromBid({
     listingId: input.listingId,
     managerOrganisationId: bid.organisationId,
     assignedByOrganisationId: ctx.organisationId,
@@ -80,5 +88,9 @@ export async function selectBid(input: Input, ctx: Context) {
     success: true,
     message:
       "Winning bid assigned as waste manager. Waiting for manager response.",
+    listing,
+    bid,
+    managerOrganisationId: bid.organisationId,
+    assignment: assignmentResult.assignment,
   };
 }

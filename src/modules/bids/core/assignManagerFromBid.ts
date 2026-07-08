@@ -43,21 +43,22 @@ export async function assignManagerFromBid({
     throw new Error("This listing already has an assignment.");
   }
 
-  await database.insert(carrierAssignments).values({
-    organisationId: listing.organisationId,
-    listingId: listing.id,
+  const [assignment] = await database
+    .insert(carrierAssignments)
+    .values({
+      organisationId: listing.organisationId,
+      listingId: listing.id,
 
-    managerOrganisationId,
-    carrierOrganisationId: null,
+      managerOrganisationId,
+      carrierOrganisationId: null,
 
-    assignedByOrganisationId,
-    assignmentMethod: "bid",
-    bidId,
+      assignedByOrganisationId,
+      assignmentMethod: "bid",
+      bidId,
 
-    // Pending = waiting for the next required party response.
-    // At this stage, that party is the manager.
-    status: "pending",
-  });
+      status: "pending",
+    })
+    .returning();
 
   await database
     .update(wasteListings)
@@ -68,20 +69,22 @@ export async function assignManagerFromBid({
       assignedByOrganisationId,
       assignedAt: new Date(),
 
-      /**
-       * Temporary lock.
-       *
-       * This currently stores the manager organisation ID because the listing
-       * schema does not yet have assignedManagerOrganisationId.
-       *
-       * Long term, add assignedManagerOrganisationId and stop using this field
-       * for manager assignment.
-       */
+      /*
+        Temporary lock.
+
+        This currently stores the manager organisation ID because the listing
+        schema does not yet have assignedManagerOrganisationId.
+
+        Long term, add assignedManagerOrganisationId and stop using this field
+        for manager assignment.
+      */
       assignedCarrierOrganisationId: managerOrganisationId,
     })
     .where(eq(wasteListings.id, listing.id));
 
   return {
     success: true,
+    assignment,
+    listing,
   };
 }

@@ -5,10 +5,16 @@ import { and, eq } from "drizzle-orm";
 export async function markCollected({
   assignmentId,
   verificationCode,
+  organisationId,
 }: {
   assignmentId: string;
   verificationCode: string;
+  organisationId: string;
 }) {
+  if (!assignmentId) {
+    throw new Error("ASSIGNMENT_ID_REQUIRED");
+  }
+
   if (!verificationCode.trim()) {
     throw new Error("VERIFICATION_CODE_REQUIRED");
   }
@@ -26,6 +32,18 @@ export async function markCollected({
 
   if (!assignment) {
     throw new Error("INVALID_VERIFICATION_CODE");
+  }
+
+  if (assignment.carrierOrganisationId !== organisationId) {
+    throw new Error("Only the assigned carrier can verify collection.");
+  }
+
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, assignment.listingId),
+  });
+
+  if (!listing) {
+    throw new Error("Listing not found.");
   }
 
   const now = new Date();
@@ -50,6 +68,11 @@ export async function markCollected({
 
   return {
     success: true,
-    message: "Collection verified successfully",
+    message: "Collection verified successfully.",
+    assignment,
+    listing,
+    generatorOrganisationId: assignment.organisationId,
+    managerOrganisationId: assignment.managerOrganisationId,
+    carrierOrganisationId: assignment.carrierOrganisationId,
   };
 }

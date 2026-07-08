@@ -1,5 +1,5 @@
 import { database } from "@/db/database";
-import { incidents, carrierAssignments } from "@/db/schema";
+import { incidents, carrierAssignments, wasteListings } from "@/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 
 export async function createIncident({
@@ -42,28 +42,45 @@ export async function createIncident({
     throw new Error("INVALID_ASSIGNMENT");
   }
 
-  await database.insert(incidents).values({
-    organisationId,
-    assignmentId: assignment.id,
-    listingId: assignment.listingId,
-
-    reportedByUserId: userId,
-    reportedByOrganisationId: organisationId,
-
-    incidentDate: incidentDate ?? new Date(),
-    incidentLocation: incidentLocation?.trim() || null,
-
-    type: type.trim(),
-    summary: summary.trim(),
-
-    immediateAction: immediateAction?.trim() || null,
-    responsiblePerson: responsiblePerson?.trim() || null,
-
-    status: "open",
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, assignment.listingId),
   });
+
+  if (!listing) {
+    throw new Error("LISTING_NOT_FOUND");
+  }
+
+  const [incident] = await database
+    .insert(incidents)
+    .values({
+      organisationId,
+      assignmentId: assignment.id,
+      listingId: assignment.listingId,
+
+      reportedByUserId: userId,
+      reportedByOrganisationId: organisationId,
+
+      incidentDate: incidentDate ?? new Date(),
+      incidentLocation: incidentLocation?.trim() || null,
+
+      type: type.trim(),
+      summary: summary.trim(),
+
+      immediateAction: immediateAction?.trim() || null,
+      responsiblePerson: responsiblePerson?.trim() || null,
+
+      status: "open",
+    })
+    .returning();
 
   return {
     success: true,
     message: "Incident reported successfully",
+    incident,
+    assignment,
+    listing,
+    generatorOrganisationId: assignment.organisationId,
+    managerOrganisationId: assignment.managerOrganisationId,
+    carrierOrganisationId: assignment.carrierOrganisationId,
   };
 }

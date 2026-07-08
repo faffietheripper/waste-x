@@ -1,7 +1,7 @@
 import { randomInt } from "crypto";
 import { database } from "@/db/database";
-import { carrierAssignments, notifications, users } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { carrierAssignments, wasteListings } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 type AcceptAssignmentInput = {
   assignmentId: string;
@@ -21,10 +21,15 @@ export async function acceptAssignment({
   });
 
   if (!assignment) {
-    return {
-      success: false,
-      message: "Assignment not found.",
-    };
+    throw new Error("Assignment not found.");
+  }
+
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, assignment.listingId),
+  });
+
+  if (!listing) {
+    throw new Error("Listing not found.");
   }
 
   const isManager = assignment.managerOrganisationId === organisationId;
@@ -35,13 +40,8 @@ export async function acceptAssignment({
     MANAGER ACCEPTANCE
 
     Manager accepts the listing assignment.
-
-    This does NOT:
-    - change assignment.status
-    - generate verification code
-    - involve carrier collection yet
-
-    It only marks the manager as having accepted the job.
+    Status changes from pending → accepted.
+    Next step: manager assigns a carrier.
     =========================================================
   */
 
@@ -51,17 +51,28 @@ export async function acceptAssignment({
     !assignment.managerAcceptedAt &&
     !assignment.carrierOrganisationId
   ) {
-    await database
+    const now = new Date();
+
+    const [updatedAssignment] = await database
       .update(carrierAssignments)
       .set({
-        managerAcceptedAt: new Date(),
+        status: "accepted",
+        managerAcceptedAt: now,
+        respondedAt: now,
       })
-      .where(eq(carrierAssignments.id, assignmentId));
+      .where(eq(carrierAssignments.id, assignmentId))
+      .returning();
 
     return {
       success: true,
+      event: "manager_accepted" as const,
       message:
         "Manager assignment accepted. You can now assign a carrier to this job.",
+      assignment: updatedAssignment,
+      listing,
+      generatorOrganisationId: assignment.organisationId,
+      managerOrganisationId: assignment.managerOrganisationId,
+      carrierOrganisationId: assignment.carrierOrganisationId,
     };
   }
 
@@ -70,25 +81,24 @@ export async function acceptAssignment({
     CARRIER ACCEPTANCE
 
     Carrier accepts the actual collection job.
+    Verification code is generated here.
 
-    This SHOULD:
-    - update assignment.status to accepted
-    - set respondedAt
-    - generate verificationCode
-    - set codeGeneratedAt
-    - notify the generator organisation
+    This code is used by:
+    - carrier to verify collection
+    - manager to receive waste
     =========================================================
   */
 
   if (
     assignment.status === "pending" &&
     isCarrier &&
-    !!assignment.carrierOrganisationId
+    !!assignment.carrierOrganisationId &&
+    !!assignment.managerAcceptedAt
   ) {
     const verificationCode = generateVerificationCode();
     const now = new Date();
 
-    await database
+    const [updatedAssignment] = await database
       .update(carrierAssignments)
       .set({
         status: "accepted",
@@ -97,46 +107,22 @@ export async function acceptAssignment({
         codeGeneratedAt: now,
         codeUsedAt: null,
       })
-      .where(eq(carrierAssignments.id, assignmentId));
-
-    /*
-      Notify generator organisation users.
-
-      assignment.organisationId = generator-side organisation context.
-      This sends the verification code to active users in that organisation.
-    */
-
-    const generatorUsers = await database.query.users.findMany({
-      where: and(
-        eq(users.organisationId, assignment.organisationId),
-        eq(users.isActive, true),
-      ),
-    });
-
-    if (generatorUsers.length > 0) {
-      await database.insert(notifications).values(
-        generatorUsers.map((user) => ({
-          organisationId: assignment.organisationId,
-          recipientId: user.id,
-          actorId: null,
-          listingId: assignment.listingId,
-          type: "verification_code_generated",
-          title: "Collection verification code generated",
-          message: `A carrier has accepted the collection job. Verification code: ${verificationCode}`,
-          isRead: false,
-        })),
-      );
-    }
+      .where(eq(carrierAssignments.id, assignmentId))
+      .returning();
 
     return {
       success: true,
+      event: "carrier_accepted" as const,
       message:
-        "Carrier assignment accepted. A verification code has been generated and sent to the generator.",
+        "Carrier assignment accepted. A verification code has been generated.",
+      assignment: updatedAssignment,
+      listing,
+      verificationCode,
+      generatorOrganisationId: assignment.organisationId,
+      managerOrganisationId: assignment.managerOrganisationId,
+      carrierOrganisationId: assignment.carrierOrganisationId,
     };
   }
 
-  return {
-    success: false,
-    message: "You are not allowed to accept this assignment at this stage.",
-  };
+  throw new Error("You are not allowed to accept this assignment at this stage.");
 }
