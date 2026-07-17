@@ -7,7 +7,9 @@ import { ChevronDown } from "lucide-react";
 
 export default function AdminNav({ unreadCount }: { unreadCount: number }) {
   const pathname = usePathname();
+
   const [auditOpen, setAuditOpen] = useState(true);
+  const [dwtOpen, setDwtOpen] = useState(true);
 
   const isActive = (href: string) => {
     if (href === "/admin") return pathname === href;
@@ -27,6 +29,13 @@ export default function AdminNav({ unreadCount }: { unreadCount: number }) {
       isActive(href)
         ? "bg-gray-800 text-white"
         : "text-gray-400 hover:bg-gray-800 hover:text-white"
+    }`;
+
+  const sectionButtonClass = (active: boolean) =>
+    `flex w-full items-center justify-between rounded-xl px-4 py-2.5 text-left text-sm transition ${
+      active
+        ? "bg-gray-900 text-white"
+        : "text-gray-300 hover:bg-gray-800 hover:text-white"
     }`;
 
   return (
@@ -56,12 +65,9 @@ export default function AdminNav({ unreadCount }: { unreadCount: number }) {
 
           <div className="mt-2">
             <button
+              type="button"
               onClick={() => setAuditOpen(!auditOpen)}
-              className={`flex w-full items-center justify-between rounded-xl px-4 py-2.5 text-left text-sm transition ${
-                pathname.startsWith("/admin/audit")
-                  ? "bg-gray-900 text-white"
-                  : "text-gray-300 hover:bg-gray-800 hover:text-white"
-              }`}
+              className={sectionButtonClass(pathname.startsWith("/admin/audit"))}
             >
               <span>Audit Intelligence</span>
 
@@ -107,6 +113,46 @@ export default function AdminNav({ unreadCount }: { unreadCount: number }) {
           </div>
         </section>
 
+        {/* ================= DIGITAL WASTE TRACKING ================= */}
+        <section>
+          <NavSectionLabel label="Digital Waste Tracking" />
+
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setDwtOpen(!dwtOpen)}
+              className={sectionButtonClass(
+                pathname.startsWith("/admin/digital-waste-tracking"),
+              )}
+            >
+              <span>DWT Control</span>
+
+              <ChevronDown
+                size={16}
+                className={`transition-transform ${dwtOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {dwtOpen && (
+              <div className="ml-3 mt-2 space-y-1 border-l border-gray-800 pl-2">
+                <Link
+                  href="/admin/digital-waste-tracking"
+                  className={subLinkClass("/admin/digital-waste-tracking")}
+                >
+                  Submission Register
+                </Link>
+
+                <Link
+                  href="/admin/digital-waste-tracking/pat"
+                  className={subLinkClass("/admin/digital-waste-tracking/pat")}
+                >
+                  PAT Tracker
+                </Link>
+              </div>
+            )}
+          </div>
+        </section>
+
         {/* ================= OPERATIONS ================= */}
         <section>
           <NavSectionLabel label="Operations" />
@@ -130,13 +176,6 @@ export default function AdminNav({ unreadCount }: { unreadCount: number }) {
           <NavSectionLabel label="Compliance" />
 
           <div className="mt-2 space-y-1">
-            <Link
-              href="/admin/digital-waste-tracking"
-              className={linkClass("/admin/digital-waste-tracking")}
-            >
-              Digital Waste Tracking
-            </Link>
-
             <Link
               href="/admin/incidents"
               className={linkClass("/admin/incidents")}

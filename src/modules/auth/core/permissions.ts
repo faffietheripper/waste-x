@@ -17,6 +17,7 @@ export type Permission =
   | "listing:view"
   | "listing:create"
   | "listing:edit"
+  | "listing:assign"
   | "listing:direct_assign"
 
   /* Marketplace */
@@ -45,7 +46,7 @@ export type Permission =
   | "receiving:update"
   | "receiving:submit"
 
-  /* Digital Waste Tracking / Defra integration */
+  /* Digital Waste Tracking / DEFRA integration */
   | "dwt:view"
   | "dwt:submit_receive_movement"
   | "dwt:update_receive_movement"
@@ -70,12 +71,14 @@ export type Permission =
 
 /* =========================================================
    ORGANISATION CAPABILITY → PERMISSIONS
-   This answers: what is the company allowed to do overall?
+
+   This answers:
+   What is the organisation allowed to do overall?
 
    Important:
    - Capabilities are organisation-level.
-   - They do not mean every user in the organisation can perform the action.
-   - Department permissions still need to match.
+   - They do not mean every user can do the action.
+   - The active department still needs the same permission.
 ========================================================= */
 
 const capabilityPermissions: Record<Capability, Permission[]> = {
@@ -89,6 +92,17 @@ const capabilityPermissions: Record<Capability, Permission[]> = {
     "listing:view",
     "listing:create",
     "listing:edit",
+
+    /*
+      Allows generator-owned listings to be assigned to an external
+      winning bid / external business.
+    */
+    "listing:assign",
+
+    /*
+      Allows direct/internal assignment flows, such as assigning to an
+      internal carrier/logistics department.
+    */
     "listing:direct_assign",
 
     /* Assignments */
@@ -97,7 +111,7 @@ const capabilityPermissions: Record<Capability, Permission[]> = {
 
     /*
       Legacy support:
-      Keep this for now in case older generator pages still check it.
+      Keep this for older generator pages that may still check it.
       Current preferred completion flow is manager/receiver receipt.
     */
     "assignment:complete",
@@ -166,12 +180,15 @@ const capabilityPermissions: Record<Capability, Permission[]> = {
 
 /* =========================================================
    DEPARTMENT → PERMISSIONS
-   This answers: what this user is allowed to do right now?
+
+   This answers:
+   What is this user allowed to do from their active department?
 
    Important:
-   - Department type is the active operational perspective.
-   - Organisation can have many capabilities, but active department
-     controls what the current user can actually do.
+   - The organisation can have multiple capabilities.
+   - The active department controls the current operational perspective.
+   - For generator/carrier/manager departments, capability and department
+     must both allow the permission.
 ========================================================= */
 
 const departmentPermissions: Record<DepartmentType, Permission[]> = {
@@ -185,6 +202,17 @@ const departmentPermissions: Record<DepartmentType, Permission[]> = {
     "listing:view",
     "listing:create",
     "listing:edit",
+
+    /*
+      Allows the generator department to assign its own listing to
+      an external winning bid / external business.
+    */
+    "listing:assign",
+
+    /*
+      Allows the generator department to use direct/internal assignment
+      flows where appropriate.
+    */
     "listing:direct_assign",
 
     /* Assignments */
@@ -194,7 +222,7 @@ const departmentPermissions: Record<DepartmentType, Permission[]> = {
     /*
       Legacy support:
       Keep for older completion checks.
-      Current workflow should prefer manager receipt/receive_waste.
+      Current workflow should prefer manager receipt / receive_waste.
     */
     "assignment:complete",
 
@@ -297,6 +325,7 @@ const departmentPermissions: Record<DepartmentType, Permission[]> = {
 
 /* =========================================================
    RAW CAPABILITY CHECK
+
    Checks only the organisation capability layer.
 ========================================================= */
 
@@ -311,6 +340,7 @@ export function hasPermission(
 
 /* =========================================================
    DEPARTMENT CHECK
+
    Checks only the active department layer.
 ========================================================= */
 
@@ -328,6 +358,7 @@ export function departmentHasPermission({
 
 /* =========================================================
    FINAL OPERATIONAL CHECK
+
    Checks capability + department together.
 
    Rule:
@@ -376,6 +407,7 @@ export function hasOperationalPermission({
 
 /* =========================================================
    OPTIONAL HELPERS
+
    Useful for debugging, UI cards, and settings pages.
 ========================================================= */
 

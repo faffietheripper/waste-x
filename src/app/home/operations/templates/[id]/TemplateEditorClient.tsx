@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 import AddSectionModal from "@/components/app/Templates/AddSectionModal";
 import AddFieldModal from "@/components/app/Templates/AddFieldModal";
@@ -82,30 +81,23 @@ type Message = {
    HELPERS
 ========================================================= */
 
-function formatDate(date: Date | string | null | undefined) {
-  if (!date) return "Not yet";
-
-  return new Date(date).toLocaleString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function getFieldTypeLabel(type: string) {
   switch (type) {
     case "text":
       return "Text";
+
     case "number":
       return "Number";
+
     case "dropdown":
       return "Dropdown";
+
     case "boolean":
       return "Yes / No";
+
     case "file":
       return "File Upload";
+
     default:
       return type;
   }
@@ -115,14 +107,19 @@ function getFieldTypeClass(type: string) {
   switch (type) {
     case "text":
       return "border-blue-200 bg-blue-50 text-blue-700";
+
     case "number":
       return "border-purple-200 bg-purple-50 text-purple-700";
+
     case "dropdown":
       return "border-orange-200 bg-orange-50 text-orange-700";
+
     case "boolean":
       return "border-green-200 bg-green-50 text-green-700";
+
     case "file":
       return "border-black bg-black text-white";
+
     default:
       return "border-gray-200 bg-gray-50 text-gray-700";
   }
@@ -184,19 +181,22 @@ function SortableSection({
           className="min-w-0 flex-1 text-left"
         >
           <div className="flex items-center gap-3">
-            <div
-              {...attributes}
-              {...listeners}
-              className="cursor-grab rounded-lg border border-black/10 bg-[#fbfaf7] px-2 py-1 text-xs text-black/35 active:cursor-grabbing"
-              title="Drag section"
-            >
-              ☰
-            </div>
+            {!template.isLocked && (
+              <div
+                {...attributes}
+                {...listeners}
+                className="cursor-grab rounded-lg border border-black/10 bg-[#fbfaf7] px-2 py-1 text-xs text-black/35 active:cursor-grabbing"
+                title="Drag section"
+              >
+                ☰
+              </div>
+            )}
 
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-black">
                 {section.title}
               </p>
+
               <p className="mt-1 text-xs text-black/40">
                 {fieldCount} field{fieldCount === 1 ? "" : "s"}
               </p>
@@ -260,14 +260,16 @@ function SortableField({
     >
       <div className="flex items-start justify-between gap-5">
         <div className="flex min-w-0 items-start gap-3">
-          <div
-            {...attributes}
-            {...listeners}
-            className="mt-1 cursor-grab rounded-lg border border-black/10 bg-[#fbfaf7] px-2 py-1 text-xs text-black/35 active:cursor-grabbing"
-            title="Drag field"
-          >
-            ☰
-          </div>
+          {!template.isLocked && (
+            <div
+              {...attributes}
+              {...listeners}
+              className="mt-1 cursor-grab rounded-lg border border-black/10 bg-[#fbfaf7] px-2 py-1 text-xs text-black/35 active:cursor-grabbing"
+              title="Drag field"
+            >
+              ☰
+            </div>
+          )}
 
           <button
             type="button"
@@ -332,15 +334,19 @@ export default function TemplateEditorClient({
   const router = useRouter();
 
   const [showAddSection, setShowAddSection] = useState(false);
+
   const [showAddFieldForSection, setShowAddFieldForSection] = useState<
     string | null
   >(null);
+
   const [selectedField, setSelectedField] = useState<TemplateField | null>(
     null,
   );
+
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(
     template.sections?.[0]?.id ?? null,
   );
+
   const [message, setMessage] = useState<Message | null>(null);
   const [locking, setLocking] = useState(false);
 
@@ -351,10 +357,6 @@ export default function TemplateEditorClient({
       (a, b) => a.orderIndex - b.orderIndex,
     );
   }, [template.sections]);
-
-  const selectedSection = orderedSections.find(
-    (section) => section.id === selectedSectionId,
-  );
 
   const totalSections = orderedSections.length;
   const totalFields = getTotalFields(orderedSections);
@@ -426,10 +428,16 @@ export default function TemplateEditorClient({
     if (template.isLocked) return;
 
     const { active, over } = event;
+
     if (!over || active.id === over.id) return;
 
-    const oldIndex = orderedSections.findIndex((s) => s.id === active.id);
-    const newIndex = orderedSections.findIndex((s) => s.id === over.id);
+    const oldIndex = orderedSections.findIndex((section) => {
+      return section.id === active.id;
+    });
+
+    const newIndex = orderedSections.findIndex((section) => {
+      return section.id === over.id;
+    });
 
     if (oldIndex === -1 || newIndex === -1) return;
 
@@ -482,367 +490,345 @@ export default function TemplateEditorClient({
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
-      <div className="space-y-8">
-        {/* BACK */}
-        <Link
-          href="/home/operations/templates"
-          className="text-sm font-medium text-black/45 transition hover:text-orange-600"
+    <div className="space-y-8">
+      {/* BUILDER HEADER */}
+      <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+              Builder Workspace
+            </p>
+
+            <h2 className="mt-2 text-2xl font-semibold text-black">
+              Configure sections and fields
+            </h2>
+
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-black/45">
+              Build the listing form structure from here. Add sections first,
+              then add fields inside each section.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={toggleLock}
+            disabled={locking}
+            className={`rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              template.isLocked
+                ? "bg-black text-orange-400 hover:bg-orange-500 hover:text-black"
+                : "bg-orange-500 text-black hover:bg-orange-400"
+            }`}
+          >
+            {locking
+              ? "Updating..."
+              : template.isLocked
+                ? "Unlock Template"
+                : "Lock Template"}
+          </button>
+        </div>
+      </section>
+
+      {/* MESSAGE */}
+      {message && (
+        <section
+          className={`rounded-3xl border p-5 text-sm shadow-sm ${
+            message.type === "success"
+              ? "border-green-200 bg-green-50 text-green-700"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
         >
-          ← Back to template library
-        </Link>
+          {message.text}
+        </section>
+      )}
 
-        {/* HEADER */}
-        <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
-          <div className="flex items-start justify-between gap-8">
-            <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-orange-400">
-                Waste X Template Builder
-              </p>
+      {/* CLIENT-SIDE METRICS */}
+      <section className="grid grid-cols-1 gap-5 md:grid-cols-4">
+        <MetricCard label="Sections" value={totalSections} />
+        <MetricCard label="Fields" value={totalFields} />
+        <MetricCard label="Required Fields" value={requiredFields} />
+        <MetricCard label="Version" value={template.version} />
+      </section>
 
-              <h1 className="mt-3 text-3xl font-semibold">{template.name}</h1>
+      {/* EMPTY NOTICE */}
+      {totalSections === 0 && !template.isLocked && (
+        <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 text-orange-800 shadow-sm">
+          <p className="text-sm font-semibold">
+            Start this template by adding your first section.
+          </p>
 
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Configure structured listing sections and fields. This template
-                controls the operational data captured when your organisation
-                creates waste listings.
-              </p>
+          <p className="mt-2 text-sm leading-6">
+            Sections are the building blocks of the listing form. For example,
+            you might create sections for Waste Details, Collection Site,
+            Hazard Information, Photos or Pricing.
+          </p>
+        </section>
+      )}
 
-              <div className="mt-6 flex flex-wrap gap-3">
-                <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
-                  Version {template.version}
-                </span>
+      {/* LOCK NOTICE */}
+      {template.isLocked && (
+        <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+          <p className="text-sm font-semibold text-orange-800">
+            This template is locked.
+          </p>
 
-                <span
-                  className={`rounded-full border px-4 py-2 text-xs font-semibold ${
-                    template.isLocked
-                      ? "border-orange-400/30 bg-orange-500/10 text-orange-300"
-                      : "border-green-400/30 bg-green-500/10 text-green-300"
-                  }`}
-                >
-                  {template.isLocked ? "Locked" : "Editable"}
-                </span>
+          <p className="mt-2 text-sm leading-6 text-orange-700">
+            Locked templates protect historical listing records and prevent
+            accidental structure changes. Unlock only if you are certain this
+            template is safe to edit.
+          </p>
+        </section>
+      )}
 
-                <span
-                  className={`rounded-full border px-4 py-2 text-xs font-semibold ${
-                    template.isActive
-                      ? "border-green-400/30 bg-green-500/10 text-green-300"
-                      : "border-gray-400/30 bg-white/5 text-white/45"
-                  }`}
-                >
-                  {template.isActive ? "Active" : "Inactive"}
-                </span>
+      {/* BUILDER GRID */}
+      <section className="grid grid-cols-12 gap-8">
+        {/* LEFT: SECTIONS */}
+        <aside className="col-span-12 space-y-4 xl:col-span-3">
+          <div className="rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                  Structure
+                </p>
 
-                <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
-                  Created {formatDate(template.createdAt)}
-                </span>
+                <h2 className="mt-2 text-lg font-semibold text-black">
+                  Sections
+                </h2>
+
+                <p className="mt-1 text-sm text-black/45">
+                  Organise fields into operational groups.
+                </p>
               </div>
+
+              {!template.isLocked && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddSection(true)}
+                  className="rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
+                >
+                  + Add
+                </button>
+              )}
             </div>
 
-            <button
-              type="button"
-              onClick={toggleLock}
-              disabled={locking}
-              className={`rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                template.isLocked
-                  ? "bg-white text-black hover:bg-orange-100"
-                  : "bg-orange-500 text-black hover:bg-orange-400"
-              }`}
-            >
-              {locking
-                ? "Updating..."
-                : template.isLocked
-                  ? "Unlock Template"
-                  : "Lock Template"}
-            </button>
+            {orderedSections.length === 0 ? (
+              <EmptyPanel
+                title="No sections yet"
+                text="Add your first section to begin structuring this template."
+              />
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleSectionDragEnd}
+              >
+                <SortableContext
+                  items={orderedSections.map((section) => section.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-3">
+                    {orderedSections.map((section) => (
+                      <SortableSection
+                        key={section.id}
+                        section={section}
+                        template={template}
+                        isSelected={selectedSectionId === section.id}
+                        onSelectSection={setSelectedSectionId}
+                        onAddField={setShowAddFieldForSection}
+                        onDeleteSection={deleteSection}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            )}
+          </div>
+        </aside>
+
+        {/* CENTER: FIELDS */}
+        <section className="col-span-12 space-y-6 xl:col-span-6">
+          <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+            <div className="mb-6">
+              <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                Field Builder
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-black">
+                Template Fields
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-black/45">
+                Drag fields to control the order shown in the listing form.
+                Select a field to edit settings, validation and help text.
+              </p>
+            </div>
+
+            {orderedSections.length === 0 ? (
+              <EmptyPanel
+                title="No sections available"
+                text="Create a section first. Fields must belong to a section."
+              />
+            ) : (
+              <div className="space-y-8">
+                {orderedSections.map((section) => {
+                  const orderedFields = [...(section.fields ?? [])].sort(
+                    (a: TemplateField, b: TemplateField) =>
+                      a.orderIndex - b.orderIndex,
+                  );
+
+                  async function handleFieldDragEnd(event: any) {
+                    if (template.isLocked) return;
+
+                    const { active, over } = event;
+
+                    if (!over || active.id === over.id) return;
+
+                    const oldIndex = orderedFields.findIndex((field) => {
+                      return field.id === active.id;
+                    });
+
+                    const newIndex = orderedFields.findIndex((field) => {
+                      return field.id === over.id;
+                    });
+
+                    if (oldIndex === -1 || newIndex === -1) return;
+
+                    const newOrder = arrayMove(
+                      orderedFields,
+                      oldIndex,
+                      newIndex,
+                    );
+
+                    try {
+                      await reorderFieldsAction(
+                        section.id,
+                        newOrder.map((field) => field.id),
+                      );
+
+                      router.refresh();
+                    } catch (error: any) {
+                      console.error("Reorder fields error:", error);
+
+                      setMessage({
+                        type: "error",
+                        text: error?.message || "Failed to reorder fields.",
+                      });
+                    }
+                  }
+
+                  return (
+                    <div
+                      key={section.id}
+                      className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-5"
+                    >
+                      <div className="mb-4 flex items-center justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-black">
+                            {section.title}
+                          </h3>
+
+                          <p className="mt-1 text-xs text-black/40">
+                            {orderedFields.length} field
+                            {orderedFields.length === 1 ? "" : "s"}
+                          </p>
+                        </div>
+
+                        {!template.isLocked && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowAddFieldForSection(section.id)
+                            }
+                            className="rounded-full bg-black px-4 py-2 text-xs font-semibold text-white transition hover:bg-orange-500 hover:text-black"
+                          >
+                            + Add Field
+                          </button>
+                        )}
+                      </div>
+
+                      {orderedFields.length === 0 ? (
+                        <EmptyPanel
+                          title="No fields in this section"
+                          text="Add a field to start capturing structured listing data."
+                          compact
+                        />
+                      ) : (
+                        <DndContext
+                          sensors={sensors}
+                          collisionDetection={closestCenter}
+                          onDragEnd={handleFieldDragEnd}
+                        >
+                          <SortableContext
+                            items={orderedFields.map((field) => field.id)}
+                            strategy={verticalListSortingStrategy}
+                          >
+                            <div className="space-y-3">
+                              {orderedFields.map((field) => (
+                                <SortableField
+                                  key={field.id}
+                                  field={field}
+                                  template={template}
+                                  isSelected={selectedField?.id === field.id}
+                                  onDeleteField={deleteField}
+                                  onSelect={setSelectedField}
+                                />
+                              ))}
+                            </div>
+                          </SortableContext>
+                        </DndContext>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </section>
 
-        {/* MESSAGE */}
-        {message && (
-          <section
-            className={`rounded-3xl border p-5 text-sm shadow-sm ${
-              message.type === "success"
-                ? "border-green-200 bg-green-50 text-green-700"
-                : "border-red-200 bg-red-50 text-red-700"
-            }`}
-          >
-            {message.text}
-          </section>
-        )}
-
-        {/* METRICS */}
-        <section className="grid grid-cols-1 gap-5 md:grid-cols-3 xl:grid-cols-4">
-          <MetricCard label="Sections" value={totalSections} />
-          <MetricCard label="Fields" value={totalFields} />
-          <MetricCard label="Required Fields" value={requiredFields} />
-          <MetricCard label="Version" value={template.version} />
-        </section>
-
-        {/* LOCK NOTICE */}
-        {template.isLocked && (
-          <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
-            <p className="text-sm font-semibold text-orange-800">
-              This template is locked.
-            </p>
-            <p className="mt-2 text-sm leading-6 text-orange-700">
-              Locked templates protect historical listing records and prevent
-              accidental structure changes. Unlock only if you are certain this
-              template is safe to edit.
-            </p>
-          </section>
-        )}
-
-        {/* BUILDER GRID */}
-        <section className="grid grid-cols-12 gap-8">
-          {/* LEFT: SECTIONS */}
-          <aside className="col-span-12 space-y-4 xl:col-span-3">
-            <div className="rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
-                    Structure
-                  </p>
-                  <h2 className="mt-2 text-lg font-semibold text-black">
-                    Sections
-                  </h2>
-                  <p className="mt-1 text-sm text-black/45">
-                    Organise fields into operational groups.
-                  </p>
-                </div>
-
-                {!template.isLocked && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAddSection(true)}
-                    className="rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
-                  >
-                    + Add
-                  </button>
-                )}
-              </div>
-
-              {orderedSections.length === 0 ? (
-                <EmptyPanel
-                  title="No sections yet"
-                  text="Add your first section to begin structuring this template."
-                />
-              ) : (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleSectionDragEnd}
-                >
-                  <SortableContext
-                    items={orderedSections.map((section) => section.id)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <div className="space-y-3">
-                      {orderedSections.map((section) => (
-                        <SortableSection
-                          key={section.id}
-                          section={section}
-                          template={template}
-                          isSelected={selectedSectionId === section.id}
-                          onSelectSection={setSelectedSectionId}
-                          onAddField={setShowAddFieldForSection}
-                          onDeleteSection={deleteSection}
-                        />
-                      ))}
-                    </div>
-                  </SortableContext>
-                </DndContext>
-              )}
-            </div>
-          </aside>
-
-          {/* CENTER: FIELDS */}
-          <section className="col-span-12 space-y-6 xl:col-span-6">
-            <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
-              <div className="mb-6">
+        {/* RIGHT: SETTINGS */}
+        <aside className="col-span-12 xl:col-span-3">
+          <div className="sticky top-28 space-y-6">
+            {selectedField && !template.isLocked ? (
+              <FieldSettingsPanel
+                field={selectedField}
+                onClose={() => setSelectedField(null)}
+              />
+            ) : (
+              <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
                 <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
-                  Field Builder
+                  Field Settings
                 </p>
 
-                <h2 className="mt-2 text-xl font-semibold text-black">
-                  Template Fields
+                <h2 className="mt-2 text-lg font-semibold text-black">
+                  {template.isLocked ? "Settings locked" : "Select a field"}
                 </h2>
 
                 <p className="mt-2 text-sm leading-6 text-black/45">
-                  Drag fields to control the order shown in the listing form.
-                  Select a field to edit settings, validation and help text.
+                  {template.isLocked
+                    ? "Unlock the template before editing field settings."
+                    : "Select any field in the builder to edit its label, type, options, required state and help text."}
                 </p>
               </div>
+            )}
 
-              {orderedSections.length === 0 ? (
-                <EmptyPanel
-                  title="No sections available"
-                  text="Create a section first. Fields must belong to a section."
-                />
-              ) : (
-                <div className="space-y-8">
-                  {orderedSections.map((section) => {
-                    const orderedFields = [...(section.fields ?? [])].sort(
-                      (a: TemplateField, b: TemplateField) =>
-                        a.orderIndex - b.orderIndex,
-                    );
+            <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+              <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                Builder Guidance
+              </p>
 
-                    async function handleFieldDragEnd(event: any) {
-                      if (template.isLocked) return;
+              <h3 className="mt-2 text-base font-semibold text-black">
+                Keep templates structured
+              </h3>
 
-                      const { active, over } = event;
-                      if (!over || active.id === over.id) return;
-
-                      const oldIndex = orderedFields.findIndex(
-                        (field) => field.id === active.id,
-                      );
-                      const newIndex = orderedFields.findIndex(
-                        (field) => field.id === over.id,
-                      );
-
-                      if (oldIndex === -1 || newIndex === -1) return;
-
-                      const newOrder = arrayMove(
-                        orderedFields,
-                        oldIndex,
-                        newIndex,
-                      );
-
-                      try {
-                        await reorderFieldsAction(
-                          section.id,
-                          newOrder.map((field) => field.id),
-                        );
-
-                        router.refresh();
-                      } catch (error: any) {
-                        console.error("Reorder fields error:", error);
-
-                        setMessage({
-                          type: "error",
-                          text: error?.message || "Failed to reorder fields.",
-                        });
-                      }
-                    }
-
-                    return (
-                      <div
-                        key={section.id}
-                        className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-5"
-                      >
-                        <div className="mb-4 flex items-center justify-between gap-4">
-                          <div>
-                            <h3 className="text-sm font-semibold text-black">
-                              {section.title}
-                            </h3>
-                            <p className="mt-1 text-xs text-black/40">
-                              {orderedFields.length} field
-                              {orderedFields.length === 1 ? "" : "s"}
-                            </p>
-                          </div>
-
-                          {!template.isLocked && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setShowAddFieldForSection(section.id)
-                              }
-                              className="rounded-full bg-black px-4 py-2 text-xs font-semibold text-white transition hover:bg-orange-500 hover:text-black"
-                            >
-                              + Add Field
-                            </button>
-                          )}
-                        </div>
-
-                        {orderedFields.length === 0 ? (
-                          <EmptyPanel
-                            title="No fields in this section"
-                            text="Add a field to start capturing structured listing data."
-                            compact
-                          />
-                        ) : (
-                          <DndContext
-                            sensors={sensors}
-                            collisionDetection={closestCenter}
-                            onDragEnd={handleFieldDragEnd}
-                          >
-                            <SortableContext
-                              items={orderedFields.map((field) => field.id)}
-                              strategy={verticalListSortingStrategy}
-                            >
-                              <div className="space-y-3">
-                                {orderedFields.map((field) => (
-                                  <SortableField
-                                    key={field.id}
-                                    field={field}
-                                    template={template}
-                                    isSelected={selectedField?.id === field.id}
-                                    onDeleteField={deleteField}
-                                    onSelect={setSelectedField}
-                                  />
-                                ))}
-                              </div>
-                            </SortableContext>
-                          </DndContext>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <ul className="mt-4 space-y-3 text-sm leading-6 text-black/50">
+                <li>• Use sections to group related operational data.</li>
+                <li>• Mark compliance-critical fields as required.</li>
+                <li>• Use dropdowns where fixed options are better than text.</li>
+                <li>• Lock templates once they are used in live workflows.</li>
+              </ul>
             </div>
-          </section>
-
-          {/* RIGHT: SETTINGS */}
-          <aside className="col-span-12 xl:col-span-3">
-            <div className="sticky top-28 space-y-6">
-              {selectedField && !template.isLocked ? (
-                <FieldSettingsPanel
-                  field={selectedField}
-                  onClose={() => setSelectedField(null)}
-                />
-              ) : (
-                <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
-                  <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
-                    Field Settings
-                  </p>
-
-                  <h2 className="mt-2 text-lg font-semibold text-black">
-                    {template.isLocked ? "Settings locked" : "Select a field"}
-                  </h2>
-
-                  <p className="mt-2 text-sm leading-6 text-black/45">
-                    {template.isLocked
-                      ? "Unlock the template before editing field settings."
-                      : "Select any field in the builder to edit its label, type, options, required state and help text."}
-                  </p>
-                </div>
-              )}
-
-              <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
-                <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
-                  Builder Guidance
-                </p>
-
-                <h3 className="mt-2 text-base font-semibold text-black">
-                  Keep templates structured
-                </h3>
-
-                <ul className="mt-4 space-y-3 text-sm leading-6 text-black/50">
-                  <li>• Use sections to group related operational data.</li>
-                  <li>• Mark compliance-critical fields as required.</li>
-                  <li>
-                    • Use dropdowns where fixed options are better than text.
-                  </li>
-                  <li>
-                    • Lock templates once they are used in live workflows.
-                  </li>
-                </ul>
-              </div>
-            </div>
-          </aside>
-        </section>
-      </div>
+          </div>
+        </aside>
+      </section>
 
       {/* MODALS */}
       {showAddSection && !template.isLocked && (
@@ -859,7 +845,7 @@ export default function TemplateEditorClient({
           onClose={() => setShowAddFieldForSection(null)}
         />
       )}
-    </main>
+    </div>
   );
 }
 
@@ -869,8 +855,11 @@ export default function TemplateEditorClient({
 
 function MetricCard({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
-      <p className="text-xs uppercase tracking-widest text-black/40">{label}</p>
+    <div className="rounded-3xl border border-black/10 bg-[#fbfaf7] p-5 shadow-sm">
+      <p className="text-xs uppercase tracking-widest text-black/40">
+        {label}
+      </p>
+
       <p className="mt-3 text-3xl font-semibold text-black">{value}</p>
     </div>
   );
@@ -892,6 +881,7 @@ function EmptyPanel({
       }`}
     >
       <p className="text-sm font-semibold text-black">{title}</p>
+
       <p className="mt-2 text-sm leading-6 text-black/45">{text}</p>
     </div>
   );

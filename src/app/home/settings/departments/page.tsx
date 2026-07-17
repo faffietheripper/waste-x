@@ -46,6 +46,13 @@ type MemberRow = {
 
 const MAX_DEPARTMENT_TYPES = 4;
 
+const ALL_DEPARTMENT_TYPES: DepartmentType[] = [
+  "generator",
+  "manager",
+  "carrier",
+  "compliance",
+];
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -74,6 +81,19 @@ function formatType(value: string | null | undefined) {
       return "Carrier / Logistics";
     case "compliance":
       return "Compliance";
+    default:
+      return value;
+  }
+}
+
+function formatCapability(value: Capability) {
+  switch (value) {
+    case "generator":
+      return "Generator";
+    case "manager":
+      return "Manager";
+    case "carrier":
+      return "Carrier";
     default:
       return value;
   }
@@ -117,6 +137,22 @@ function getTypeClass(type: DepartmentType) {
   }
 }
 
+function getCapabilityClass(capability: Capability) {
+  switch (capability) {
+    case "generator":
+      return "border-blue-300 bg-blue-100 text-blue-700";
+
+    case "manager":
+      return "border-orange-300 bg-orange-100 text-orange-700";
+
+    case "carrier":
+      return "border-green-300 bg-green-100 text-green-700";
+
+    default:
+      return "border-gray-300 bg-gray-100 text-gray-700";
+  }
+}
+
 function getRecommendedTypes(capabilities: Capability[]) {
   const types = new Set<DepartmentType>();
 
@@ -132,9 +168,21 @@ function getRecommendedTypes(capabilities: Capability[]) {
     types.add("carrier");
   }
 
+  /*
+    Compliance is always available because every organisation needs audit,
+    incident review and oversight.
+  */
   types.add("compliance");
 
   return Array.from(types);
+}
+
+function getUnavailableTypes(capabilities: Capability[]) {
+  const recommendedTypes = getRecommendedTypes(capabilities);
+
+  return ALL_DEPARTMENT_TYPES.filter(
+    (type) => !recommendedTypes.includes(type),
+  );
 }
 
 function getDepartmentMemberCount(departmentId: string, members: MemberRow[]) {
@@ -218,7 +266,11 @@ export default async function DepartmentsSettingsPage() {
   })) as MemberRow[];
 
   const recommendedTypes = getRecommendedTypes(capabilities);
-  const existingTypes = new Set(orgDepartments.map((department) => department.type));
+  const unavailableTypes = getUnavailableTypes(capabilities);
+
+  const existingTypes = new Set(
+    orgDepartments.map((department) => department.type),
+  );
 
   const missingTypes = recommendedTypes.filter(
     (type) => !existingTypes.has(type),
@@ -263,12 +315,15 @@ export default async function DepartmentsSettingsPage() {
               Waste X Departments
             </p>
 
-            <h1 className="mt-3 text-3xl font-semibold">Department Settings</h1>
+            <h1 className="mt-3 text-3xl font-semibold">
+              Department Settings
+            </h1>
 
             <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-              Configure department access for generator, manager, carrier and
-              compliance workflows. Each organisation can only have one
-              department for each manageable department type.
+              Configure department access for the workflows your organisation is
+              approved to use. Administrator access lets you manage available
+              departments, but department options are still controlled by the
+              organisation’s capabilities.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
@@ -280,6 +335,13 @@ export default async function DepartmentsSettingsPage() {
 
               <HeaderPill>
                 Types: {existingTypes.size}/{MAX_DEPARTMENT_TYPES}
+              </HeaderPill>
+
+              <HeaderPill>
+                Capabilities:{" "}
+                {capabilities.length
+                  ? capabilities.map(formatCapability).join(", ")
+                  : "None configured"}
               </HeaderPill>
 
               <span
@@ -333,11 +395,98 @@ export default async function DepartmentsSettingsPage() {
         />
 
         <MetricCard
-          label="Missing Recommended"
+          label="Missing Available"
           value={metrics.missingRecommended}
           danger={metrics.missingRecommended > 0}
         />
       </section>
+
+      {/* CAPABILITY EXPLANATION */}
+      <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="xl:col-span-2">
+            <p className="text-sm font-semibold text-orange-800">
+              Why some department types may not appear
+            </p>
+
+            <p className="mt-2 text-sm leading-6 text-orange-700">
+              Department creation is based on your organisation capabilities.
+              For example, a carrier-only organisation can create a{" "}
+              <strong>Carrier / Logistics</strong> department and a{" "}
+              <strong>Compliance</strong> department, but it will not see{" "}
+              <strong>Generator</strong> or <strong>Manager</strong>{" "}
+              departments unless those capabilities are added to the
+              organisation.
+            </p>
+
+            <p className="mt-3 text-sm leading-6 text-orange-700">
+              Your user role controls whether you can manage settings. Your
+              organisation capabilities control which operational departments
+              are available.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-orange-200 bg-white/60 p-5">
+            <p className="text-xs uppercase tracking-[0.22em] text-orange-700">
+              Current Capabilities
+            </p>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {capabilities.length > 0 ? (
+                capabilities.map((capability) => (
+                  <span
+                    key={capability}
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${getCapabilityClass(
+                      capability,
+                    )}`}
+                  >
+                    {formatCapability(capability)}
+                  </span>
+                ))
+              ) : (
+                <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+                  No capabilities configured
+                </span>
+              )}
+
+              <span className="rounded-full border border-black bg-black px-3 py-1 text-xs font-semibold text-orange-400">
+                Compliance always available
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* UNAVAILABLE TYPES NOTICE */}
+      {unavailableTypes.length > 0 && (
+        <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+            Capability-Locked Departments
+          </p>
+
+          <h2 className="mt-2 text-xl font-semibold text-black">
+            Some department types are currently hidden
+          </h2>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/45">
+            These department types are not available because this organisation
+            does not currently have the matching capability. An administrator
+            can manage available departments, but cannot create departments for
+            capabilities the organisation does not have.
+          </p>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            {unavailableTypes.map((type) => (
+              <span
+                key={type}
+                className="rounded-full border border-black/10 bg-[#fbfaf7] px-4 py-2 text-xs font-semibold text-black/45"
+              >
+                {formatType(type)} locked
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* DUPLICATE WARNING */}
       {duplicateTypes.length > 0 && (
@@ -377,10 +526,11 @@ export default async function DepartmentsSettingsPage() {
         </p>
 
         <p className="mt-2 text-sm leading-6 text-orange-700">
-          Each department type should exist once only. A generator department
-          handles listing-side work, a manager department handles waste receipt,
-          a carrier department handles collection/logistics and a compliance
-          department handles review, incidents and audit.
+          A <strong>Generator</strong> department handles listing-side work, a{" "}
+          <strong>Manager</strong> department handles waste receipt, a{" "}
+          <strong>Carrier / Logistics</strong> department handles collection and
+          verification, and a <strong>Compliance</strong> department handles
+          review, incidents and audit.
         </p>
       </section>
 
@@ -395,13 +545,27 @@ export default async function DepartmentsSettingsPage() {
             </p>
 
             <h2 className="mt-2 text-xl font-semibold text-black">
-              Add workflow area
+              Add available workflow area
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-black/45">
-              Create a missing department type. You cannot create duplicate
-              department types such as two Logistics departments.
+              The dropdown only shows department types that match your
+              organisation capabilities and have not already been created.
             </p>
+
+            {availableTypesToCreate.length === 0 && canManageDepartments && (
+              <div className="mt-5 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-700">
+                All department types currently available to this organisation
+                have already been created.
+              </div>
+            )}
+
+            {availableTypesToCreate.length > 0 && (
+              <div className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm leading-6 text-orange-700">
+                Available to create now:{" "}
+                <strong>{availableTypesToCreate.map(formatType).join(", ")}</strong>
+              </div>
+            )}
 
             <CreateDepartmentForm
               canManageDepartments={canManageDepartments}
@@ -422,8 +586,8 @@ export default async function DepartmentsSettingsPage() {
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-black/45">
-              These departments are recommended from your organisation
-              capabilities. Each type should appear once.
+              These are the department types Waste X recommends for your current
+              organisation capabilities. Compliance is always recommended.
             </p>
 
             <div className="mt-6 space-y-3">
@@ -441,7 +605,7 @@ export default async function DepartmentsSettingsPage() {
                       </p>
 
                       <p className="mt-1 text-xs text-black/40">
-                        {exists ? "Created" : "Missing"}
+                        {exists ? "Created" : "Available to create"}
                       </p>
                     </div>
 
@@ -475,14 +639,15 @@ export default async function DepartmentsSettingsPage() {
               </h2>
 
               <p className="mt-2 text-sm leading-6 text-black/45">
-                Review department records and member counts.
+                Review department records and member counts. Member assignment
+                options only include departments that already exist.
               </p>
             </div>
 
             {orgDepartments.length === 0 ? (
               <EmptyState
                 title="No departments yet"
-                text="Create recommended departments to start routing users into the correct workflows."
+                text="Create the available recommended departments first. Once departments exist, members can be assigned to them."
               />
             ) : (
               <div className="grid grid-cols-1 gap-5">
@@ -526,7 +691,9 @@ export default async function DepartmentsSettingsPage() {
 
               <p className="mt-2 text-sm leading-6 text-black/45">
                 Assign users to the correct department so their workflow
-                perspective is accurate.
+                perspective is accurate. If a department is missing from the
+                dropdown, it either has not been created yet or the organisation
+                does not currently have the capability for it.
               </p>
             </div>
 
@@ -534,6 +701,11 @@ export default async function DepartmentsSettingsPage() {
               <EmptyState
                 title="No members found"
                 text="No members are currently attached to this organisation."
+              />
+            ) : orgDepartments.length === 0 ? (
+              <EmptyState
+                title="Create departments before assigning members"
+                text="Members cannot be assigned until at least one department exists for this organisation."
               />
             ) : (
               <div className="divide-y divide-black/5">

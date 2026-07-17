@@ -1,12 +1,13 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users, carrierAssignments } from "@/db/schema";
+import { users, carrierAssignments, organisations } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 
 import PlaceBid from "@/components/app/MarketPlace/PlaceBid";
 import InternalAssignPanel from "@/components/app/Listings/InternalAssignPanel";
 import BidWinner from "@/components/app/BidWinner";
 import AssignListingButton from "@/components/app/Listings/AssignListingButton";
+import AssignCarrierPanel from "@/components/app/Assignments/AssignCarrierPanel";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -32,6 +33,16 @@ import {
   type Permission,
   hasOperationalPermission,
 } from "@/modules/auth/core/permissions";
+
+/* =========================================================
+   TYPES
+========================================================= */
+
+type CarrierOption = {
+  id: string;
+  teamName: string;
+  capabilities: Capability[];
+};
 
 /* =========================================================
    HELPERS
@@ -72,6 +83,96 @@ function formatLabel(value: string | null | undefined) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function parseFileKeys(fileKey: string | null | undefined) {
+  if (!fileKey) return [];
+
+  const raw = fileKey.trim();
+
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => {
+          if (typeof item === "string") {
+            return item.trim();
+          }
+
+          if (item && typeof item === "object") {
+            const possibleKey =
+              item.key ??
+              item.fileKey ??
+              item.file_key ??
+              item.url ??
+              item.path ??
+              "";
+
+            return String(possibleKey).trim();
+          }
+
+          return "";
+        })
+        .filter(Boolean);
+    }
+
+    if (parsed && typeof parsed === "object") {
+      const possibleKeys =
+        parsed.keys ??
+        parsed.fileKeys ??
+        parsed.file_keys ??
+        parsed.files ??
+        parsed.images ??
+        null;
+
+      if (Array.isArray(possibleKeys)) {
+        return possibleKeys
+          .map((item) => {
+            if (typeof item === "string") {
+              return item.trim();
+            }
+
+            if (item && typeof item === "object") {
+              const possibleKey =
+                item.key ??
+                item.fileKey ??
+                item.file_key ??
+                item.url ??
+                item.path ??
+                "";
+
+              return String(possibleKey).trim();
+            }
+
+            return "";
+          })
+          .filter(Boolean);
+      }
+
+      const possibleSingleKey =
+        parsed.key ??
+        parsed.fileKey ??
+        parsed.file_key ??
+        parsed.url ??
+        parsed.path ??
+        "";
+
+      if (possibleSingleKey) {
+        return [String(possibleSingleKey).trim()].filter(Boolean);
+      }
+    }
+  } catch {
+    // Not JSON. Continue to string splitting below.
+  }
+
+  return raw
+    .split(/[,;\n|]+/)
+    .map((key) => key.trim())
+    .map((key) => key.replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
 }
 
 /* =========================================================
@@ -131,6 +232,7 @@ export default async function ListingPage({ params }: any) {
   const canAssignBidByDepartment = can("listing:assign");
   const canDirectAssignByDepartment = can("listing:direct_assign");
   const canViewAssignmentByDepartment = can("assignment:view");
+  const canAssignCarrierByDepartment = can("assignment:assign_carrier");
 
   /* =========================================================
      FETCH LISTING
@@ -153,14 +255,9 @@ export default async function ListingPage({ params }: any) {
   /* =========================================================
      FETCH EXISTING ASSIGNMENT
 
-     This is important.
-
-     We do not rely only on listing.assignedCarrierOrganisationId because
-     internal assignments may be represented by:
-     - assignedCarrierDepartmentId
-     - assignedAt
-     - listing.status = "assigned"
-     - carrierAssignments row
+     This supports both:
+     - generator/internal assignment
+     - external manager-won marketplace assignment
   ========================================================= */
 
   const [existingAssignment] = await database
@@ -169,6 +266,8 @@ export default async function ListingPage({ params }: any) {
       status: carrierAssignments.status,
       carrierOrganisationId: carrierAssignments.carrierOrganisationId,
       managerOrganisationId: carrierAssignments.managerOrganisationId,
+      managerAcceptedAt: carrierAssignments.managerAcceptedAt,
+      carrierAssignedAt: carrierAssignments.carrierAssignedAt,
       assignedAt: carrierAssignments.assignedAt,
     })
     .from(carrierAssignments)
@@ -178,17 +277,6 @@ export default async function ListingPage({ params }: any) {
 
   /* =========================================================
      ASSIGNMENT LOCK
-
-     This is the important bit.
-
-     Once any of these are true, the listing is operationally locked:
-     - assignment row exists
-     - assigned carrier org exists
-     - assigned internal department exists
-     - assignedBy exists
-     - assignedAt exists
-     - winnerBid exists
-     - listing lifecycle has moved beyond open
   ========================================================= */
 
   const assignedCarrierOrganisationId =
@@ -224,6 +312,35 @@ export default async function ListingPage({ params }: any) {
     existingAssignment?.managerOrganisationId === userOrg;
 
   /* =========================================================
+     EXTERNAL MANAGER → CARRIER ASSIGNMENT RULE
+
+     Hybrid Waste X flow:
+     generator accepts manager bid
+     manager accepts external job
+     manager then assigns a carrier
+
+     This is separate from:
+     - generator internal assignment
+     - direct award
+  ========================================================= */
+
+  const isExternalManagerWorkflow =
+    departmentType === "manager" &&
+    !isOwner &&
+    Boolean(existingAssignment) &&
+    existingAssignment?.managerOrganisationId === userOrg &&
+    (listing.marketMode === "open_market" || listing.marketMode === "hybrid");
+
+  const managerCanAssignExternalCarrier =
+    canAssignCarrierByDepartment &&
+    isExternalManagerWorkflow &&
+    Boolean(existingAssignment?.managerAcceptedAt) &&
+    !existingAssignment?.carrierOrganisationId &&
+    !["completed", "cancelled", "rejected", "in_progress"].includes(
+      existingAssignment?.status ?? "",
+    );
+
+  /* =========================================================
      PAGE-LEVEL DEPARTMENT ACCESS
   ========================================================= */
 
@@ -246,15 +363,40 @@ export default async function ListingPage({ params }: any) {
     listing.marketMode === "internal_only" &&
     !isAssignmentLocked;
 
-  const [organisation, bids, winningBidResult, internalCarriers] =
-    await Promise.all([
-      getOrganisationById(listing.organisationId),
-      getBidsForListing(listing.id),
-      getWinningBid(listingId),
-      shouldLoadInternalCarriers ? getCarrierDepartments(userOrg) : [],
-    ]);
+  const [
+    organisation,
+    bids,
+    winningBidResult,
+    internalCarriers,
+    allOrganisations,
+  ] = await Promise.all([
+    getOrganisationById(listing.organisationId),
+    getBidsForListing(listing.id),
+    getWinningBid(listingId),
+    shouldLoadInternalCarriers ? getCarrierDepartments(userOrg) : [],
+    managerCanAssignExternalCarrier ? database.select().from(organisations) : [],
+  ]);
 
   const { winningBid } = winningBidResult;
+
+  const winningBidId = winningBid?.id ?? listing.winnerBidId ?? null;
+
+  const externalCarrierOptions: CarrierOption[] = allOrganisations
+    .filter((organisationRecord) => {
+      const organisationCapabilities =
+        (organisationRecord.capabilities as Capability[] | null) ?? [];
+
+      return (
+        organisationRecord.status === "ACTIVE" &&
+        organisationCapabilities.includes("carrier")
+      );
+    })
+    .map((organisationRecord) => ({
+      id: organisationRecord.id,
+      teamName: organisationRecord.teamName ?? "Unnamed organisation",
+      capabilities:
+        (organisationRecord.capabilities as Capability[] | null) ?? [],
+    }));
 
   /* =========================================================
      STATE LOGIC
@@ -275,14 +417,6 @@ export default async function ListingPage({ params }: any) {
   const participationAllowsExternalCarrier =
     listing.participationMode === "external" ||
     (listing.participationMode === "mixed" && isAllowedCarrier);
-
-  /*
-    FINAL RULES:
-
-    - If listing is locked, nobody can bid.
-    - If listing is locked, nobody can assign/reassign.
-    - This applies to internal and external listings.
-  */
 
   const canBid =
     canBidByDepartment &&
@@ -306,10 +440,23 @@ export default async function ListingPage({ params }: any) {
 
   const showInternalAssignmentPanel = isInternal && isOwner;
 
+  const showManagerCarrierAssignmentPanel =
+    managerCanAssignExternalCarrier && Boolean(existingAssignment);
+
+  const showManagerCarrierWaitingPanel =
+    isExternalManagerWorkflow &&
+    !managerCanAssignExternalCarrier &&
+    !existingAssignment?.carrierOrganisationId &&
+    !["completed", "cancelled", "rejected"].includes(
+      existingAssignment?.status ?? "",
+    );
+
   const showBiddingPanel =
     isBiddableMarket && (canBidByDepartment || isOwner || bids.length > 0);
 
-  const fileKeys = listing.fileKey?.split(",").filter(Boolean) ?? [];
+  const fileKeys = parseFileKeys(listing.fileKey);
+  const previewFileKeys = fileKeys.slice(0, 3);
+  const extraImageCount = Math.max(fileKeys.length - previewFileKeys.length, 0);
 
   /* =========================================================
      TEMPLATE DATA
@@ -328,7 +475,7 @@ export default async function ListingPage({ params }: any) {
   ========================================================= */
 
   return (
-    <main className="pl-[24vw] min-h-screen bg-[#f7f3ed] py-32 px-12">
+    <main className="min-h-screen bg-[#f7f3ed] px-12 py-32 pl-[24vw]">
       <div className="grid grid-cols-6 gap-10">
         {/* =====================================================
             LEFT SIDE
@@ -370,6 +517,12 @@ export default async function ListingPage({ params }: any) {
                       Assignment Locked
                     </Badge>
                   )}
+
+                  {isExternalManagerWorkflow && (
+                    <Badge className="bg-green-100 text-green-700 hover:bg-green-100">
+                      Manager Job
+                    </Badge>
+                  )}
                 </div>
               </div>
 
@@ -377,6 +530,7 @@ export default async function ListingPage({ params }: any) {
                 <p className="text-xs uppercase tracking-widest text-black/40">
                   Current Bid
                 </p>
+
                 <p className="mt-1 text-2xl font-semibold text-black">
                   {formatMoney(listing.currentBid)}
                 </p>
@@ -430,7 +584,14 @@ export default async function ListingPage({ params }: any) {
               </div>
             )}
 
-            {!canBidByDepartment && !isOwner && (
+            {isExternalManagerWorkflow && (
+              <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
+                You are managing this external marketplace job. Once accepted,
+                assign a carrier to complete the collection stage.
+              </div>
+            )}
+
+            {!canBidByDepartment && !isOwner && !isExternalManagerWorkflow && (
               <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
                 Your current department can view this record, but it cannot bid
                 on marketplace listings.
@@ -448,18 +609,56 @@ export default async function ListingPage({ params }: any) {
           </section>
 
           {/* IMAGES */}
-          {fileKeys.length > 0 && (
-            <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-              {fileKeys.slice(0, 3).map((key: string, index: number) => (
-                <Image
-                  key={`${key}-${index}`}
-                  src={getImageUrl(key.trim())}
-                  alt={listing.name}
-                  width={600}
-                  height={500}
-                  className="h-64 rounded-3xl border border-black/10 object-cover shadow-sm"
-                />
-              ))}
+          {fileKeys.length > 0 ? (
+            <section className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+                    Listing Images
+                  </p>
+
+                  <p className="mt-1 text-sm text-black/45">
+                    Showing {previewFileKeys.length} of {fileKeys.length} image
+                    {fileKeys.length === 1 ? "" : "s"}.
+                  </p>
+                </div>
+
+                {extraImageCount > 0 && (
+                  <span className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/45">
+                    +{extraImageCount} more saved
+                  </span>
+                )}
+              </div>
+
+              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                {previewFileKeys.map((key: string, index: number) => (
+                  <div
+                    key={`${key}-${index}`}
+                    className="relative h-64 overflow-hidden rounded-3xl border border-black/10 bg-white shadow-sm"
+                  >
+                    <Image
+                      src={getImageUrl(key)}
+                      alt={`${listing.name} image ${index + 1}`}
+                      fill
+                      sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
+                      className="object-cover"
+                    />
+
+                    {index === previewFileKeys.length - 1 &&
+                      extraImageCount > 0 && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-white">
+                          <span className="rounded-full bg-black/70 px-5 py-3 text-sm font-semibold">
+                            +{extraImageCount} more
+                          </span>
+                        </div>
+                      )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-3xl border border-dashed border-black/20 bg-white p-8 text-sm text-black/45 shadow-sm">
+              No listing images were uploaded for this record.
             </section>
           )}
 
@@ -525,7 +724,71 @@ export default async function ListingPage({ params }: any) {
         {/* =====================================================
             RIGHT SIDEBAR
         ===================================================== */}
-        <aside className="col-span-2 sticky top-32 h-fit space-y-6">
+        <aside className="sticky top-32 col-span-2 h-fit space-y-6">
+          {/* MANAGER CARRIER ASSIGNMENT FOR EXTERNAL MARKETPLACE JOB */}
+          {showManagerCarrierAssignmentPanel && existingAssignment && (
+            <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+              <div className="mb-5">
+                <h2 className="text-xl font-semibold text-black">
+                  Assign Carrier
+                </h2>
+
+                <p className="mt-1 text-sm leading-6 text-black/50">
+                  You have accepted this external marketplace job. Choose the
+                  carrier who will collect and move the waste. This can be your
+                  own organisation if it has carrier capability, or another
+                  active carrier on Waste X.
+                </p>
+              </div>
+
+              {externalCarrierOptions.length > 0 ? (
+                <AssignCarrierPanel
+                  assignmentId={existingAssignment.id}
+                  carriers={externalCarrierOptions}
+                  currentOrganisationId={userOrg}
+                />
+              ) : (
+                <DepartmentBlockedNotice message="No active carrier organisations are available to assign yet." />
+              )}
+            </section>
+          )}
+
+          {/* MANAGER WAITING / BLOCKED PANEL */}
+          {showManagerCarrierWaitingPanel && existingAssignment && (
+            <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+              <h2 className="text-xl font-semibold text-orange-900">
+                Carrier assignment not available yet
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-orange-800">
+                This external job is assigned to your manager organisation, but
+                carrier assignment will unlock after the manager acceptance step
+                is completed.
+              </p>
+
+              <div className="mt-5 space-y-2 text-sm text-orange-800">
+                <p>
+                  Manager accepted:{" "}
+                  <strong>
+                    {existingAssignment.managerAcceptedAt ? "Yes" : "No"}
+                  </strong>
+                </p>
+
+                <p>
+                  Carrier assigned:{" "}
+                  <strong>
+                    {existingAssignment.carrierOrganisationId ? "Yes" : "No"}
+                  </strong>
+                </p>
+
+                <p>
+                  Assignment status:{" "}
+                  <strong>{formatLabel(existingAssignment.status)}</strong>
+                </p>
+              </div>
+            </section>
+          )}
+
           {/* INTERNAL ASSIGNMENT */}
           {showInternalAssignmentPanel && (
             <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
@@ -533,6 +796,7 @@ export default async function ListingPage({ params }: any) {
                 <h2 className="text-xl font-semibold text-black">
                   Internal Assignment
                 </h2>
+
                 <p className="mt-1 text-sm text-black/50">
                   Assign this listing to an internal carrier department.
                 </p>
@@ -558,12 +822,13 @@ export default async function ListingPage({ params }: any) {
                 <h2 className="text-xl font-semibold text-black">
                   Current Bids
                 </h2>
+
                 <p className="mt-1 text-sm text-black/50">
                   Review carrier offers for this waste listing.
                 </p>
               </div>
 
-              {!isOwner && (
+              {!isOwner && !isExternalManagerWorkflow && (
                 <div className="mb-5">
                   {canBid ? (
                     <PlaceBid
@@ -592,19 +857,37 @@ export default async function ListingPage({ params }: any) {
                 </div>
               )}
 
+              {isExternalManagerWorkflow && (
+                <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
+                  Your organisation won this marketplace job. Use the carrier
+                  assignment panel above to choose who will collect the waste.
+                </div>
+              )}
+
               <div className="max-h-[460px] space-y-4 overflow-y-auto pr-2">
                 {bids.length > 0 ? (
                   bids.map((bid: any, index: number) => (
                     <div
                       key={bid.id}
-                      className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-4"
+                      className={`rounded-2xl border p-4 ${
+                        winningBidId === bid.id
+                          ? "border-green-200 bg-green-50"
+                          : "border-black/10 bg-[#fbfaf7]"
+                      }`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          {index === 0 && (
+                          {winningBidId === bid.id ? (
                             <Badge className="mb-3 bg-green-500 text-white">
-                              Highest Bid
+                              Winning Bid
                             </Badge>
+                          ) : (
+                            index === 0 &&
+                            !isAssignmentLocked && (
+                              <Badge className="mb-3 bg-green-500 text-white">
+                                Highest Bid
+                              </Badge>
+                            )
                           )}
 
                           <div className="text-2xl font-semibold text-black">
@@ -694,7 +977,10 @@ export default async function ListingPage({ params }: any) {
 function InfoCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-black/10 bg-[#fbfaf7] p-4">
-      <p className="text-xs uppercase tracking-widest text-black/40">{label}</p>
+      <p className="text-xs uppercase tracking-widest text-black/40">
+        {label}
+      </p>
+
       <p className="mt-2 text-sm font-semibold text-black">{value}</p>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -132,6 +132,15 @@ function getTypeBadgeClass(notification: NotificationRecord) {
   }
 }
 
+/* =========================================================
+   NOTIFICATION ROUTING
+
+   Important:
+   Workflow notifications must be checked before listingId.
+   Most workflow notifications still carry listingId for context,
+   but the Open button should take users to assignment workflows.
+========================================================= */
+
 function getNotificationHref(notification: NotificationRecord) {
   const system = isSystemNotification(notification);
 
@@ -171,26 +180,37 @@ function getNotificationHref(notification: NotificationRecord) {
     return "/home/settings/profile";
   }
 
-  if (notification.listingId) {
-    return `/home/marketplace/browse/${notification.listingId}`;
+  const type = notification.type ?? "";
+
+  /*
+    Assignment / workflow notifications should go to the assignment overview,
+    not the marketplace listing page.
+  */
+  if (
+    type.includes("assignment") ||
+    type.includes("carrier") ||
+    type.includes("manager") ||
+    type.includes("collection") ||
+    type.includes("verification") ||
+    type.includes("waste_received") ||
+    type.includes("receive_waste")
+  ) {
+    return "/home/operations/assignments";
   }
 
-  if (notification.type?.startsWith("support_")) {
+  if (type.startsWith("support_")) {
     return "/home/support";
   }
 
-  if (notification.type?.includes("incident")) {
+  if (type.includes("incident")) {
     return "/home/compliance/incidents";
   }
 
-  if (
-    notification.type?.includes("assignment") ||
-    notification.type?.includes("carrier") ||
-    notification.type?.includes("manager") ||
-    notification.type?.includes("collection") ||
-    notification.type?.includes("waste_received")
-  ) {
-    return "/home/operations/assignments/active";
+  /*
+    Only pure listing notifications go to the listing detail page.
+  */
+  if (notification.listingId) {
+    return `/home/marketplace/browse/${notification.listingId}`;
   }
 
   return "/home/notifications";
@@ -637,7 +657,7 @@ function FilterButton({
 }: {
   active: boolean;
   onClick: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -658,6 +678,7 @@ function EmptyState({ title, text }: { title: string; text: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-black/20 bg-[#fbfaf7] p-8 text-center">
       <p className="text-sm font-semibold text-black">{title}</p>
+
       <p className="mt-2 text-sm leading-6 text-black/45">{text}</p>
     </div>
   );

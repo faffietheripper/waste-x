@@ -1142,6 +1142,195 @@ export const wasteTrackingSubmissions = pgTable(
   }),
 );
 
+/* =========================================================
+   DIGITAL WASTE TRACKING - PAT RESULTS
+
+   Production Approval Test evidence tracker for DEFRA.
+   This is NOT the raw API log. The raw log remains
+   wasteTrackingSubmissions.
+========================================================= */
+
+export const wasteTrackingPatResults = pgTable(
+  "bb_waste_tracking_pat_result",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    /*
+      DEFRA scenario identity.
+      Examples:
+      R01, R02, R03, C01, H02, X01
+    */
+    scenarioId: text("scenarioId").notNull(),
+
+    scenarioOrder: integer("scenarioOrder").notNull(),
+
+    scenarioDescription: text("scenarioDescription").notNull(),
+
+    feature: text("feature"),
+
+    expectedResult: text("expectedResult")
+      .$type<"success" | "error">()
+      .notNull()
+      .default("success"),
+
+    /*
+      DEFRA specifically asked for:
+      - Scenario ID
+      - Scenario description
+      - WTID
+      - EWC codes if required
+      - Reason if required
+    */
+    wasteTrackingId: text("wasteTrackingId"),
+
+    ewcCodes: text("ewcCodes"),
+
+    reason: text("reason"),
+
+    /*
+      Waste X internal links.
+      These are optional because C01 and H02 are expected-error
+      scenarios and may not create a WTID.
+    */
+    assignmentId: text("assignmentId").references(() => carrierAssignments.id, {
+      onDelete: "set null",
+    }),
+
+    listingId: integer("listingId").references(() => wasteListings.id, {
+      onDelete: "set null",
+    }),
+
+    receiptId: text("receiptId").references(() => wasteReceipts.id, {
+      onDelete: "set null",
+    }),
+
+    dwtSubmissionId: text("dwtSubmissionId").references(
+      () => wasteTrackingSubmissions.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+
+    /*
+      Result evidence.
+    */
+    httpStatus: integer("httpStatus"),
+
+    errorMessage: text("errorMessage"),
+
+    testedAt: timestamp("testedAt", { mode: "date" }),
+
+    /*
+      DEFRA approval workflow.
+    */
+    defraStatus: text("defraStatus")
+      .$type<
+        | "not_started"
+        | "ready_to_send"
+        | "submitted_to_defra"
+        | "confirmed_by_defra"
+        | "needs_more_info"
+        | "unable_to_run"
+        | "failed"
+      >()
+      .notNull()
+      .default("not_started"),
+
+    defraSentAt: timestamp("defraSentAt", { mode: "date" }),
+
+    defraConfirmedAt: timestamp("defraConfirmedAt", { mode: "date" }),
+
+    unableToRunReason: text("unableToRunReason"),
+
+    additionalDetails: text("additionalDetails"),
+
+    notes: text("notes"),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    updatedByUserId: text("updatedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    scenarioUnique: uniqueIndex("waste_tracking_pat_result_scenario_unique").on(
+      table.scenarioId,
+    ),
+
+    scenarioIdx: index("waste_tracking_pat_result_scenario_idx").on(
+      table.scenarioId,
+    ),
+
+    statusIdx: index("waste_tracking_pat_result_status_idx").on(
+      table.defraStatus,
+    ),
+
+    assignmentIdx: index("waste_tracking_pat_result_assignment_idx").on(
+      table.assignmentId,
+    ),
+
+    listingIdx: index("waste_tracking_pat_result_listing_idx").on(
+      table.listingId,
+    ),
+
+    receiptIdx: index("waste_tracking_pat_result_receipt_idx").on(
+      table.receiptId,
+    ),
+
+    submissionIdx: index("waste_tracking_pat_result_submission_idx").on(
+      table.dwtSubmissionId,
+    ),
+
+    trackingIdx: index("waste_tracking_pat_result_wtid_idx").on(
+      table.wasteTrackingId,
+    ),
+  }),
+);
+
+/* ================= DIGITAL WASTE TRACKING PAT RESULTS ================= */
+
+export const wasteTrackingPatResultsRelations = relations(
+  wasteTrackingPatResults,
+  ({ one }) => ({
+    assignment: one(carrierAssignments, {
+      fields: [wasteTrackingPatResults.assignmentId],
+      references: [carrierAssignments.id],
+    }),
+
+    listing: one(wasteListings, {
+      fields: [wasteTrackingPatResults.listingId],
+      references: [wasteListings.id],
+    }),
+
+    receipt: one(wasteReceipts, {
+      fields: [wasteTrackingPatResults.receiptId],
+      references: [wasteReceipts.id],
+    }),
+
+    dwtSubmission: one(wasteTrackingSubmissions, {
+      fields: [wasteTrackingPatResults.dwtSubmissionId],
+      references: [wasteTrackingSubmissions.id],
+    }),
+
+    createdByUser: one(users, {
+      fields: [wasteTrackingPatResults.createdByUserId],
+      references: [users.id],
+    }),
+
+    updatedByUser: one(users, {
+      fields: [wasteTrackingPatResults.updatedByUserId],
+      references: [users.id],
+    }),
+  }),
+);
+
 
 export const notifications = pgTable(
   "bb_notification",

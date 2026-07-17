@@ -38,6 +38,10 @@ export function createListing(input: CreateListingInput, ctx: Context) {
 
   const allowedCarrierIds = input.allowedCarrierIds ?? [];
 
+  const fileKeys = Array.isArray(input.fileName)
+    ? input.fileName.map((key) => key.trim()).filter(Boolean)
+    : [];
+
   /* ===============================
      PARTICIPATION RULES
   ============================== */
@@ -89,7 +93,15 @@ export function createListing(input: CreateListingInput, ctx: Context) {
     startingPrice: input.startingPrice ?? 0,
     currentBid: 0,
 
-    fileKey: input.fileName?.[0] ?? "", // ⚠️ temp (single file support)
+    /*
+      IMPORTANT:
+      bb_waste_listing.fileKey is a text column.
+      So for multiple images, we store them as a comma-separated string.
+
+      Example:
+      listings/img1.jpg,listings/img2.jpg,listings/img3.jpg
+    */
+    fileKey: fileKeys.join(","),
 
     endDate: input.endDate,
 
