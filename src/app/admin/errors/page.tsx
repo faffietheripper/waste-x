@@ -22,6 +22,10 @@ type AdminErrorsSearchParams =
       status?: string;
     }>;
 
+/* =========================================================
+   PAGE
+========================================================= */
+
 export default async function AdminErrorsPage({
   searchParams,
 }: {
@@ -41,19 +45,18 @@ export default async function AdminErrorsPage({
     status,
   });
 
-  const safeErrors =
-    errors?.map((error) => ({
-      ...error,
-      createdAt: error.createdAt ? error.createdAt.toISOString() : null,
-      resolvedAt:
-        "resolvedAt" in error && error.resolvedAt
-          ? error.resolvedAt.toISOString()
-          : null,
-      updatedAt:
-        "updatedAt" in error && error.updatedAt
-          ? error.updatedAt.toISOString()
-          : null,
-    })) ?? [];
+  const safeErrors = Array.isArray(errors)
+    ? errors.map((error) => {
+        const row = error as Record<string, unknown>;
+
+        return {
+          ...error,
+          createdAt: serialiseDate(row.createdAt),
+          resolvedAt: serialiseDate(row.resolvedAt),
+          updatedAt: serialiseDate(row.updatedAt),
+        };
+      })
+    : [];
 
   const totalErrors = safeErrors.length;
 
@@ -77,7 +80,7 @@ export default async function AdminErrorsPage({
     severity ? `Severity: ${formatLabel(severity)}` : null,
     status ? `Status: ${formatLabel(status)}` : null,
     code ? `Code: ${code}` : null,
-  ].filter(Boolean);
+  ].filter(isNonEmptyString);
 
   const hasActiveFilters =
     Boolean(severity) || Boolean(code) || status !== "active";
@@ -284,6 +287,26 @@ function normaliseCode(value: string | undefined) {
   const cleaned = value.trim();
 
   return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function serialiseDate(value: unknown) {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    const date = new Date(value);
+
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  }
+
+  return null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function formatLabel(value: string | null | undefined) {

@@ -16,6 +16,41 @@ import {
 import CreateDepartmentForm from "./CreateDepartmentForm";
 
 /* =========================================================
+   FORM ACTION WRAPPERS
+   Keeps React / Next form action typing clean.
+========================================================= */
+
+async function ensureRecommendedDepartmentsFormAction(_formData: FormData) {
+  "use server";
+
+  await ensureRecommendedDepartmentsAction();
+}
+
+async function setActiveDepartmentFormAction(formData: FormData) {
+  "use server";
+
+  await setActiveDepartmentAction(formData);
+}
+
+async function deleteDepartmentFormAction(formData: FormData) {
+  "use server";
+
+  await deleteDepartmentAction(formData);
+}
+
+async function assignMemberToDepartmentFormAction(formData: FormData) {
+  "use server";
+
+  await assignMemberToDepartmentAction(formData);
+}
+
+async function clearMemberDepartmentFormAction(formData: FormData) {
+  "use server";
+
+  await clearMemberDepartmentAction(formData);
+}
+
+/* =========================================================
    TYPES
 ========================================================= */
 
@@ -31,7 +66,7 @@ type DepartmentRow = {
   createdAt: Date | null;
 };
 
-type MemberRow = {
+type MemberRecord = {
   id: string;
   name: string;
   email: string;
@@ -60,7 +95,13 @@ const ALL_DEPARTMENT_TYPES: DepartmentType[] = [
 function formatDate(date: Date | string | null | undefined) {
   if (!date) return "Not yet";
 
-  return new Date(date).toLocaleString("en-GB", {
+  const parsed = new Date(date);
+
+  if (!Number.isFinite(parsed.getTime())) {
+    return "Not yet";
+  }
+
+  return parsed.toLocaleString("en-GB", {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -185,13 +226,16 @@ function getUnavailableTypes(capabilities: Capability[]) {
   );
 }
 
-function getDepartmentMemberCount(departmentId: string, members: MemberRow[]) {
+function getDepartmentMemberCount(
+  departmentId: string,
+  members: MemberRecord[],
+) {
   return members.filter((member) => member.departmentId === departmentId)
     .length;
 }
 
-function getDuplicateDepartmentTypes(departments: DepartmentRow[]) {
-  const counts = departments.reduce<Record<string, number>>(
+function getDuplicateDepartmentTypes(departmentRows: DepartmentRow[]) {
+  const counts = departmentRows.reduce<Record<string, number>>(
     (acc, department) => {
       acc[department.type] = (acc[department.type] ?? 0) + 1;
       return acc;
@@ -263,7 +307,7 @@ export default async function DepartmentsSettingsPage() {
       status: true,
       departmentId: true,
     },
-  })) as MemberRow[];
+  })) as MemberRecord[];
 
   const recommendedTypes = getRecommendedTypes(capabilities);
   const unavailableTypes = getUnavailableTypes(capabilities);
@@ -357,7 +401,7 @@ export default async function DepartmentsSettingsPage() {
           </div>
 
           {canManageDepartments && missingTypes.length > 0 ? (
-            <form action={ensureRecommendedDepartmentsAction}>
+            <form action={ensureRecommendedDepartmentsFormAction}>
               <button
                 type="submit"
                 className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
@@ -801,7 +845,7 @@ function DepartmentCard({
         {canManageDepartments ? (
           <div className="flex shrink-0 flex-wrap gap-2">
             {!isActive && (
-              <form action={setActiveDepartmentAction}>
+              <form action={setActiveDepartmentFormAction}>
                 <input type="hidden" name="departmentId" value={department.id} />
 
                 <button
@@ -813,7 +857,7 @@ function DepartmentCard({
               </form>
             )}
 
-            <form action={deleteDepartmentAction}>
+            <form action={deleteDepartmentFormAction}>
               <input type="hidden" name="departmentId" value={department.id} />
 
               <button
@@ -843,7 +887,7 @@ function MemberRow({
   departments,
   canManageDepartments,
 }: {
-  member: MemberRow;
+  member: MemberRecord;
   departments: DepartmentRow[];
   canManageDepartments: boolean;
 }) {
@@ -884,7 +928,10 @@ function MemberRow({
       <div className="col-span-12 md:col-span-4">
         {canManageDepartments ? (
           <div className="flex flex-wrap gap-2 md:justify-end">
-            <form action={assignMemberToDepartmentAction} className="flex gap-2">
+            <form
+              action={assignMemberToDepartmentFormAction}
+              className="flex gap-2"
+            >
               <input type="hidden" name="memberId" value={member.id} />
 
               <select
@@ -912,7 +959,7 @@ function MemberRow({
             </form>
 
             {member.departmentId && (
-              <form action={clearMemberDepartmentAction}>
+              <form action={clearMemberDepartmentFormAction}>
                 <input type="hidden" name="memberId" value={member.id} />
 
                 <button

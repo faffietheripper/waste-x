@@ -8,11 +8,15 @@ import {
   FiCheckCircle,
 } from "react-icons/fi";
 import { useForm } from "react-hook-form";
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 
 import { inviteTeamMemberAction } from "@/modules/team/actions/inviteTeamMemberAction";
 import { sendRegEmail } from "@/util/sendRegEmail";
 import { useAction } from "@/lib/actions/useAction";
+
+/* =========================================================
+   TYPES
+========================================================= */
 
 type Department = {
   id: string;
@@ -20,28 +24,46 @@ type Department = {
   type: string;
 };
 
-interface NewMemberModalProps {
-  isOpen: boolean;
-  setIsOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  departments: Department[];
-}
+type InviteRole = "employee" | "seniorManagement" | "administrator";
 
-interface InviteFormData {
+type NewMemberModalProps = {
+  isOpen: boolean;
+  setIsOpen: Dispatch<SetStateAction<boolean>>;
+  departments?: Department[];
+};
+
+type InviteFormData = {
   name: string;
   email: string;
-  role: "employee" | "seniorManagement" | "administrator";
+  role: InviteRole;
   departmentId: string;
-}
+};
 
-type InviteResponse =
-  | { success: true; token: string }
-  | { success: false; message: string };
+/*
+  Keep this intentionally loose.
+
+  inviteTeamMemberAction currently returns success as boolean, not literal
+  true/false, so a discriminated union causes production build errors.
+*/
+type InviteResponse = {
+  success?: boolean;
+  message?: string;
+  token?: string;
+};
+
+/* =========================================================
+   MODAL
+========================================================= */
 
 export default function NewMemberModal({
   isOpen,
   setIsOpen,
-  departments,
+  departments = [],
 }: NewMemberModalProps) {
+  function closeModal() {
+    setIsOpen(false);
+  }
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -49,22 +71,24 @@ export default function NewMemberModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          onClick={() => setIsOpen(false)}
+          onClick={closeModal}
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-8 backdrop-blur-sm"
         >
           <motion.div
             initial={{ opacity: 0, y: 30, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.96 }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
             className="relative mt-20 w-full max-w-2xl overflow-hidden rounded-3xl border border-white/10 bg-[#111111] text-white shadow-2xl"
           >
             <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-orange-500/20 blur-3xl" />
 
             <div className="relative border-b border-white/10 p-6">
               <button
-                onClick={() => setIsOpen(false)}
-                className="absolute right-5 top-5 rounded-full p-2 text-white/50 hover:bg-white/10 hover:text-white"
+                type="button"
+                onClick={closeModal}
+                className="absolute right-5 top-5 rounded-full p-2 text-white/50 transition hover:bg-white/10 hover:text-white"
+                aria-label="Close invite modal"
               >
                 <FiX />
               </button>
@@ -78,9 +102,11 @@ export default function NewMemberModal({
                   <p className="text-xs uppercase tracking-[0.25em] text-orange-400">
                     Team Onboarding
                   </p>
+
                   <h3 className="mt-1 text-2xl font-semibold">
                     Invite Team Member
                   </h3>
+
                   <p className="mt-1 text-sm text-white/50">
                     Assign role and department access before the user joins.
                   </p>
@@ -89,10 +115,7 @@ export default function NewMemberModal({
             </div>
 
             <div className="relative p-6">
-              <RegisterForm
-                departments={departments}
-                onSuccess={() => setIsOpen(false)}
-              />
+              <RegisterForm departments={departments} onSuccess={closeModal} />
             </div>
           </motion.div>
         </motion.div>
@@ -100,6 +123,10 @@ export default function NewMemberModal({
     </AnimatePresence>
   );
 }
+
+/* =========================================================
+   FORM
+========================================================= */
 
 function RegisterForm({
   departments,
@@ -110,53 +137,91 @@ function RegisterForm({
 }) {
   const { register, handleSubmit, reset } = useForm<InviteFormData>({
     defaultValues: {
+      name: "",
+      email: "",
       role: "employee",
       departmentId: "",
     },
   });
 
+  const run = useAction();
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const run = useAction();
+  async function onSubmit(data: InviteFormData) {
+    if (loading) return;
 
-  const onSubmit = async (data: InviteFormData) => {
     setLoading(true);
     setMessage(null);
     setError(null);
 
-    if (!data.departmentId) {
-      setError("Please assign the user to a department.");
+    try {
+      const name = data.name.trim();
+      const email = data.email.trim();
+      const departmentId = data.departmentId.trim();
+
+      if (!name) {
+        setError("Please enter the team member name.");
+        return;
+      }
+
+      if (!email) {
+        setError("Please enter the team member email.");
+        return;
+      }
+
+      if (!departmentId) {
+        setError("Please assign the user to a department.");
+        return;
+      }
+
+      const response = (await run(() =>
+        inviteTeamMemberAction({
+          name,
+          email,
+          role: data.role,
+          departmentId,
+        }),
+      )) as InviteResponse | null;
+
+      if (!response?.success) {
+        setError(response?.message || "Failed to create invitation.");
+        return;
+      }
+
+      if (!response.token) {
+        setError("Invitation was created but no invite token was returned.");
+        return;
+      }
+
+      await sendRegEmail({
+        name,
+        email,
+        token: response.token,
+      });
+
+      setMessage("Invitation sent successfully.");
+
+      reset({
+        name: "",
+        email: "",
+        role: "employee",
+        departmentId: "",
+      });
+
+      setTimeout(() => {
+        onSuccess();
+      }, 800);
+    } catch (caughtError) {
+      console.error("Invite team member error:", caughtError);
+
+      setError("Something went wrong while sending the invitation.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const response = await run<InviteResponse>(() =>
-      inviteTeamMemberAction(data),
-    );
-
-    if (!response?.success) {
-      setError(response?.message || "Failed to create invitation.");
-      setLoading(false);
-      return;
-    }
-
-    await sendRegEmail({
-      name: data.name,
-      email: data.email,
-      token: response.token,
-    });
-
-    setMessage("Invitation sent successfully.");
-    reset();
-
-    setTimeout(() => {
-      onSuccess();
-    }, 800);
-
-    setLoading(false);
-  };
+  }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-6 gap-5">
@@ -175,7 +240,7 @@ function RegisterForm({
       )}
 
       {departments.length === 0 && (
-        <div className="col-span-6 rounded-2xl border border-orange-500/20 bg-orange-500/10 p-4 text-sm text-orange-300">
+        <div className="col-span-6 rounded-2xl border border-orange-500/20 bg-orange-500/10 p-4 text-sm leading-6 text-orange-300">
           No departments found. Create organisation departments before inviting
           team members.
         </div>
@@ -183,38 +248,43 @@ function RegisterForm({
 
       <div className="col-span-6 md:col-span-3">
         <label className="text-sm text-white/70">Full Name</label>
+
         <input
           required
           {...register("name", { required: true })}
-          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-orange-500"
+          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-orange-500"
           placeholder="e.g. Jamie Smith"
         />
       </div>
 
       <div className="col-span-6 md:col-span-3">
         <label className="text-sm text-white/70">Email</label>
+
         <input
           required
           type="email"
           {...register("email", { required: true })}
-          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-orange-500"
+          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-orange-500"
           placeholder="name@company.com"
         />
       </div>
 
       <div className="col-span-6">
         <label className="text-sm text-white/70">Organisation Role</label>
+
         <select
           required
           {...register("role", { required: true })}
-          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-orange-500"
+          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-orange-500"
         >
           <option className="bg-black" value="employee">
             Employee
           </option>
+
           <option className="bg-black" value="seniorManagement">
             Senior Management
           </option>
+
           <option className="bg-black" value="administrator">
             Administrator
           </option>
@@ -223,6 +293,7 @@ function RegisterForm({
 
       <div className="col-span-6">
         <label className="text-sm text-white/70">Department</label>
+
         <p className="mt-1 text-xs text-white/40">
           This controls which operational area the user works in.
         </p>
@@ -231,7 +302,7 @@ function RegisterForm({
           required
           disabled={departments.length === 0}
           {...register("departmentId", { required: true })}
-          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option className="bg-black" value="">
             Select department
@@ -243,7 +314,7 @@ function RegisterForm({
               className="bg-black"
               value={department.id}
             >
-              {department.name} — {department.type}
+              {department.name} — {formatDepartmentType(department.type)}
             </option>
           ))}
         </select>
@@ -260,4 +331,16 @@ function RegisterForm({
       </div>
     </form>
   );
+}
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function formatDepartmentType(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

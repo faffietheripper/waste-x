@@ -71,7 +71,9 @@ export default function OrganisationNav() {
           return (
             <Tab
               key={tab.value}
-              ref={(el) => (refs.current[i] = el)}
+              ref={(el) => {
+  refs.current[i] = el;
+}}
               setPosition={setPosition}
               isActive={isActive}
             >

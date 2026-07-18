@@ -56,7 +56,9 @@ export default function BidsNav() {
         {tabs.map((tab, i) => (
           <Tab
             key={tab.value}
-            ref={(el) => (refs.current[i] = el)}
+           ref={(el) => {
+  refs.current[i] = el;
+}}
             setPosition={setPosition}
             isActive={current === tab.value}
           >

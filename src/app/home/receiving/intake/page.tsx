@@ -43,13 +43,19 @@ type AssignmentForReadiness = {
    HELPERS
 ========================================================= */
 
-function formatDate(value: Date | null | undefined) {
+function formatDate(value: Date | string | null | undefined) {
   if (!value) return "Not recorded";
+
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return "Not recorded";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(value);
+  }).format(date);
 }
 
 function formatStatus(status: string | null | undefined) {
@@ -303,11 +309,18 @@ export default async function ReceivingIntakePage() {
     redirect("/home/settings/departments?reason=no-active-department");
   }
 
+  /*
+    Keep narrowed values in constants.
+    This prevents TypeScript from losing the null check inside nested JSX maps.
+  */
+  const currentOrganisation = currentUser.organisation;
+  const currentDepartment = currentUser.department;
+
   const capabilities =
-    (currentUser.organisation.capabilities as Capability[] | null) ?? [];
+    (currentOrganisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentUser.department.type as DepartmentType | undefined) ?? null;
+    (currentDepartment.type as DepartmentType | undefined) ?? null;
 
   const canViewReceiving = hasOperationalPermission({
     capabilities,
@@ -689,7 +702,7 @@ export default async function ReceivingIntakePage() {
                             Manager:
                           </span>{" "}
                           {assignment.managerOrganisation?.teamName ??
-                            currentUser.organisation.teamName ??
+                            currentOrganisation.teamName ??
                             "Not recorded"}
                         </p>
 
@@ -803,8 +816,7 @@ export default async function ReceivingIntakePage() {
                             submission.status === "rejected" ||
                             submission.status === "failed"
                               ? "danger"
-                              : submission.status ===
-                                  "accepted_with_warnings"
+                              : submission.status === "accepted_with_warnings"
                                 ? "warning"
                                 : "success"
                           }
@@ -855,7 +867,7 @@ export default async function ReceivingIntakePage() {
                       <p>
                         Manager:{" "}
                         {assignment.managerOrganisation?.teamName ??
-                          currentUser.organisation.teamName ??
+                          currentOrganisation.teamName ??
                           "Not recorded"}
                       </p>
                     </div>

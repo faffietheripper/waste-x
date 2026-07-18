@@ -58,7 +58,9 @@ export default function AssignmentsNav() {
           return (
             <Tab
               key={tab.href}
-              ref={(el) => (refs.current[i] = el)}
+            ref={(el) => {
+  refs.current[i] = el;
+}}
               setPosition={setPosition}
               isActive={isActive}
             >

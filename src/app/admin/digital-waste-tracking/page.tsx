@@ -64,10 +64,6 @@ export default async function AdminDigitalWasteTrackingPage() {
     listingRows.map((listing) => [String(listing.id), listing]),
   );
 
-  const assignmentById = new Map(
-    assignmentRows.map((assignment) => [assignment.id, assignment]),
-  );
-
   const settingsByOrganisationId = new Map(
     settings.map((setting) => [setting.organisationId, setting]),
   );
@@ -84,8 +80,8 @@ export default async function AdminDigitalWasteTrackingPage() {
     ["rejected", "failed"].includes(submission.status),
   );
 
-  const pendingSubmissions = submissions.filter(
-    (submission) => submission.status === "pending",
+  const awaitingFinalStatusSubmissions = submissions.filter((submission) =>
+    ["draft", "submitted"].includes(submission.status),
   );
 
   const acceptedWithWarnings = submissions.filter(
@@ -130,7 +126,7 @@ export default async function AdminDigitalWasteTrackingPage() {
   const acceptedByAssignmentId = new Set(
     acceptedSubmissions
       .map((submission) => cleanString(submission.assignmentId))
-      .filter(Boolean),
+      .filter(isNonEmptyString),
   );
 
   const acceptedByListingId = new Set(
@@ -140,7 +136,7 @@ export default async function AdminDigitalWasteTrackingPage() {
           ? null
           : String(submission.listingId),
       )
-      .filter(Boolean),
+      .filter(isNonEmptyString),
   );
 
   const unresolvedIncidentRows = incidentRows.filter((incident) =>
@@ -150,18 +146,19 @@ export default async function AdminDigitalWasteTrackingPage() {
   const unresolvedIncidentByAssignmentId = new Set(
     unresolvedIncidentRows
       .map((incident) => cleanString(getUnknownField(incident, "assignmentId")))
-      .filter(Boolean),
+      .filter(isNonEmptyString),
   );
 
   const unresolvedIncidentByListingId = new Set(
     unresolvedIncidentRows
       .map((incident) => {
         const listingId = getUnknownField(incident, "listingId");
+
         return listingId === null || listingId === undefined
           ? null
           : String(listingId);
       })
-      .filter(Boolean),
+      .filter(isNonEmptyString),
   );
 
   const completedAssignmentById = new Set(
@@ -180,6 +177,7 @@ export default async function AdminDigitalWasteTrackingPage() {
   const readyForDwtReceipts = confirmedReceipts
     .filter((receipt) => {
       const assignmentId = cleanString(receipt.assignmentId);
+
       const listingId =
         receipt.listingId === null || receipt.listingId === undefined
           ? null
@@ -244,11 +242,13 @@ export default async function AdminDigitalWasteTrackingPage() {
     })
     .sort((first, second) => {
       if (first.enabled !== second.enabled) return first.enabled ? -1 : 1;
+
       return second.submissions - first.submissions;
     });
 
   const submissionViews = submissions.slice(0, 30).map((submission) => {
     const organisation = organisationById.get(submission.organisationId);
+
     const submittedBy = submission.submittedByUserId
       ? userById.get(submission.submittedByUserId)
       : null;
@@ -536,6 +536,12 @@ export default async function AdminDigitalWasteTrackingPage() {
               helper="Top records shown below"
             />
 
+            <MiniStat
+              label="Awaiting final status"
+              value={awaitingFinalStatusSubmissions.length}
+              helper="Draft or submitted DWT records"
+            />
+
             {readyForDwtReceipts.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-5">
                 <p className="text-sm font-semibold text-gray-950">
@@ -721,7 +727,10 @@ export default async function AdminDigitalWasteTrackingPage() {
 
                 <tbody className="divide-y divide-gray-200 bg-white">
                   {submissionViews.map((submission) => (
-                    <tr key={submission.id} className="transition hover:bg-gray-50">
+                    <tr
+                      key={submission.id}
+                      className="transition hover:bg-gray-50"
+                    >
                       <TableCell>
                         <StatusBadge status={submission.status} />
                       </TableCell>
@@ -750,9 +759,10 @@ export default async function AdminDigitalWasteTrackingPage() {
                           </p>
 
                           <p className="mt-1 text-xs text-gray-400">
-                            {submission.carrierName || "Carrier not recorded"} →
-                            {" "}
-                            {submission.receiverName || "Receiver not recorded"}
+                            {submission.carrierName || "Carrier not recorded"}{" "}
+                            →{" "}
+                            {submission.receiverName ||
+                              "Receiver not recorded"}
                           </p>
                         </div>
                       </TableCell>
@@ -764,7 +774,9 @@ export default async function AdminDigitalWasteTrackingPage() {
                       </TableCell>
 
                       <TableCell>{submission.statusCode ?? "—"}</TableCell>
+
                       <TableCell>{submission.warningsCount}</TableCell>
+
                       <TableCell>
                         <span
                           className={
@@ -959,16 +971,26 @@ function LatestSubmissionCard({
       </h3>
 
       <div className="mt-4 space-y-3">
-        <InfoRow label="Endpoint" value={`${submission.method} ${submission.endpoint}`} />
-        <InfoRow label="HTTP status" value={statusCode ? String(statusCode) : "—"} />
+        <InfoRow
+          label="Endpoint"
+          value={`${submission.method} ${submission.endpoint}`}
+        />
+
+        <InfoRow
+          label="HTTP status"
+          value={statusCode ? String(statusCode) : "—"}
+        />
+
         <InfoRow
           label="Warnings"
           value={String(getJsonArrayLength(submission.validationWarnings))}
         />
+
         <InfoRow
           label="Errors"
           value={String(getJsonArrayLength(submission.validationErrors))}
         />
+
         <InfoRow
           label="Submitted"
           value={formatDateTime(
@@ -1040,8 +1062,9 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
     status === "submitted"
       ? "border-gray-900 bg-gray-950 text-white"
       : status === "accepted_with_warnings" ||
-          status === "pending" ||
-          status === "PENDING"
+          status === "draft" ||
+          status === "PENDING" ||
+          status === "pending"
         ? "border-gray-300 bg-gray-100 text-gray-800"
         : status === "rejected" ||
             status === "failed" ||
@@ -1063,6 +1086,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
       <p className="text-xs font-medium text-gray-400">{label}</p>
+
       <p className="mt-1 break-words text-sm font-semibold text-gray-950">
         {value}
       </p>
@@ -1103,24 +1127,7 @@ function TableCell({ children }: { children: ReactNode }) {
    HELPERS
 ========================================================= */
 
-type SubmissionRow = {
-  id: string;
-  organisationId: string;
-  assignmentId: string | null;
-  listingId: number | null;
-  submittedByUserId: string | null;
-  wasteTrackingId: string | null;
-  submissionType: string;
-  status: string;
-  method: string;
-  endpoint: string;
-  payloadSnapshot: string;
-  responseSnapshot: string | null;
-  validationWarnings: string | null;
-  validationErrors: string | null;
-  submittedAt: Date | null;
-  lastAttemptedAt: Date | null;
-};
+type SubmissionRow = typeof wasteTrackingSubmissions.$inferSelect;
 
 function buildMovementGroups(submissions: SubmissionRow[]) {
   const groups = new Map<
@@ -1143,7 +1150,11 @@ function buildMovementGroups(submissions: SubmissionRow[]) {
         key,
         entityId:
           submission.assignmentId ??
-          String(submission.listingId ?? submission.wasteTrackingId ?? submission.id),
+          String(
+            submission.listingId ??
+              submission.wasteTrackingId ??
+              submission.id,
+          ),
         latest: submission,
         attempts: [submission],
       });
@@ -1170,6 +1181,7 @@ function buildMovementGroups(submissions: SubmissionRow[]) {
 function getMovementKey(submission: SubmissionRow) {
   if (submission.assignmentId) return `assignment:${submission.assignmentId}`;
   if (submission.listingId) return `listing:${submission.listingId}`;
+
   if (submission.wasteTrackingId) {
     return `tracking:${submission.wasteTrackingId}`;
   }
@@ -1179,6 +1191,7 @@ function getMovementKey(submission: SubmissionRow) {
 
 function getSubmissionTime(submission: SubmissionRow) {
   const value = submission.lastAttemptedAt ?? submission.submittedAt;
+
   return value ? new Date(value).getTime() : 0;
 }
 
@@ -1194,6 +1207,10 @@ function cleanString(value: unknown) {
   const cleaned = value.trim();
 
   return cleaned.length > 0 ? cleaned : null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function getUnknownField(row: unknown, key: string) {
@@ -1315,8 +1332,12 @@ function formatStatus(status: string | null | undefined) {
 function formatDateTime(date: Date | string | null | undefined) {
   if (!date) return "—";
 
+  const parsed = new Date(date);
+
+  if (!Number.isFinite(parsed.getTime())) return "—";
+
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(date));
+  }).format(parsed);
 }

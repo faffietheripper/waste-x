@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { getOrgTemplates } from "@/app/home-old/team-dashboard/template-library/actions";
+import { getOrgTemplatesAction } from "@/modules/templates/actions/templateActions";
 import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 
 /* =========================================================
@@ -8,21 +8,21 @@ import { requireOperationalPermission } from "@/modules/auth/core/requireOperati
 ========================================================= */
 
 export default async function CreateWasteListing() {
-  /* =========================================================
-     PAGE PERMISSION GUARD
+  /*
+    PAGE PERMISSION GUARD
 
-     Only departments with listing:create can access this page.
+    Only departments with listing:create can access this page.
 
-     Under the updated matrix:
-     - generator can create listings
-     - manager cannot create listings
-     - carrier cannot create listings
-     - compliance cannot create listings
-  ========================================================= */
+    Under the updated matrix:
+    - generator can create listings
+    - manager cannot create listings
+    - carrier cannot create listings
+    - compliance cannot create listings
+  */
 
   const context = await requireOperationalPermission("listing:create");
 
-  const templates = await getOrgTemplates();
+  const templates = (await getOrgTemplatesAction()) ?? [];
 
   const lockedTemplates = templates.filter((template) => template.isLocked);
 
@@ -197,7 +197,9 @@ function InfoPanel({
       <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
         {label}
       </p>
+
       <h2 className="mt-3 text-lg font-semibold text-black">{title}</h2>
+
       <p className="mt-2 text-sm leading-6 text-black/50">{description}</p>
     </div>
   );

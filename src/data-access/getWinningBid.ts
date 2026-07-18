@@ -1,24 +1,30 @@
 import { database } from "@/db/database";
-import { wasteListings, bids } from "@/db/schema";
+import { bids, wasteListings } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
 export async function getWinningBid(listingId: number) {
-  const listing = await database.query.wasteListings.findFirst({
-    where: eq(wasteListings.id, listingId),
-    with: {
-      bids: {
-        with: {
-          organisation: true,
-        },
-      },
-    },
-  });
-
-  if (!listing?.winningBidId) {
+  if (!listingId || Number.isNaN(listingId)) {
     return { winningBid: null };
   }
 
-  const winning = listing.bids.find((b) => b.id === listing.winningBidId);
+  const listing = await database.query.wasteListings.findFirst({
+    where: eq(wasteListings.id, listingId),
+    columns: {
+      id: true,
+      winnerBidId: true,
+    },
+  });
+
+  if (!listing?.winnerBidId) {
+    return { winningBid: null };
+  }
+
+  const winning = await database.query.bids.findFirst({
+    where: eq(bids.id, listing.winnerBidId),
+    with: {
+      organisation: true,
+    },
+  });
 
   if (!winning) {
     return { winningBid: null };

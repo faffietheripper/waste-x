@@ -10,68 +10,96 @@ import {
 
 import { downloadAssignmentReportAction } from "@/modules/assignments/actions/downloadAssignmentReportAction";
 
-function formatDate(date: Date | string | null | undefined) {
-  if (!date) return "Not yet";
-  return new Date(date).toLocaleString();
-}
+/* =========================================================
+   TYPES
+========================================================= */
+
+type AssignmentForCompliancePanel = {
+  id: string;
+  verificationCode?: string | null;
+  assignedAt?: Date | string | null;
+  respondedAt?: Date | string | null;
+  collectedAt?: Date | string | null;
+  completedAt?: Date | string | null;
+  hasIncident?: boolean | null;
+};
+
+type DownloadReportResult = {
+  success?: boolean;
+  message?: string;
+  file?: string;
+};
+
+/* =========================================================
+   COMPONENT
+========================================================= */
 
 export default function AssignmentCompliancePanel({
   assignment,
 }: {
-  assignment: any;
+  assignment: AssignmentForCompliancePanel;
 }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleDownload = async () => {
+  async function handleDownload() {
+    if (loading) return;
+
+    if (!assignment?.id) {
+      setError("Missing assignment ID.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setMessage(null);
 
-    const res = await downloadAssignmentReportAction(assignment.id);
+    try {
+      const result = (await downloadAssignmentReportAction(
+        assignment.id,
+      )) as DownloadReportResult;
 
-    setLoading(false);
+      if (!result?.success) {
+        setError(result?.message || "Failed to generate report.");
+        return;
+      }
 
-    if (!res.success) {
-      setError(res.message || "Failed to generate report.");
-      return;
+      if (!result.file) {
+        setError("Report was generated but no file was returned.");
+        return;
+      }
+
+      downloadBase64Pdf({
+        base64: result.file,
+        fileName: `WasteX-Audit-${assignment.id}.pdf`,
+      });
+
+      setMessage("Audit report downloaded.");
+    } catch (caughtError) {
+      console.error("Download assignment report error:", caughtError);
+
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Failed to generate report.",
+      );
+    } finally {
+      setLoading(false);
     }
-
-    // 🔥 convert base64 → file
-    const byteCharacters = atob(res.file);
-    const byteNumbers = new Array(byteCharacters.length);
-
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-
-    const byteArray = new Uint8Array(byteNumbers);
-
-    const blob = new Blob([byteArray], { type: "application/pdf" });
-
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `WasteX-Audit-${assignment.id}.pdf`;
-    a.click();
-
-    URL.revokeObjectURL(url);
-
-    setMessage("Audit report downloaded.");
-  };
+  }
 
   return (
-    <div className="rounded-2xl border border-black/10 bg-white p-6 space-y-5 shadow-sm">
+    <div className="space-y-5 rounded-2xl border border-black/10 bg-white p-6 shadow-sm">
       {/* HEADER */}
       <div className="flex items-center gap-3">
-        <div className="bg-black text-white p-2 rounded-lg">
+        <div className="rounded-lg bg-black p-2 text-white">
           <FiFileText />
         </div>
 
         <div>
           <h3 className="font-semibold text-black">Compliance & Audit</h3>
+
           <p className="text-xs text-black/50">
             Full traceability and audit-ready data
           </p>
@@ -80,16 +108,16 @@ export default function AssignmentCompliancePanel({
 
       {/* STATUS MESSAGES */}
       {message && (
-        <div className="flex gap-2 text-sm border border-green-200 bg-green-50 text-green-700 p-3 rounded-xl">
-          <FiCheckCircle className="mt-0.5" />
-          {message}
+        <div className="flex gap-2 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+          <FiCheckCircle className="mt-0.5 shrink-0" />
+          <span>{message}</span>
         </div>
       )}
 
       {error && (
-        <div className="flex gap-2 text-sm border border-red-200 bg-red-50 text-red-700 p-3 rounded-xl">
-          <FiAlertTriangle className="mt-0.5" />
-          {error}
+        <div className="flex gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <FiAlertTriangle className="mt-0.5 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
 
@@ -100,24 +128,28 @@ export default function AssignmentCompliancePanel({
         </Row>
 
         <Row label="Assigned">{formatDate(assignment.assignedAt)}</Row>
+
         <Row label="Accepted">{formatDate(assignment.respondedAt)}</Row>
+
         <Row label="Collected">{formatDate(assignment.collectedAt)}</Row>
+
         <Row label="Completed">{formatDate(assignment.completedAt)}</Row>
 
         <Row label="Incident">
           {assignment.hasIncident ? (
-            <span className="text-red-500 font-medium">Yes</span>
+            <span className="font-medium text-red-500">Yes</span>
           ) : (
-            <span className="text-green-600 font-medium">No</span>
+            <span className="font-medium text-green-600">No</span>
           )}
         </Row>
       </div>
 
       {/* DOWNLOAD */}
       <button
+        type="button"
         onClick={handleDownload}
         disabled={loading}
-        className="w-full flex items-center justify-center gap-2 bg-black text-white py-3 text-sm font-medium rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-black py-3 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <FiDownload />
         {loading ? "Generating report..." : "Download Audit Report"}
@@ -125,6 +157,10 @@ export default function AssignmentCompliancePanel({
     </div>
   );
 }
+
+/* =========================================================
+   SMALL COMPONENTS
+========================================================= */
 
 function Row({
   label,
@@ -134,9 +170,58 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex justify-between border-b border-black/5 pb-2">
+    <div className="flex justify-between gap-4 border-b border-black/5 pb-2">
       <span className="text-black/50">{label}</span>
-      <span className="font-medium text-black">{children}</span>
+      <span className="text-right font-medium text-black">{children}</span>
     </div>
   );
+}
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function formatDate(date: Date | string | null | undefined) {
+  if (!date) return "Not yet";
+
+  const parsed = new Date(date);
+
+  if (!Number.isFinite(parsed.getTime())) {
+    return "Not yet";
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(parsed);
+}
+
+function downloadBase64Pdf({
+  base64,
+  fileName,
+}: {
+  base64: string;
+  fileName: string;
+}) {
+  const byteCharacters = window.atob(base64);
+  const byteNumbers = new Array<number>(byteCharacters.length);
+
+  for (let index = 0; index < byteCharacters.length; index += 1) {
+    byteNumbers[index] = byteCharacters.charCodeAt(index);
+  }
+
+  const byteArray = new Uint8Array(byteNumbers);
+
+  const blob = new Blob([byteArray], {
+    type: "application/pdf",
+  });
+
+  const url = URL.createObjectURL(blob);
+
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+
+  URL.revokeObjectURL(url);
 }

@@ -1,9 +1,15 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { FiLock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
+
 import { completeInviteAction } from "@/modules/team/actions/completeInviteAction";
+
+type CompleteInviteResult = {
+  success?: boolean;
+  message?: string;
+};
 
 export default function SetupAccountClient() {
   const params = useSearchParams();
@@ -17,8 +23,10 @@ export default function SetupAccountClient() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (loading || success) return;
 
     setError(null);
     setSuccess(false);
@@ -40,26 +48,35 @@ export default function SetupAccountClient() {
 
     setLoading(true);
 
-    const res = await completeInviteAction({ token, password });
+    try {
+      const result = (await completeInviteAction({
+        token,
+        password,
+      })) as CompleteInviteResult;
 
-    setLoading(false);
+      if (result?.success) {
+        setSuccess(true);
 
-    if (res.success) {
-      setSuccess(true);
+        setTimeout(() => {
+          router.push("/login");
+        }, 900);
 
-      setTimeout(() => {
-        router.push("/login");
-      }, 900);
+        return;
+      }
 
-      return;
+      setError(getActionMessage(result, "Could not activate your account."));
+    } catch (caughtError) {
+      console.error("Setup account error:", caughtError);
+
+      setError("Something went wrong while activating your account.");
+    } finally {
+      setLoading(false);
     }
-
-    setError(res.message);
-  };
+  }
 
   if (error === "Invite link has expired.") {
     return (
-      <div className="min-h-screen bg-[#0f0f0f] text-white flex items-center justify-center px-6">
+      <div className="flex min-h-screen items-center justify-center bg-[#0f0f0f] px-6 text-white">
         <div className="w-full max-w-md rounded-3xl border border-orange-500/20 bg-[#151515] p-8 text-center shadow-2xl">
           <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-orange-500/10 text-3xl text-orange-400">
             <FiAlertTriangle />
@@ -78,8 +95,9 @@ export default function SetupAccountClient() {
           </p>
 
           <button
+            type="button"
             onClick={() => router.push("/login")}
-            className="mt-6 w-full rounded-xl bg-orange-500 py-3 text-sm font-semibold text-black hover:bg-orange-400 transition"
+            className="mt-6 w-full rounded-xl bg-orange-500 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
           >
             Return to Login
           </button>
@@ -89,7 +107,7 @@ export default function SetupAccountClient() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0f0f0f] text-white flex items-center justify-center px-6">
+    <div className="flex min-h-screen items-center justify-center bg-[#0f0f0f] px-6 text-white">
       <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-white/10 bg-[#151515] p-8 shadow-2xl">
         <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-orange-500/20 blur-3xl" />
 
@@ -127,26 +145,40 @@ export default function SetupAccountClient() {
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div>
-              <label className="text-sm text-white/70">Password</label>
+              <label
+                htmlFor="password"
+                className="text-sm text-white/70"
+              >
+                Password
+              </label>
+
               <input
+                id="password"
                 type="password"
                 placeholder="Minimum 8 characters"
                 required
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-orange-500"
+                onChange={(event) => setPassword(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-orange-500"
               />
             </div>
 
             <div>
-              <label className="text-sm text-white/70">Confirm Password</label>
+              <label
+                htmlFor="confirm-password"
+                className="text-sm text-white/70"
+              >
+                Confirm Password
+              </label>
+
               <input
+                id="confirm-password"
                 type="password"
                 placeholder="Re-enter password"
                 required
                 value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-orange-500"
+                onChange={(event) => setConfirm(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-orange-500"
               />
             </div>
 
@@ -167,4 +199,19 @@ export default function SetupAccountClient() {
       </div>
     </div>
   );
+}
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function getActionMessage(
+  result: CompleteInviteResult | null | undefined,
+  fallback: string,
+) {
+  if (result && typeof result.message === "string" && result.message.trim()) {
+    return result.message;
+  }
+
+  return fallback;
 }

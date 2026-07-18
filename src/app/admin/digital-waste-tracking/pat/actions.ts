@@ -14,6 +14,15 @@ import type {
   PatActionState,
 } from "./pat-action-state";
 
+type DefraStatus =
+  | "not_started"
+  | "ready_to_send"
+  | "submitted_to_defra"
+  | "confirmed_by_defra"
+  | "needs_more_info"
+  | "unable_to_run"
+  | "failed";
+
 const PAT_PATH = "/admin/digital-waste-tracking/pat";
 /* =========================================================
    QUERIES

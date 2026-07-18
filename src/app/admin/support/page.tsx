@@ -7,9 +7,6 @@ import { database } from "@/db/database";
 import { supportTickets } from "@/db/schema";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 
-type TicketPriority = "low" | "medium" | "high" | "urgent";
-type TicketStatus = "open" | "in_progress" | "waiting_on_user" | "resolved" | "closed";
-
 export default async function AdminSupportDashboard() {
   await requirePlatformAdmin();
 
@@ -295,7 +292,7 @@ export default async function AdminSupportDashboard() {
                           </Link>
 
                           <p className="mt-1 max-w-[26rem] truncate text-xs text-gray-400">
-                            {ticket.subject ?? `Ticket ${ticket.id}`}
+                            {getTicketSubject(ticket)}
                           </p>
                         </div>
                       </TableCell>
@@ -312,7 +309,9 @@ export default async function AdminSupportDashboard() {
                         <StatusBadge status={ticket.status} />
                       </TableCell>
 
-                      <TableCell>{ticket.assignedTo?.name ?? "Unassigned"}</TableCell>
+                      <TableCell>
+                        {ticket.assignedTo?.name ?? "Unassigned"}
+                      </TableCell>
 
                       <TableCell>{formatDateTime(ticket.updatedAt)}</TableCell>
 
@@ -424,39 +423,53 @@ function TicketCard({
   ticket,
   compact = false,
 }: {
-  ticket: any;
+  ticket: unknown;
   compact?: boolean;
 }) {
+  const ticketId = getStringField(ticket, "id");
+  const category = getStringField(ticket, "category");
+  const priority = getStringField(ticket, "priority");
+  const status = getStringField(ticket, "status");
+  const updatedAt = getUnknownField(ticket, "updatedAt");
+
+  const organisation = getUnknownField(ticket, "organisation");
+  const assignedTo = getUnknownField(ticket, "assignedTo");
+
+  const organisationName =
+    getStringField(organisation, "teamName") || "Unknown organisation";
+
+  const assignedToName =
+    getStringField(assignedTo, "name") || "Unassigned";
+
   return (
     <Link
-      href={`/admin/support/${ticket.id}`}
+      href={`/admin/support/${ticketId}`}
       className="block rounded-[1.35rem] border border-gray-200 bg-gray-50 p-5 transition hover:border-gray-300 hover:bg-white"
     >
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <PriorityBadge priority={ticket.priority} />
-            <StatusBadge status={ticket.status} />
+            <PriorityBadge priority={priority} />
+            <StatusBadge status={status} />
           </div>
 
           <h3 className="mt-3 text-sm font-bold text-gray-950">
-            {formatLabel(ticket.category)} Ticket
+            {formatLabel(category)} Ticket
           </h3>
 
           {!compact && (
             <p className="mt-2 text-sm leading-6 text-gray-500">
-              {ticket.subject ?? "No subject recorded"}
+              {getTicketSubject(ticket)}
             </p>
           )}
 
           <p className="mt-2 text-xs leading-5 text-gray-500">
-            {ticket.organisation?.teamName ?? "Unknown organisation"} • Assigned
-            to {ticket.assignedTo?.name ?? "Unassigned"}
+            {organisationName} • Assigned to {assignedToName}
           </p>
         </div>
 
         <p className="text-xs text-gray-400">
-          Updated {formatDateTime(ticket.updatedAt)}
+          Updated {formatDateTime(updatedAt)}
         </p>
       </div>
     </Link>
@@ -554,6 +567,39 @@ function getPriorityRank(priority: string) {
   return rank[priority] ?? 0;
 }
 
+function getUnknownField(row: unknown, key: string): unknown {
+  if (!row || typeof row !== "object") return null;
+
+  return (row as Record<string, unknown>)[key] ?? null;
+}
+
+function getStringField(row: unknown, key: string) {
+  const value = getUnknownField(row, key);
+
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+
+  return "";
+}
+
+function getTicketSubject(ticket: unknown) {
+  const subject = getStringField(ticket, "subject");
+  const title = getStringField(ticket, "title");
+  const summary = getStringField(ticket, "summary");
+  const message = getStringField(ticket, "message");
+  const description = getStringField(ticket, "description");
+  const id = getStringField(ticket, "id");
+
+  return (
+    subject ||
+    title ||
+    summary ||
+    message ||
+    description ||
+    `Ticket ${id || "record"}`
+  );
+}
+
 function formatLabel(value: string | null | undefined) {
   if (!value) return "Unknown";
 
@@ -564,11 +610,15 @@ function formatLabel(value: string | null | undefined) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function formatDateTime(value: Date | string | null | undefined) {
+function formatDateTime(value: unknown) {
   if (!value) return "—";
+
+  const date = new Date(value as string | number | Date);
+
+  if (!Number.isFinite(date.getTime())) return "—";
 
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }

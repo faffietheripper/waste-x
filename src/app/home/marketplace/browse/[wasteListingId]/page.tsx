@@ -44,6 +44,12 @@ type CarrierOption = {
   capabilities: Capability[];
 };
 
+type ListingPageParams = {
+  params: {
+    wasteListingId: string;
+  };
+};
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -51,7 +57,13 @@ type CarrierOption = {
 function formatTimestamp(timestamp: Date | string | null | undefined) {
   if (!timestamp) return "Unknown";
 
-  return formatDistance(new Date(timestamp), new Date(), {
+  const parsed = new Date(timestamp);
+
+  if (!Number.isFinite(parsed.getTime())) {
+    return "Unknown";
+  }
+
+  return formatDistance(parsed, new Date(), {
     addSuffix: true,
   });
 }
@@ -59,13 +71,19 @@ function formatTimestamp(timestamp: Date | string | null | undefined) {
 function formatMoney(value: number | string | null | undefined) {
   if (value === null || value === undefined) return "£0";
 
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue)) {
+    return "£0";
+  }
+
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
     currency: "GBP",
-  }).format(Number(value));
+  }).format(numberValue);
 }
 
-function formatDepartment(type: DepartmentType | null) {
+function formatDepartment(type: DepartmentType | null | undefined) {
   if (!type) return "Unknown";
 
   if (type === "generator") return "Generator";
@@ -175,11 +193,30 @@ function parseFileKeys(fileKey: string | null | undefined) {
     .filter(Boolean);
 }
 
+function parseAllowedCarrierIds(value: unknown) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(/[,;\n|]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
 
-export default async function ListingPage({ params }: any) {
+export default async function ListingPage({ params }: ListingPageParams) {
   const listingId = Number(params.wasteListingId);
 
   if (!listingId || Number.isNaN(listingId)) {
@@ -229,7 +266,15 @@ export default async function ListingPage({ params }: any) {
 
   const canViewListingByDepartment = can("listing:view");
   const canBidByDepartment = can("listing:bid");
-  const canAssignBidByDepartment = can("listing:assign");
+
+  /*
+    Build-safe:
+    Your current permission matrix already has "listing:direct_assign".
+    We reuse it for accepting/assigning bids from the listing owner side.
+    If you later add "listing:assign" to permissions.ts, you can split this.
+  */
+  const canAssignBidByDepartment = can("listing:direct_assign");
+
   const canDirectAssignByDepartment = can("listing:direct_assign");
   const canViewAssignmentByDepartment = can("assignment:view");
   const canAssignCarrierByDepartment = can("assignment:assign_carrier");
@@ -374,12 +419,19 @@ export default async function ListingPage({ params }: any) {
     getBidsForListing(listing.id),
     getWinningBid(listingId),
     shouldLoadInternalCarriers ? getCarrierDepartments(userOrg) : [],
-    managerCanAssignExternalCarrier ? database.select().from(organisations) : [],
+    managerCanAssignExternalCarrier
+      ? database.select().from(organisations)
+      : [],
   ]);
 
   const { winningBid } = winningBidResult;
 
-  const winningBidId = winningBid?.id ?? listing.winnerBidId ?? null;
+  /*
+    Clean fix:
+    getWinningBid() does not need to return id.
+    The canonical winning bid id is already stored on the listing snapshot.
+  */
+  const winningBidId = listing.winnerBidId ?? null;
 
   const externalCarrierOptions: CarrierOption[] = allOrganisations
     .filter((organisationRecord) => {
@@ -404,8 +456,7 @@ export default async function ListingPage({ params }: any) {
 
   const bidOver = await isBidOver(listing);
 
-  const allowedCarrierIds =
-    listing.allowedCarrierIds?.split(",").filter(Boolean) ?? [];
+  const allowedCarrierIds = parseAllowedCarrierIds(listing.allowedCarrierIds);
 
   const isAllowedCarrier = allowedCarrierIds.includes(userOrg);
 
@@ -831,21 +882,21 @@ export default async function ListingPage({ params }: any) {
               {!isOwner && !isExternalManagerWorkflow && (
                 <div className="mb-5">
                   {canBid ? (
-                    <PlaceBid
-                      listingId={listing.id}
-                      currentBid={listing.currentBid}
-                    />
-                  ) : (
-                    <BidBlockedNotice
-                      isAssignmentLocked={isAssignmentLocked}
-                      bidOver={bidOver}
-                      isBiddableMarket={isBiddableMarket}
-                      participationAllowsExternalCarrier={
-                        participationAllowsExternalCarrier
-                      }
-                      canBidByDepartment={canBidByDepartment}
-                    />
-                  )}
+  <PlaceBid
+    listingId={listing.id}
+    currentBid={Number(listing.currentBid ?? 0)}
+  />
+) : (
+  <BidBlockedNotice
+    isAssignmentLocked={isAssignmentLocked}
+    bidOver={bidOver}
+    isBiddableMarket={isBiddableMarket}
+    participationAllowsExternalCarrier={
+      participationAllowsExternalCarrier
+    }
+    canBidByDepartment={canBidByDepartment}
+  />
+)}
                 </div>
               )}
 

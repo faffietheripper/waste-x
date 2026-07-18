@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+
 import { createListingAction } from "@/modules/listings/actions/createListingAction";
 import { createUploadUrlAction } from "@/modules/shared/actions/createUploadUrlsAction";
 import { DatePickerDemo } from "@/components/DatePicker";
 import { Input } from "@/components/ui/input";
 import { useAction } from "@/lib/actions/useAction";
-import { useRouter } from "next/navigation";
 
 /* =========================================================
    TYPES
@@ -27,6 +28,23 @@ interface Template {
     }[];
   }[];
 }
+
+type ParticipationMode = "internal" | "external" | "mixed";
+
+type MarketMode = "open_market" | "direct_award" | "internal_only" | "hybrid";
+
+type ListingType = "waste_collection" | "material_sale" | "internal_transfer";
+
+type CreateListingResult = {
+  success?: boolean;
+  message?: string;
+  id?: number | string;
+  listingId?: number | string;
+  data?: {
+    id?: number | string;
+    listingId?: number | string;
+  };
+};
 
 /* =========================================================
    HELPERS
@@ -50,6 +68,61 @@ function safeFileName(name: string) {
     .toLowerCase();
 }
 
+function parseOptions(optionsJson: string | null | undefined) {
+  if (!optionsJson) return [];
+
+  try {
+    const parsed = JSON.parse(optionsJson);
+
+    if (Array.isArray(parsed)) {
+      return parsed.map(String);
+    }
+
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function getActionMessage(
+  result: CreateListingResult | null | undefined,
+  fallback: string,
+) {
+  if (result && typeof result.message === "string" && result.message.trim()) {
+    return result.message;
+  }
+
+  return fallback;
+}
+
+function getCreatedListingId(result: CreateListingResult | null | undefined) {
+  if (!result) return null;
+
+  const directId = result.id ?? result.listingId;
+
+  if (directId !== undefined && directId !== null) {
+    return String(directId);
+  }
+
+  const nestedId = result.data?.id ?? result.data?.listingId;
+
+  if (nestedId !== undefined && nestedId !== null) {
+    return String(nestedId);
+  }
+
+  return null;
+}
+
+function isMissingRequiredValue(value: unknown) {
+  if (value === null || value === undefined) return true;
+
+  if (typeof value === "string") {
+    return value.trim().length === 0;
+  }
+
+  return false;
+}
+
 /* =========================================================
    COMPONENT
 ========================================================= */
@@ -62,7 +135,7 @@ export default function DynamicWasteListingForm({
   const router = useRouter();
   const run = useAction();
 
-  const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const [formValues, setFormValues] = useState<Record<string, unknown>>({});
 
   const [projectName, setProjectName] = useState("");
   const [location, setLocation] = useState("");
@@ -70,30 +143,26 @@ export default function DynamicWasteListingForm({
   const [date, setDate] = useState<Date | undefined>();
   const [files, setFiles] = useState<File[]>([]);
 
-  const [participationMode, setParticipationMode] = useState<
-    "internal" | "external" | "mixed"
-  >("external");
+  const [participationMode, setParticipationMode] =
+    useState<ParticipationMode>("external");
 
-  const [marketMode, setMarketMode] = useState<
-    "open_market" | "direct_award" | "internal_only" | "hybrid"
-  >("open_market");
+  const [marketMode, setMarketMode] = useState<MarketMode>("open_market");
 
-  const [listingType, setListingType] = useState<
-    "waste_collection" | "material_sale" | "internal_transfer"
-  >("waste_collection");
+  const [listingType, setListingType] =
+    useState<ListingType>("waste_collection");
 
-  const [allowedCarrierIds, setAllowedCarrierIds] = useState<string>("");
+  const [allowedCarrierIds, setAllowedCarrierIds] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
-  function handleChange(key: string, value: any) {
+  function handleChange(key: string, value: unknown) {
     setFormValues((prev) => ({
       ...prev,
       [key]: value,
     }));
   }
 
-  function handleFileSelection(event: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     const selectedFiles = Array.from(event.target.files || []);
 
     if (selectedFiles.length === 0) return;
@@ -120,9 +189,6 @@ export default function DynamicWasteListingForm({
       return [...currentFiles, ...newFiles];
     });
 
-    /*
-      This allows the user to select the same file again after removing it.
-    */
     event.currentTarget.value = "";
   }
 
@@ -161,7 +227,7 @@ export default function DynamicWasteListingForm({
 
     for (const section of template.sections) {
       for (const field of section.fields) {
-        if (field.required && !formValues[field.key]) {
+        if (field.required && isMissingRequiredValue(formValues[field.key])) {
           return `Missing: ${field.label}`;
         }
       }
@@ -193,15 +259,20 @@ export default function DynamicWasteListingForm({
      SUBMIT
   ========================================================= */
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (submitting) return;
 
-    const error = validate();
+    const validationError = validate();
 
-    if (error) {
-      alert(error);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+
+    if (!date) {
+      alert("End date is required.");
       return;
     }
 
@@ -216,15 +287,12 @@ export default function DynamicWasteListingForm({
           (file) => `listings/${crypto.randomUUID()}-${safeFileName(file.name)}`,
         );
 
-        console.log("FILES SELECTED:", files.length);
-        console.log("FILE KEYS GENERATED:", fileKeys);
-
-        const uploadUrls = await run(() =>
+        const uploadUrls = (await run(() =>
           createUploadUrlAction(
             fileKeys,
             files.map((file) => file.type),
           ),
-        );
+        )) as string[] | null;
 
         if (!uploadUrls || uploadUrls.length !== fileKeys.length) {
           throw new Error("Failed to generate upload URLs for all files.");
@@ -253,9 +321,7 @@ export default function DynamicWasteListingForm({
         );
       }
 
-      console.log("FILES SENT TO CREATE LISTING:", fileKeys);
-
-      const result = await run(() =>
+      const result = (await run(() =>
         createListingAction({
           templateId: template.id,
           templateData: formValues,
@@ -263,7 +329,7 @@ export default function DynamicWasteListingForm({
           name: projectName,
           location,
           startingPrice: Number(startingPrice),
-          endDate: date!,
+          endDate: date,
           fileName: fileKeys,
 
           participationMode,
@@ -275,21 +341,32 @@ export default function DynamicWasteListingForm({
 
           listingType,
         }),
-      );
+      )) as CreateListingResult | null;
 
       if (!result?.success) {
-        throw new Error(result?.message || "Failed to create listing.");
+        throw new Error(getActionMessage(result, "Failed to create listing."));
       }
+
+      const createdListingId = getCreatedListingId(result);
 
       alert("✅ Listing created successfully");
 
       resetForm();
 
-      router.push(`/home/marketplace/browse/${result.id}`);
+      if (createdListingId) {
+        router.push(`/home/marketplace/browse/${createdListingId}`);
+      } else {
+        router.push("/home/marketplace/browse");
+      }
+
       router.refresh();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Create listing error:", error);
-      alert(error?.message || "Failed to create listing.");
+
+      const message =
+        error instanceof Error ? error.message : "Failed to create listing.";
+
+      alert(message);
     } finally {
       setSubmitting(false);
     }
@@ -312,79 +389,90 @@ export default function DynamicWasteListingForm({
             {section.title}
           </h3>
 
-          {section.fields.map((field) => (
-            <div key={field.id} className="mb-5">
-              <label className="mb-2 block font-medium text-gray-700">
-                {field.label}
-                {field.required && <span className="ml-1 text-red-500">*</span>}
-              </label>
+          {section.fields.map((field) => {
+            const options = parseOptions(field.optionsJson);
 
-              {field.fieldType === "text" && (
-                <input
-                  value={formValues[field.key] ?? ""}
-                  className="w-full rounded border border-black/10 bg-white p-3 text-black"
-                  onChange={(event) =>
-                    handleChange(field.key, event.target.value)
-                  }
-                />
-              )}
+            return (
+              <div key={field.id} className="mb-5">
+                <label className="mb-2 block font-medium text-gray-700">
+                  {field.label}
+                  {field.required && (
+                    <span className="ml-1 text-red-500">*</span>
+                  )}
+                </label>
 
-              {field.fieldType === "number" && (
-                <input
-                  type="number"
-                  value={formValues[field.key] ?? ""}
-                  className="w-full rounded border border-black/10 bg-white p-3 text-black"
-                  onChange={(event) =>
-                    handleChange(
-                      field.key,
-                      event.target.value === ""
-                        ? ""
-                        : Number(event.target.value),
-                    )
-                  }
-                />
-              )}
-
-              {field.fieldType === "boolean" && (
-                <div className="flex items-center gap-3">
+                {field.fieldType === "text" && (
                   <input
-                    type="checkbox"
-                    checked={Boolean(formValues[field.key])}
+                    value={String(formValues[field.key] ?? "")}
+                    className="w-full rounded border border-black/10 bg-white p-3 text-black"
                     onChange={(event) =>
-                      handleChange(field.key, event.target.checked)
+                      handleChange(field.key, event.target.value)
                     }
                   />
+                )}
 
-                  <span className="text-sm text-black/50">Yes / No</span>
-                </div>
-              )}
+                {field.fieldType === "number" && (
+                  <input
+                    type="number"
+                    value={
+                      typeof formValues[field.key] === "number" ||
+                      typeof formValues[field.key] === "string"
+                        ? String(formValues[field.key])
+                        : ""
+                    }
+                    className="w-full rounded border border-black/10 bg-white p-3 text-black"
+                    onChange={(event) =>
+                      handleChange(
+                        field.key,
+                        event.target.value === ""
+                          ? ""
+                          : Number(event.target.value),
+                      )
+                    }
+                  />
+                )}
 
-              {field.fieldType === "dropdown" && (
-                <select
-                  value={formValues[field.key] ?? ""}
-                  className="w-full rounded border border-black/10 bg-white p-3 text-black"
-                  onChange={(event) =>
-                    handleChange(field.key, event.target.value)
-                  }
-                >
-                  <option value="">Select...</option>
+                {field.fieldType === "boolean" && (
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formValues[field.key])}
+                      onChange={(event) =>
+                        handleChange(field.key, event.target.checked)
+                      }
+                    />
 
-                  {JSON.parse(field.optionsJson || "[]").map((option: string) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              )}
+                    <span className="text-sm text-black/50">Yes / No</span>
+                  </div>
+                )}
 
-              {field.fieldType === "file" && (
-                <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm leading-6 text-orange-800">
-                  Template file fields are not connected yet. Use the Listing
-                  Images upload field below for listing photos.
-                </div>
-              )}
-            </div>
-          ))}
+                {field.fieldType === "dropdown" && (
+                  <select
+                    value={String(formValues[field.key] ?? "")}
+                    className="w-full rounded border border-black/10 bg-white p-3 text-black"
+                    onChange={(event) =>
+                      handleChange(field.key, event.target.value)
+                    }
+                  >
+                    <option value="">Select...</option>
+
+                    {options.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {field.fieldType === "file" && (
+                  <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm leading-6 text-orange-800">
+                    Template file fields are not connected yet. Use the Listing
+                    Images upload field below for listing photos.
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       ))}
 
@@ -404,7 +492,7 @@ export default function DynamicWasteListingForm({
             className="mt-1 w-full rounded border border-black/10 bg-white p-3 text-black"
             value={participationMode}
             onChange={(event) =>
-              setParticipationMode(event.target.value as any)
+              setParticipationMode(event.target.value as ParticipationMode)
             }
           >
             <option value="external">External (Open Market)</option>
@@ -419,7 +507,7 @@ export default function DynamicWasteListingForm({
           <select
             className="mt-1 w-full rounded border border-black/10 bg-white p-3 text-black"
             value={marketMode}
-            onChange={(event) => setMarketMode(event.target.value as any)}
+            onChange={(event) => setMarketMode(event.target.value as MarketMode)}
           >
             <option value="open_market">Open Market</option>
             <option value="direct_award">Direct Award</option>
@@ -434,7 +522,9 @@ export default function DynamicWasteListingForm({
           <select
             className="mt-1 w-full rounded border border-black/10 bg-white p-3 text-black"
             value={listingType}
-            onChange={(event) => setListingType(event.target.value as any)}
+            onChange={(event) =>
+              setListingType(event.target.value as ListingType)
+            }
           >
             <option value="waste_collection">Waste Collection</option>
             <option value="material_sale">Material Sale</option>

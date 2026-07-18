@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { createTicketAction } from "@/app/home/support/action";
+import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+
+import { createTicketAction } from "@/app/home/support/action";
 import { useToast } from "@/components/ui/use-toast";
 import { useAction } from "@/lib/actions/useAction";
 
@@ -23,6 +24,17 @@ type TicketPriority = "low" | "medium" | "high" | "urgent";
 type Message = {
   type: "success" | "error";
   text: string;
+};
+
+type CreateTicketResult = {
+  success?: boolean;
+  message?: string;
+  ticketId?: string | number;
+  id?: string | number;
+  data?: {
+    id?: string | number;
+    ticketId?: string | number;
+  };
 };
 
 /* =========================================================
@@ -95,29 +107,6 @@ const priorityOptions: {
 ];
 
 /* =========================================================
-   HELPERS
-========================================================= */
-
-function getPriorityClass(priority: TicketPriority) {
-  switch (priority) {
-    case "urgent":
-      return "border-red-300 bg-red-100 text-red-700";
-
-    case "high":
-      return "border-orange-300 bg-orange-100 text-orange-700";
-
-    case "medium":
-      return "border-yellow-300 bg-yellow-100 text-yellow-700";
-
-    case "low":
-      return "border-green-300 bg-green-100 text-green-700";
-
-    default:
-      return "border-gray-300 bg-gray-100 text-gray-700";
-  }
-}
-
-/* =========================================================
    COMPONENT
 ========================================================= */
 
@@ -146,8 +135,8 @@ export default function CreateTicketForm({
 
   const canSubmit = message.trim().length >= 10 && !isSubmitting;
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
     if (!canSubmit) {
       setLocalMessage({
@@ -169,15 +158,18 @@ export default function CreateTicketForm({
       formData.append("message", message.trim());
 
       /*
-        Keeping your existing server action call style.
-        organisationId is passed as prop for UI context, but the server action
-        should still derive organisation from the authenticated user for safety.
+        The server action should derive organisation/user context from auth.
+        organisationId is displayed only for UI context.
       */
-      const result = await run(() => createTicketAction(null, formData));
+      const result = (await run(() =>
+        createTicketAction(null, formData),
+      )) as CreateTicketResult | null;
 
       if (!result?.success) {
-        throw new Error(result?.message || "Failed to create ticket.");
+        throw new Error(getActionMessage(result, "Failed to create ticket."));
       }
+
+      const ticketId = getTicketId(result);
 
       toast({
         title: "Ticket created",
@@ -189,22 +181,29 @@ export default function CreateTicketForm({
         text: "Ticket created successfully. Redirecting...",
       });
 
-      router.push(`/home/support/${result.ticketId}`);
-    } catch (error: any) {
+      if (ticketId) {
+        router.push(`/home/support/${ticketId}`);
+      } else {
+        router.push("/home/support");
+      }
+
+      router.refresh();
+    } catch (error: unknown) {
       console.error("Create ticket error:", error);
+
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to create support ticket. Please try again.";
 
       setLocalMessage({
         type: "error",
-        text:
-          error?.message ||
-          "Failed to create support ticket. Please try again.",
+        text: errorMessage,
       });
 
       toast({
         title: "Ticket failed",
-        description:
-          error?.message ||
-          "Failed to create support ticket. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -341,7 +340,9 @@ export default function CreateTicketForm({
               faster.
             </p>
 
-            <p className="text-xs text-black/35">{message.length} characters</p>
+            <p className="text-xs text-black/35">
+              {message.length} characters
+            </p>
           </div>
         </section>
 
@@ -367,4 +368,56 @@ export default function CreateTicketForm({
       </div>
     </form>
   );
+}
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function getPriorityClass(priority: TicketPriority) {
+  switch (priority) {
+    case "urgent":
+      return "border-red-300 bg-red-100 text-red-700";
+
+    case "high":
+      return "border-orange-300 bg-orange-100 text-orange-700";
+
+    case "medium":
+      return "border-yellow-300 bg-yellow-100 text-yellow-700";
+
+    case "low":
+      return "border-green-300 bg-green-100 text-green-700";
+
+    default:
+      return "border-gray-300 bg-gray-100 text-gray-700";
+  }
+}
+
+function getActionMessage(
+  result: CreateTicketResult | null | undefined,
+  fallback: string,
+) {
+  if (result && typeof result.message === "string" && result.message.trim()) {
+    return result.message;
+  }
+
+  return fallback;
+}
+
+function getTicketId(result: CreateTicketResult | null | undefined) {
+  if (!result) return null;
+
+  const directId = result.ticketId ?? result.id;
+
+  if (directId !== undefined && directId !== null) {
+    return String(directId);
+  }
+
+  const nestedId = result.data?.ticketId ?? result.data?.id;
+
+  if (nestedId !== undefined && nestedId !== null) {
+    return String(nestedId);
+  }
+
+  return null;
 }

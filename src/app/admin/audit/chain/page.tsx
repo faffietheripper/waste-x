@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import {
@@ -14,13 +14,19 @@ import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
    HELPERS
 ========================================================= */
 
-function formatDate(value: Date | null | undefined) {
+function formatDate(value: Date | string | null | undefined) {
   if (!value) return "Not recorded";
+
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return "Not recorded";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(value);
+  }).format(date);
 }
 
 function formatStatus(status: string | null | undefined) {
@@ -33,14 +39,19 @@ function formatStatus(status: string | null | undefined) {
 }
 
 function getStatusClass(status: string | null | undefined) {
-  if (status === "completed" || status === "accepted") {
+  if (
+    status === "completed" ||
+    status === "accepted" ||
+    status === "accepted_with_warnings"
+  ) {
     return "border-gray-900 bg-gray-950 text-white";
   }
 
   if (
-    status === "accepted_with_warnings" ||
     status === "assigned" ||
-    status === "in_progress"
+    status === "in_progress" ||
+    status === "draft" ||
+    status === "submitted"
   ) {
     return "border-gray-300 bg-gray-100 text-gray-800";
   }
@@ -58,6 +69,16 @@ function getStatusClass(status: string | null | undefined) {
   return "border-gray-200 bg-white text-gray-600";
 }
 
+function getSafeListingId(value: number | string | null | undefined) {
+  if (value === null || value === undefined) return null;
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) return null;
+
+  return parsed;
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -71,7 +92,9 @@ export default async function ChainIndexPage() {
     .orderBy(desc(wasteListings.createdAt))
     .limit(40);
 
-  const listingIds = listings.map((listing) => listing.id);
+  const listingIds = listings
+    .map((listing) => getSafeListingId(listing.id))
+    .filter((id): id is number => id !== null);
 
   const assignments =
     listingIds.length > 0
@@ -115,43 +138,57 @@ export default async function ChainIndexPage() {
 
   const assignmentCountByListing = new Map<number, number>();
   const completedAssignmentCountByListing = new Map<number, number>();
+
   const latestDwtByListing = new Map<
     number,
     (typeof dwtSubmissions)[number]
   >();
+
   const incidentCountByListing = new Map<number, number>();
   const unresolvedIncidentCountByListing = new Map<number, number>();
 
   for (const assignment of assignments) {
+    const assignmentListingId = getSafeListingId(assignment.listingId);
+
+    if (assignmentListingId === null) continue;
+
     assignmentCountByListing.set(
-      assignment.listingId,
-      (assignmentCountByListing.get(assignment.listingId) ?? 0) + 1,
+      assignmentListingId,
+      (assignmentCountByListing.get(assignmentListingId) ?? 0) + 1,
     );
 
     if (assignment.status === "completed" || assignment.completedAt) {
       completedAssignmentCountByListing.set(
-        assignment.listingId,
-        (completedAssignmentCountByListing.get(assignment.listingId) ?? 0) + 1,
+        assignmentListingId,
+        (completedAssignmentCountByListing.get(assignmentListingId) ?? 0) + 1,
       );
     }
   }
 
   for (const submission of dwtSubmissions) {
-    if (!latestDwtByListing.has(submission.listingId)) {
-      latestDwtByListing.set(submission.listingId, submission);
+    const submissionListingId = getSafeListingId(submission.listingId);
+
+    if (submissionListingId === null) continue;
+
+    if (!latestDwtByListing.has(submissionListingId)) {
+      latestDwtByListing.set(submissionListingId, submission);
     }
   }
 
   for (const incident of incidentRows) {
+    const incidentListingId = getSafeListingId(incident.listingId);
+
+    if (incidentListingId === null) continue;
+
     incidentCountByListing.set(
-      incident.listingId,
-      (incidentCountByListing.get(incident.listingId) ?? 0) + 1,
+      incidentListingId,
+      (incidentCountByListing.get(incidentListingId) ?? 0) + 1,
     );
 
     if (incident.status === "open" || incident.status === "under_review") {
       unresolvedIncidentCountByListing.set(
-        incident.listingId,
-        (unresolvedIncidentCountByListing.get(incident.listingId) ?? 0) + 1,
+        incidentListingId,
+        (unresolvedIncidentCountByListing.get(incidentListingId) ?? 0) + 1,
       );
     }
   }
@@ -160,13 +197,21 @@ export default async function ChainIndexPage() {
     (listing) => listing.status === "completed",
   ).length;
 
-  const listingsWithDwt = listings.filter((listing) =>
-    latestDwtByListing.has(listing.id),
-  ).length;
+  const listingsWithDwt = listings.filter((listing) => {
+    const listingId = getSafeListingId(listing.id);
 
-  const listingsWithIncidents = listings.filter(
-    (listing) => (incidentCountByListing.get(listing.id) ?? 0) > 0,
-  ).length;
+    if (listingId === null) return false;
+
+    return latestDwtByListing.has(listingId);
+  }).length;
+
+  const listingsWithIncidents = listings.filter((listing) => {
+    const listingId = getSafeListingId(listing.id);
+
+    if (listingId === null) return false;
+
+    return (incidentCountByListing.get(listingId) ?? 0) > 0;
+  }).length;
 
   return (
     <div className="space-y-8">
@@ -267,23 +312,30 @@ export default async function ChainIndexPage() {
         ) : (
           <div className="mt-6 space-y-4">
             {listings.map((listing) => {
+              const listingId = getSafeListingId(listing.id);
+
+              if (listingId === null) {
+                return null;
+              }
+
               const assignmentCount =
-                assignmentCountByListing.get(listing.id) ?? 0;
+                assignmentCountByListing.get(listingId) ?? 0;
 
               const completedAssignmentCount =
-                completedAssignmentCountByListing.get(listing.id) ?? 0;
+                completedAssignmentCountByListing.get(listingId) ?? 0;
 
-              const latestDwt = latestDwtByListing.get(listing.id);
+              const latestDwt = latestDwtByListing.get(listingId);
 
-              const incidentCount = incidentCountByListing.get(listing.id) ?? 0;
+              const incidentCount =
+                incidentCountByListing.get(listingId) ?? 0;
 
               const unresolvedIncidentCount =
-                unresolvedIncidentCountByListing.get(listing.id) ?? 0;
+                unresolvedIncidentCountByListing.get(listingId) ?? 0;
 
               return (
                 <Link
-                  key={listing.id}
-                  href={`/admin/audit/chain/${listing.id}`}
+                  key={listingId}
+                  href={`/admin/audit/chain/${listingId}`}
                   className="block rounded-[1.5rem] border border-gray-200 bg-gray-50 p-5 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-md"
                 >
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -319,7 +371,7 @@ export default async function ChainIndexPage() {
                       </h3>
 
                       <p className="mt-2 text-sm leading-6 text-gray-500">
-                        ID: {listing.id} • {listing.location || "No location"} •
+                        ID: {listingId} • {listing.location || "No location"} •
                         Created {formatDate(listing.createdAt)}
                       </p>
                     </div>
@@ -340,7 +392,11 @@ export default async function ChainIndexPage() {
                       <MiniStat
                         label="DWT ID"
                         value={latestDwt?.wasteTrackingId ?? "—"}
-                        helper={latestDwt ? formatStatus(latestDwt.status) : "No DWT yet"}
+                        helper={
+                          latestDwt
+                            ? formatStatus(latestDwt.status)
+                            : "No DWT yet"
+                        }
                       />
 
                       <MiniStat

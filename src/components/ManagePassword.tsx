@@ -3,9 +3,8 @@
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { updatePassword } from "@/app/home/settings/account/actions";
+import { updatePasswordAction } from "@/app/home/settings/account/actions";
 import { useToast } from "@/components/ui/use-toast";
 import { z } from "zod";
 
@@ -38,7 +37,6 @@ type PasswordFormInputs = z.infer<typeof PasswordSchema>;
 ========================================================= */
 
 export default function UpdatePasswordForm() {
-  const { data: session } = useSession();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -47,6 +45,7 @@ export default function UpdatePasswordForm() {
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors },
   } = useForm<PasswordFormInputs>({
     resolver: zodResolver(PasswordSchema),
@@ -54,26 +53,26 @@ export default function UpdatePasswordForm() {
 
   /* =========================================================
      SUBMIT
-  ========================================================= */
+  ========================================================== */
 
   async function onSubmit(data: PasswordFormInputs) {
-    if (!session?.user?.id || loading) return;
+    if (loading) return;
 
     setLoading(true);
 
     try {
-      const result = await updatePassword({
-        userId: session.user.id,
+      const result = await updatePasswordAction({
         currentPassword: data.currentPassword,
         newPassword: data.newPassword,
       });
 
-      if (!result.success) {
+      if (!result?.success) {
         toast({
           title: "Update failed",
-          description: result.message,
+          description: result?.message || "Could not update your password.",
           variant: "destructive",
         });
+
         return;
       }
 
@@ -82,8 +81,11 @@ export default function UpdatePasswordForm() {
         description: "Your password has been changed successfully.",
       });
 
+      reset();
       router.refresh();
     } catch (error) {
+      console.error("Password update error:", error);
+
       toast({
         title: "Error",
         description: "Something went wrong while updating your password.",
@@ -96,25 +98,31 @@ export default function UpdatePasswordForm() {
 
   /* =========================================================
      UI
-  ========================================================= */
+  ========================================================== */
 
   return (
     <form
       onSubmit={handleSubmit(onSubmit)}
-      className="max-w-md mx-auto space-y-6"
+      className="mx-auto max-w-md space-y-6"
     >
-      <h2 className="text-xl font-semibold">Update Your Password</h2>
+      <h2 className="text-xl font-semibold text-black">
+        Update Your Password
+      </h2>
 
       {/* CURRENT PASSWORD */}
       <div>
-        <label className="text-sm font-medium">Current Password</label>
+        <label className="text-sm font-medium text-black">
+          Current Password
+        </label>
+
         <input
           type="password"
           {...register("currentPassword")}
-          className="mt-1 w-full border rounded-md p-2"
+          className="mt-1 w-full rounded-md border border-black/10 bg-white p-3 text-black outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
         />
+
         {errors.currentPassword && (
-          <p className="text-red-600 text-sm mt-1">
+          <p className="mt-1 text-sm text-red-600">
             {errors.currentPassword.message}
           </p>
         )}
@@ -122,14 +130,16 @@ export default function UpdatePasswordForm() {
 
       {/* NEW PASSWORD */}
       <div>
-        <label className="text-sm font-medium">New Password</label>
+        <label className="text-sm font-medium text-black">New Password</label>
+
         <input
           type="password"
           {...register("newPassword")}
-          className="mt-1 w-full border rounded-md p-2"
+          className="mt-1 w-full rounded-md border border-black/10 bg-white p-3 text-black outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
         />
+
         {errors.newPassword && (
-          <p className="text-red-600 text-sm mt-1">
+          <p className="mt-1 text-sm text-red-600">
             {errors.newPassword.message}
           </p>
         )}
@@ -137,14 +147,18 @@ export default function UpdatePasswordForm() {
 
       {/* CONFIRM PASSWORD */}
       <div>
-        <label className="text-sm font-medium">Confirm New Password</label>
+        <label className="text-sm font-medium text-black">
+          Confirm New Password
+        </label>
+
         <input
           type="password"
           {...register("confirmPassword")}
-          className="mt-1 w-full border rounded-md p-2"
+          className="mt-1 w-full rounded-md border border-black/10 bg-white p-3 text-black outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
         />
+
         {errors.confirmPassword && (
-          <p className="text-red-600 text-sm mt-1">
+          <p className="mt-1 text-sm text-red-600">
             {errors.confirmPassword.message}
           </p>
         )}
@@ -154,7 +168,7 @@ export default function UpdatePasswordForm() {
       <button
         type="submit"
         disabled={loading}
-        className="bg-blue-600 text-white py-2 px-4 rounded-md w-full disabled:opacity-50"
+        className="w-full rounded-md bg-black px-4 py-3 font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading ? "Updating..." : "Update Password"}
       </button>

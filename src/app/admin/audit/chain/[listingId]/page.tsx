@@ -44,12 +44,12 @@ type TimelineEvent = {
     | "audit";
   title: string;
   description: string;
-  timestamp: Date | string | null;
+  timestamp: unknown;
   tone: TimelineTone;
   actor?: string | null;
   organisation?: string | null;
   entityId?: string | null;
-  metadata?: Record<string, string | number | null | undefined>;
+  metadata?: Record<string, unknown>;
 };
 
 /* =========================================================
@@ -80,12 +80,11 @@ export default async function AdminChainDetailPage({
     notFound();
   }
 
-  /**
-   * IMPORTANT:
-   * We intentionally fetch these tables broadly and filter in JS.
-   * This makes the page resilient if different records are linked by listingId,
-   * assignmentId, submissionId or incidentId.
-   */
+  /*
+    We fetch these broadly and filter in JS so the page can still build a
+    chain even when records are linked by assignmentId, listingId, DWT ID,
+    incident ID, or audit entity ID.
+  */
   const [assignmentRows, incidentRows, dwtRows, organisationRows] =
     await Promise.all([
       database.select().from(carrierAssignments),
@@ -109,7 +108,7 @@ export default async function AdminChainDetailPage({
 
   const assignmentIds = linkedAssignments
     .map((assignment) => cleanString(getField(assignment, "id")))
-    .filter(Boolean);
+    .filter(isNonEmptyString);
 
   const linkedDwtSubmissions = dwtRows.filter((submission) => {
     const submissionListingId = getField(submission, "listingId");
@@ -127,7 +126,7 @@ export default async function AdminChainDetailPage({
 
   const dwtSubmissionIds = linkedDwtSubmissions
     .map((submission) => cleanString(getField(submission, "id")))
-    .filter(Boolean);
+    .filter(isNonEmptyString);
 
   const linkedIncidents = incidentRows.filter((incident) => {
     const incidentListingId = getField(incident, "listingId");
@@ -143,16 +142,18 @@ export default async function AdminChainDetailPage({
 
   const incidentIds = linkedIncidents
     .map((incident) => cleanString(getField(incident, "id")))
-    .filter(Boolean);
+    .filter(isNonEmptyString);
 
   const relatedEntityIds = Array.from(
-    new Set([
-      String(listingId),
-      cleanString(getField(listing, "id")),
-      ...assignmentIds,
-      ...dwtSubmissionIds,
-      ...incidentIds,
-    ].filter(Boolean)),
+    new Set(
+      [
+        String(listingId),
+        cleanString(getField(listing, "id")),
+        ...assignmentIds,
+        ...dwtSubmissionIds,
+        ...incidentIds,
+      ].filter(isNonEmptyString),
+    ),
   );
 
   const auditRows =
@@ -172,7 +173,10 @@ export default async function AdminChainDetailPage({
           })
           .from(auditEvents)
           .leftJoin(users, eq(auditEvents.userId, users.id))
-          .leftJoin(organisations, eq(auditEvents.organisationId, organisations.id))
+          .leftJoin(
+            organisations,
+            eq(auditEvents.organisationId, organisations.id),
+          )
           .where(inArray(auditEvents.entityId, relatedEntityIds))
           .orderBy(desc(auditEvents.createdAt))
       : [];
@@ -189,6 +193,10 @@ export default async function AdminChainDetailPage({
 
   const failedDwtSubmissions = linkedDwtSubmissions.filter((submission) =>
     ["rejected", "failed"].includes(String(getField(submission, "status"))),
+  );
+
+  const awaitingDwtSubmissions = linkedDwtSubmissions.filter((submission) =>
+    ["draft", "submitted"].includes(String(getField(submission, "status"))),
   );
 
   const unresolvedIncidents = linkedIncidents.filter((incident) =>
@@ -239,7 +247,8 @@ export default async function AdminChainDetailPage({
 
               {latestDwtSubmission && (
                 <span className="rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
-                  DWT {formatLabel(String(getField(latestDwtSubmission, "status")))}
+                  DWT{" "}
+                  {formatLabel(String(getField(latestDwtSubmission, "status")))}
                 </span>
               )}
             </div>
@@ -318,8 +327,8 @@ export default async function AdminChainDetailPage({
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-            This panel confirms exactly which tables are feeding the chain.
-            If this shows data, the timeline below will be generated even when
+            This panel confirms exactly which tables are feeding the chain. If
+            this shows data, the timeline below can still be generated even when
             the audit event table has limited records.
           </p>
         </div>
@@ -336,7 +345,8 @@ export default async function AdminChainDetailPage({
             value={linkedDwtSubmissions.length}
             helper={
               latestDwtSubmission
-                ? getDisplayValue(latestDwtSubmission, "wasteTrackingId") || "No tracking ID"
+                ? getDisplayValue(latestDwtSubmission, "wasteTrackingId") ||
+                  "No tracking ID"
                 : "None"
             }
           />
@@ -354,7 +364,7 @@ export default async function AdminChainDetailPage({
           <SourceCard
             label="Related entity IDs"
             value={relatedEntityIds.length}
-            helper={relatedEntityIds.slice(0, 3).join(", ")}
+            helper={relatedEntityIds.slice(0, 3).join(", ") || "None"}
           />
         </div>
       </section>
@@ -371,11 +381,11 @@ export default async function AdminChainDetailPage({
             <InfoCard label="Name" value={listing.name ?? "—"} />
             <InfoCard label="Location" value={listing.location ?? "—"} />
             <InfoCard label="Status" value={formatLabel(listing.status)} />
+            <InfoCard label="Organisation" value={listingOrganisationName} />
             <InfoCard
-              label="Organisation"
-              value={listingOrganisationName}
+              label="Created"
+              value={formatDateTime(listing.createdAt)}
             />
-            <InfoCard label="Created" value={formatDateTime(listing.createdAt)} />
           </div>
         </Panel>
 
@@ -390,13 +400,16 @@ export default async function AdminChainDetailPage({
             <div className="grid gap-4 md:grid-cols-2">
               <InfoCard
                 label="Status"
-                value={formatLabel(getDisplayValue(latestDwtSubmission, "status"))}
+                value={formatLabel(
+                  getDisplayValue(latestDwtSubmission, "status"),
+                )}
               />
 
               <InfoCard
                 label="Waste Tracking ID"
                 value={
-                  getDisplayValue(latestDwtSubmission, "wasteTrackingId") || "—"
+                  getDisplayValue(latestDwtSubmission, "wasteTrackingId") ||
+                  "—"
                 }
               />
 
@@ -409,13 +422,11 @@ export default async function AdminChainDetailPage({
 
               <InfoCard
                 label="HTTP status"
-                value={
-                  String(
-                    getResponseStatusCode(
-                      getField(latestDwtSubmission, "responseSnapshot"),
-                    ) ?? "—",
-                  )
-                }
+                value={String(
+                  getResponseStatusCode(
+                    getField(latestDwtSubmission, "responseSnapshot"),
+                  ) ?? "—",
+                )}
               />
 
               <InfoCard
@@ -440,6 +451,30 @@ export default async function AdminChainDetailPage({
           )}
         </Panel>
       </section>
+
+      {/* ================= DWT STATUS SUMMARY ================= */}
+      {linkedDwtSubmissions.length > 0 && (
+        <section className="grid gap-5 md:grid-cols-3">
+          <Metric
+            label="Accepted DWT"
+            value={acceptedDwtSubmissions.length}
+            helper="Accepted or accepted with warnings"
+          />
+
+          <Metric
+            label="Awaiting final status"
+            value={awaitingDwtSubmissions.length}
+            helper="Draft or submitted"
+          />
+
+          <Metric
+            label="Failed / rejected"
+            value={failedDwtSubmissions.length}
+            helper="Needs review"
+            tone={failedDwtSubmissions.length > 0 ? "danger" : "default"}
+          />
+        </section>
+      )}
 
       {/* ================= ASSIGNMENTS ================= */}
       <Panel
@@ -702,7 +737,8 @@ function buildTimelineEvents({
       id: `completed-${assignmentId}`,
       type: "completion",
       title: "Movement Completed",
-      description: "Assignment was completed and the custody chain was closed operationally.",
+      description:
+        "Assignment was completed and the custody chain was closed operationally.",
       timestamp: getField(assignment, "completedAt"),
       tone: "success",
       organisation: managerOrg?.teamName ?? organisationName,
@@ -779,8 +815,12 @@ function buildTimelineEvents({
           submission,
           "endpoint",
         )}`,
-        httpStatus: getResponseStatusCode(getField(submission, "responseSnapshot")),
-        warnings: getJsonArrayLength(getField(submission, "validationWarnings")),
+        httpStatus: getResponseStatusCode(
+          getField(submission, "responseSnapshot"),
+        ),
+        warnings: getJsonArrayLength(
+          getField(submission, "validationWarnings"),
+        ),
         errors: getJsonArrayLength(getField(submission, "validationErrors")),
       },
     });
@@ -809,15 +849,10 @@ function buildTimelineEvents({
   return events
     .filter((event) => Boolean(event.timestamp))
     .sort((first, second) => {
-      const firstTime = first.timestamp
-        ? new Date(first.timestamp).getTime()
-        : 0;
-
-      const secondTime = second.timestamp
-        ? new Date(second.timestamp).getTime()
-        : 0;
-
-      return firstTime - secondTime;
+      return (
+        getUnknownDateTime(first.timestamp) -
+        getUnknownDateTime(second.timestamp)
+      );
     });
 }
 
@@ -885,9 +920,11 @@ function Panel({
 
           <h2 className="mt-2 text-lg font-bold text-gray-950">{title}</h2>
 
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-            {description}
-          </p>
+          {description && (
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
+              {description}
+            </p>
+          )}
         </div>
 
         {actionHref && actionLabel && (
@@ -981,7 +1018,7 @@ function AssignmentCard({
           </div>
 
           <h3 className="mt-3 text-sm font-bold text-gray-950">
-            {assignmentId}
+            {assignmentId || "Unknown assignment"}
           </h3>
 
           <p className="mt-2 text-sm leading-6 text-gray-500">
@@ -991,14 +1028,16 @@ function AssignmentCard({
           </p>
         </div>
 
-        <Link
-          href={`/admin/audit/entity?entityId=${encodeURIComponent(
-            assignmentId,
-          )}`}
-          className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
-        >
-          Audit
-        </Link>
+        {assignmentId && (
+          <Link
+            href={`/admin/audit/entity?entityId=${encodeURIComponent(
+              assignmentId,
+            )}`}
+            className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+          >
+            Audit
+          </Link>
+        )}
       </div>
 
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1130,7 +1169,8 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
     value === "accepted_with_warnings"
       ? "border-gray-900 bg-gray-950 text-white"
       : value === "assigned" ||
-          value === "pending" ||
+          value === "draft" ||
+          value === "submitted" ||
           value === "in_progress" ||
           value === "open"
         ? "border-gray-300 bg-gray-100 text-gray-800"
@@ -1189,6 +1229,26 @@ function cleanString(value: unknown) {
   return cleaned.length > 0 ? cleaned : null;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function getUnknownDateTime(value: unknown) {
+  if (!value) return 0;
+
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  return 0;
+}
+
 function getRowTime(row: unknown) {
   const value =
     getField(row, "lastAttemptedAt") ??
@@ -1196,11 +1256,7 @@ function getRowTime(row: unknown) {
     getField(row, "createdAt") ??
     getField(row, "updatedAt");
 
-  if (!value) return 0;
-
-  const time = new Date(value as string | Date).getTime();
-
-  return Number.isFinite(time) ? time : 0;
+  return getUnknownDateTime(value);
 }
 
 function parseJsonValue(value: unknown): unknown {
@@ -1248,17 +1304,17 @@ function maskVerificationCode(value: string) {
   return `${value.slice(0, 2)}****`;
 }
 
-function formatDateTime(value: Date | string | unknown | null | undefined) {
+function formatDateTime(value: unknown) {
   if (!value) return "—";
 
-  const date = new Date(value as string | Date);
+  const time = getUnknownDateTime(value);
 
-  if (!Number.isFinite(date.getTime())) return "—";
+  if (!time) return "—";
 
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(date);
+  }).format(new Date(time));
 }
 
 function formatLabel(value: string | null | undefined) {

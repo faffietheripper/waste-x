@@ -74,8 +74,8 @@ export default async function CompliancePage() {
     ["rejected", "failed"].includes(submission.status),
   ).length;
 
-  const dwtPending = dwtSubmissions.filter(
-    (submission) => submission.status === "pending",
+  const dwtAwaitingFinalStatus = dwtSubmissions.filter((submission) =>
+    ["draft", "submitted"].includes(submission.status),
   ).length;
 
   const verificationRate = calculateRate(verificationUsed, totalAssignments);
@@ -84,7 +84,10 @@ export default async function CompliancePage() {
     completedAssignments,
     totalAssignments,
   );
-  const receiptConfirmationRate = calculateRate(confirmedReceipts, receipts.length);
+  const receiptConfirmationRate = calculateRate(
+    confirmedReceipts,
+    receipts.length,
+  );
   const dwtSuccessRate = calculateRate(dwtAccepted, dwtSubmissions.length);
   const incidentResolutionRate = calculateRate(
     resolvedIncidents,
@@ -169,15 +172,16 @@ export default async function CompliancePage() {
 
       const incidentPenalty =
         orgListings.length > 0
-          ? Math.min(30, Math.round((orgUnresolvedIncidents / orgListings.length) * 30))
+          ? Math.min(
+              30,
+              Math.round((orgUnresolvedIncidents / orgListings.length) * 30),
+            )
           : orgUnresolvedIncidents > 0
             ? 20
             : 0;
 
       const dwtPenalty =
-        orgRejectedDwt > 0
-          ? Math.min(15, orgRejectedDwt * 5)
-          : 0;
+        orgRejectedDwt > 0 ? Math.min(15, orgRejectedDwt * 5) : 0;
 
       const trustScore = clampScore(
         Math.round(
@@ -348,8 +352,8 @@ export default async function CompliancePage() {
 
         <Metric
           label="DWT Needs Attention"
-          value={dwtNeedsAttention + dwtPending}
-          helper={`${dwtNeedsAttention} rejected/failed, ${dwtPending} pending`}
+          value={dwtNeedsAttention + dwtAwaitingFinalStatus}
+          helper={`${dwtNeedsAttention} rejected/failed, ${dwtAwaitingFinalStatus} awaiting final status`}
           tone={dwtNeedsAttention > 0 ? "danger" : "default"}
         />
       </section>
@@ -380,6 +384,12 @@ export default async function CompliancePage() {
               label="Rejected / failed"
               value={dwtNeedsAttention}
               helper="Requires investigation"
+            />
+
+            <MiniStat
+              label="Awaiting final status"
+              value={dwtAwaitingFinalStatus}
+              helper="Draft or submitted"
             />
 
             <MiniStat

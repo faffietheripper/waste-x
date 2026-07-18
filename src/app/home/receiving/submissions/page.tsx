@@ -45,13 +45,19 @@ type SubmissionAttemptForDisplay = {
    HELPERS
 ========================================================= */
 
-function formatDate(value: Date | null | undefined) {
+function formatDate(value: Date | string | null | undefined) {
   if (!value) return "Not recorded";
+
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return "Not recorded";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(value);
+  }).format(date);
 }
 
 function formatStatus(status: string | null | undefined) {
@@ -373,11 +379,15 @@ export default async function ReceivingSubmissionsPage() {
     redirect("/home/settings/departments?reason=no-active-department");
   }
 
+  const currentOrganisation = currentUser.organisation;
+  const currentDepartment = currentUser.department;
+  const organisationId = currentUser.organisationId;
+
   const capabilities =
-    (currentUser.organisation.capabilities as Capability[] | null) ?? [];
+    (currentOrganisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentUser.department.type as DepartmentType | undefined) ?? null;
+    (currentDepartment.type as DepartmentType | undefined) ?? null;
 
   const canViewReceiving = hasOperationalPermission({
     capabilities,
@@ -420,10 +430,7 @@ export default async function ReceivingSubmissionsPage() {
 
   const submissions =
     await database.query.wasteTrackingSubmissions.findMany({
-      where: eq(
-        wasteTrackingSubmissions.organisationId,
-        currentUser.organisationId,
-      ),
+      where: eq(wasteTrackingSubmissions.organisationId, organisationId),
       with: {
         assignment: {
           with: {
@@ -442,7 +449,9 @@ export default async function ReceivingSubmissionsPage() {
       limit: 100,
     });
 
-  const groupedSubmissions = new Map<string, typeof submissions>();
+  type SubmissionRecord = (typeof submissions)[number];
+
+  const groupedSubmissions = new Map<string, SubmissionRecord[]>();
 
   for (const submission of submissions) {
     const key = getGroupKey({
@@ -463,15 +472,15 @@ export default async function ReceivingSubmissionsPage() {
 
   const submissionGroups: {
     key: string;
-    latest: (typeof submissions)[number];
-    attempts: typeof submissions;
-    previousAttempts: typeof submissions;
+    latest: SubmissionRecord;
+    attempts: SubmissionRecord[];
+    previousAttempts: SubmissionRecord[];
   }[] = [];
 
-  for (const [key, attempts] of groupedSubmissions.entries()) {
+  groupedSubmissions.forEach((attempts, key) => {
     const latest = attempts[0];
 
-    if (!latest) continue;
+    if (!latest) return;
 
     submissionGroups.push({
       key,
@@ -479,7 +488,7 @@ export default async function ReceivingSubmissionsPage() {
       attempts,
       previousAttempts: attempts.slice(1),
     });
-  }
+  });
 
   const movementCount = submissionGroups.length;
   const attemptCount = submissions.length;

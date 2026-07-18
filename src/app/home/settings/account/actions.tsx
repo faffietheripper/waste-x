@@ -3,7 +3,7 @@
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 
-import { updatePassword } from "@/modules/auth/actions/updatePassword";
+import { updatePassword as updatePasswordCore } from "@/modules/auth/actions/updatePassword";
 import { deleteAccount } from "@/modules/auth/actions/deleteAccount";
 
 import { withErrorHandling } from "@/lib/errors/withErrorHandling";
@@ -27,7 +27,7 @@ export const updatePasswordAction = withErrorHandling(
       throw new Error("UNAUTHORIZED");
     }
 
-    await updatePassword({
+    await updatePasswordCore({
       userId: session.user.id,
       currentPassword,
       newPassword,
@@ -44,6 +44,15 @@ export const updatePasswordAction = withErrorHandling(
     severity: "high",
   },
 );
+
+/* ===============================
+   BACKWARDS COMPATIBILITY
+
+   Keep this only while older components still import:
+   import { updatePassword } from ".../actions"
+============================== */
+
+export const updatePassword = updatePasswordAction;
 
 /* ===============================
    DELETE ACCOUNT

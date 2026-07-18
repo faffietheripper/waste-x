@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createIncident } from "@/app/home/carrier-hub/waste-carriers/incidents-&-reports/actions";
+import { createIncidentAction} from "@/modules/incidents/actions/createIncidentAction";
 import { useAction } from "@/lib/actions/useAction";
 
 interface Assignment {
@@ -25,7 +25,7 @@ export default function IncidentModal({
     setLoading(true);
 
     const result = await run(() =>
-      createIncident({
+      createIncidentAction({
         assignmentId: formData.get("assignmentId") as string,
         type: formData.get("type") as string,
         summary: formData.get("summary") as string,

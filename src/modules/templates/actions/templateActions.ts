@@ -33,6 +33,7 @@ export async function createTemplateAction(name: string, description?: string) {
 
 export async function getOrgTemplatesAction() {
   const user = await requireOrgUser();
+
   return getOrgTemplatesCore(user.organisationId);
 }
 
@@ -49,6 +50,7 @@ export async function addSectionAction(templateId: string, title: string) {
 
 export async function deleteSectionAction(sectionId: string) {
   await requireOrgUser();
+
   return deleteSectionCore(sectionId);
 }
 
@@ -65,11 +67,13 @@ export async function addFieldAction(input: any) {
 
 export async function updateFieldAction(fieldId: string, updates: any) {
   await requireOrgUser();
+
   return updateFieldCore(fieldId, updates);
 }
 
 export async function deleteFieldAction(fieldId: string) {
   await requireOrgUser();
+
   return deleteFieldCore(fieldId);
 }
 
@@ -79,6 +83,7 @@ export async function deleteFieldAction(fieldId: string) {
 
 export async function toggleTemplateLockAction(templateId: string) {
   await requireOrgUser();
+
   return toggleTemplateLockCore(templateId);
 }
 
@@ -90,15 +95,18 @@ export async function reorderSectionsAction(
   templateId: string,
   orderedIds: string[],
 ) {
+  await requireOrgUser();
   await ensureTemplateEditable(templateId);
+
   return reorderSectionsCore(orderedIds);
 }
 
 export async function reorderFieldsAction(
-  templateId: string,
+  sectionId: string,
   orderedIds: string[],
 ) {
-  await ensureTemplateEditable(templateId);
+  await requireOrgUser();
+
   return reorderFieldsCore(orderedIds);
 }
 

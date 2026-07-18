@@ -1,8 +1,8 @@
-import React from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { format } from "date-fns";
 import { InferSelectModel } from "drizzle-orm";
+
 import { wasteListings } from "@/db/schema";
 import { getImageUrl } from "@/util/files";
 import { isBidOver } from "@/util/bids";
@@ -12,6 +12,8 @@ import { auth } from "@/auth";
 import { deleteListingAction } from "@/modules/listings/actions/deleteListingAction";
 
 type Listing = InferSelectModel<typeof wasteListings>;
+
+type FormAction = (formData: FormData) => Promise<unknown> | unknown;
 
 /* =========================================================
    FORMATTERS
@@ -121,7 +123,6 @@ function getWorkflowText({
 export default async function ListingCard({ listing }: { listing: Listing }) {
   const session = await auth();
 
-  const userRole = session?.user?.role;
   const userId = session?.user?.id;
   const userOrganisationId = session?.user?.organisationId;
 
@@ -139,14 +140,14 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
     listing.status === "open" &&
     !isAssigned;
 
-  /* =========================================================
-     FILES
-  ========================================================= */
-
-  const fileKeys = listing.fileKey?.split(",").filter(Boolean) ?? [];
+  const fileKeys =
+    listing.fileKey
+      ?.split(",")
+      .map((key) => key.trim())
+      .filter(Boolean) ?? [];
 
   const firstImageUrl = fileKeys[0]
-    ? getImageUrl(fileKeys[0].trim())
+    ? getImageUrl(fileKeys[0])
     : "/placeholder.png";
 
   const workflowText = getWorkflowText({
@@ -155,9 +156,23 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
     isOwner,
   });
 
-  /* =========================================================
-     UI
-  ========================================================= */
+  async function archiveListingFormAction(formData: FormData) {
+    "use server";
+
+    await (archiveBids as FormAction)(formData);
+  }
+
+  async function unarchiveListingFormAction(formData: FormData) {
+    "use server";
+
+    await (unarchivedBids as FormAction)(formData);
+  }
+
+  async function deleteListingFormAction(formData: FormData) {
+    "use server";
+
+    await (deleteListingAction as FormAction)(formData);
+  }
 
   return (
     <article className="group flex h-full flex-col overflow-hidden rounded-3xl border border-black/10 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-md">
@@ -167,7 +182,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
           src={firstImageUrl}
           width={700}
           height={500}
-          alt={listing.name}
+          alt={listing.name || "Waste listing"}
           className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
         />
 
@@ -202,6 +217,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
           <p className="text-xs uppercase tracking-[0.2em] text-orange-300">
             Waste Listing
           </p>
+
           <h2 className="mt-1 line-clamp-2 text-xl font-semibold text-white">
             {listing.name}
           </h2>
@@ -210,7 +226,9 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
 
       {/* CONTENT */}
       <div className="flex flex-1 flex-col p-6">
-        <p className="text-sm text-black/50">{listing.location}</p>
+        <p className="text-sm text-black/50">
+          {listing.location || "Location not set"}
+        </p>
 
         <div className="mt-5 grid grid-cols-2 gap-3">
           <DetailBlock
@@ -238,6 +256,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
         <div className="mt-4 space-y-2 text-sm text-black/50">
           <div className="flex items-center justify-between gap-4">
             <span>Bid Ends</span>
+
             <span className="font-medium text-black">
               {listing.endDate
                 ? format(listing.endDate, "dd MMM yyyy")
@@ -247,6 +266,7 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
 
           <div className="flex items-center justify-between gap-4">
             <span>Template Version</span>
+
             <span className="font-medium text-black">
               v{listing.templateVersion}
             </span>
@@ -266,8 +286,9 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
                     View Listing
                   </Link>
 
-                  <form action={archiveBids}>
+                  <form action={archiveListingFormAction}>
                     <input type="hidden" name="listingId" value={listing.id} />
+
                     <button
                       type="submit"
                       className="w-full rounded-full border border-black/10 bg-[#fbfaf7] px-4 py-2 text-sm font-semibold text-black/60 transition hover:bg-orange-100 hover:text-orange-700"
@@ -296,8 +317,9 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
 
               {isOwner && (
                 <div className="grid grid-cols-2 gap-2">
-                  <form action={deleteListingAction}>
+                  <form action={deleteListingFormAction}>
                     <input type="hidden" name="listingId" value={listing.id} />
+
                     <button
                       type="submit"
                       className="w-full rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
@@ -306,8 +328,9 @@ export default async function ListingCard({ listing }: { listing: Listing }) {
                     </button>
                   </form>
 
-                  <form action={unarchivedBids}>
+                  <form action={unarchiveListingFormAction}>
                     <input type="hidden" name="listingId" value={listing.id} />
+
                     <button
                       type="submit"
                       className="w-full rounded-full border border-black/10 bg-[#fbfaf7] px-4 py-2 text-sm font-semibold text-black/60 transition hover:bg-orange-100 hover:text-orange-700"
@@ -335,6 +358,7 @@ function DetailBlock({ label, value }: { label: string; value: string }) {
       <p className="text-[10px] uppercase tracking-widest text-black/35">
         {label}
       </p>
+
       <p className="mt-1 truncate text-sm font-semibold text-black">{value}</p>
     </div>
   );

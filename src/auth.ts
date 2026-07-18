@@ -1,4 +1,4 @@
-import NextAuth, { DefaultSession, type Session } from "next-auth";
+import NextAuth, { DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -17,6 +17,19 @@ import {
 import { getUserFromDb } from "@/app/login/actions";
 
 /* =========================================================
+   SHARED TYPES
+========================================================= */
+
+type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
+
+type ActiveDepartment = {
+  id: string;
+  organisationId: string;
+  name: string;
+  type: DepartmentType;
+};
+
+/* =========================================================
    EXTEND NEXTAUTH TYPES
 ========================================================= */
 
@@ -28,22 +41,17 @@ declare module "next-auth" {
       departmentId: string | null;
       role: string;
       profileCompleted: boolean;
-      activeDepartment: {
-        id: string;
-        organisationId: string;
-        name: string;
-        type: "generator" | "carrier" | "compliance";
-      } | null;
+      activeDepartment: ActiveDepartment | null;
     } & DefaultSession["user"];
   }
 
   interface User {
     id: string;
-    name: string;
-    email: string;
-    organisationId: string | null;
+    name?: string | null;
+    email?: string | null;
+    organisationId?: string | null;
     departmentId?: string | null;
-    role: string;
+    role?: string;
   }
 }
 
@@ -133,7 +141,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (dbUser) {
           t.organisationId = dbUser.organisationId;
           t.departmentId = dbUser.departmentId;
-          t.role = dbUser.role;
+          t.role = dbUser.role ?? "employee";
 
           const [profile] = await database
             .select({
@@ -142,7 +150,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             .from(userProfiles)
             .where(eq(userProfiles.userId, dbUser.id));
 
-          t.profileCompleted = !!profile;
+          t.profileCompleted = Boolean(profile);
         }
       }
 
@@ -162,7 +170,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         profileCompleted?: boolean;
       };
 
-      let activeDepartment: Session["user"]["activeDepartment"] = null;
+      let activeDepartment: ActiveDepartment | null = null;
 
       if (t.departmentId) {
         const [department] = await database
@@ -175,11 +183,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           .from(departments)
           .where(eq(departments.id, t.departmentId));
 
-        activeDepartment = department ?? null;
+        if (department) {
+          activeDepartment = {
+            id: department.id,
+            organisationId: department.organisationId,
+            name: department.name,
+            type: department.type as DepartmentType,
+          };
+        }
       }
 
       if (session.user) {
-        session.user.id = t.id!;
+        session.user.id = t.id ?? "";
         session.user.organisationId = t.organisationId ?? null;
         session.user.departmentId = t.departmentId ?? null;
         session.user.role = t.role ?? "employee";

@@ -142,9 +142,9 @@ export default async function AlertsPage() {
     );
 
     const pendingDwtSubmissions = orgDwtSubmissions.filter(
-      (submission) => submission.status === "pending",
-    );
-
+  (submission) =>
+    submission.status === "draft" || submission.status === "submitted",
+);
     const dwtSetting = dwtSettingsByOrgId.get(org.id);
 
     const verificationUsed = orgAssignments.filter(
@@ -266,22 +266,22 @@ export default async function AlertsPage() {
       });
     }
 
-    if (pendingDwtSubmissions.length > 0) {
-      alerts.push({
-        id: `dwt-pending-${org.id}`,
-        severity: "medium",
-        category: "Digital Waste Tracking",
-        title: "DWT submissions still pending",
-        message: `${organisationName} has ${pendingDwtSubmissions.length} pending DWT submission${
-          pendingDwtSubmissions.length === 1 ? "" : "s"
-        }.`,
-        organisationName,
-        entityId: org.id,
-        createdAt: pendingDwtSubmissions[0]?.lastAttemptedAt,
-        actionHref: "/admin/digital-waste-tracking",
-        actionLabel: "Open DWT",
-      });
-    }
+   if (pendingDwtSubmissions.length > 0) {
+  alerts.push({
+    id: `dwt-awaiting-final-status-${org.id}`,
+    severity: "medium",
+    category: "Digital Waste Tracking",
+    title: "DWT submissions awaiting final status",
+    message: `${organisationName} has ${pendingDwtSubmissions.length} DWT submission${
+      pendingDwtSubmissions.length === 1 ? "" : "s"
+    } in draft or submitted state.`,
+    organisationName,
+    entityId: org.id,
+    createdAt: pendingDwtSubmissions[0]?.lastAttemptedAt,
+    actionHref: "/admin/digital-waste-tracking",
+    actionLabel: "Open DWT",
+  });
+}
 
     if (readyReceiptsWithoutAcceptedDwt.length > 0) {
       alerts.push({

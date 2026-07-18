@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { deleteBidAction } from "@/app/home/my-activity/my-bids/actions";
+import { deleteBidAction } from "@/modules/bids/actions/bidActions";
 import { useToast } from "@/components/ui/use-toast";
 
 interface ManageBidsProps {
