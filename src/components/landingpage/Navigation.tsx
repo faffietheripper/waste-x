@@ -81,9 +81,9 @@ export default function Navigation() {
             About
           </MobileLink>
 
-          <div className="space-y-3">
-            <div className="text-gray-500">Contact</div>
-          </div>
+           <MobileLink href="/contact" setMenuOpen={setMenuOpen}>
+            Contact
+          </MobileLink>
 
           <div className="pt-6 border-t border-gray-800 flex flex-col gap-4">
             <Link href="/login" className="text-gray-400">
