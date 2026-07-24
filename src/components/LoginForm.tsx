@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { login } from "@/app/login/actions";
 import { useForm } from "react-hook-form";
@@ -31,9 +31,12 @@ export default function LoginForm() {
   const {
     register,
     handleSubmit,
+    resetField,
+    setFocus,
     formState: { errors },
   } = useForm<LoginFormInputs>({
     resolver: zodResolver(LoginSchema),
+    mode: "onSubmit",
   });
 
   /* =========================================================
@@ -41,27 +44,55 @@ export default function LoginForm() {
   ========================================================= */
 
   const onSubmit = async (data: LoginFormInputs) => {
+    if (loading) return;
+
     setServerError(null);
     setLoading(true);
 
-    const res = await login(data);
+    try {
+      const res = await login(data);
 
-    setLoading(false);
+      if (!res?.success) {
+        setServerError(
+          res?.message ||
+            "The email or password you entered is incorrect. Please try again.",
+        );
 
-    if (!res.success) {
-      setServerError(res.message || "Invalid email or password.");
+        resetField("password");
 
-      if (errorContainerRef.current) {
-        errorContainerRef.current.focus();
+        window.setTimeout(() => {
+          errorContainerRef.current?.focus();
+          setFocus("password");
+        }, 50);
+
+        router.refresh();
+
+        return;
       }
 
-      return;
-    }
+      if (res.data?.role === "platform_admin") {
+        router.replace("/admin");
+        return;
+      }
 
-    if (res.data?.role === "platform_admin") {
-      router.push("/admin");
-    } else {
-      router.push("/home");
+      router.replace("/home");
+    } catch (error) {
+      console.error("[LOGIN_FORM_ERROR]", error);
+
+      setServerError(
+        "Login failed. Please check your email and password, then try again.",
+      );
+
+      resetField("password");
+
+      window.setTimeout(() => {
+        errorContainerRef.current?.focus();
+        setFocus("password");
+      }, 50);
+
+      router.refresh();
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -73,15 +104,16 @@ export default function LoginForm() {
     <form
       onSubmit={handleSubmit(onSubmit)}
       className="mt-8 grid grid-cols-6 gap-6"
+      noValidate
     >
       {/* SERVER ERROR */}
       {serverError && (
         <div
           ref={errorContainerRef}
           tabIndex={-1}
-          className="col-span-6 rounded-xl border border-red-400 bg-red-100 p-4 text-sm text-red-700"
+          className="col-span-6 rounded-xl border border-red-400 bg-red-100 p-4 text-sm font-semibold text-red-700 outline-none"
           role="alert"
-          aria-live="polite"
+          aria-live="assertive"
         >
           {serverError}
         </div>
@@ -99,7 +131,12 @@ export default function LoginForm() {
         <input
           type="email"
           id="email"
-          {...register("email")}
+          autoComplete="email"
+          {...register("email", {
+            onChange: () => {
+              if (serverError) setServerError(null);
+            },
+          })}
           className="mt-1 h-12 w-full rounded-md border border-gray-200 bg-white p-3 text-sm text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
           aria-invalid={!!errors.email}
           aria-describedby={errors.email ? "email-error" : undefined}
@@ -129,7 +166,12 @@ export default function LoginForm() {
           <input
             type={showPassword ? "text" : "password"}
             id="password"
-            {...register("password")}
+            autoComplete="current-password"
+            {...register("password", {
+              onChange: () => {
+                if (serverError) setServerError(null);
+              },
+            })}
             className="h-12 w-full rounded-md border border-gray-200 bg-white p-3 pr-14 text-sm text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
             aria-invalid={!!errors.password}
             aria-describedby={errors.password ? "password-error" : undefined}
@@ -167,7 +209,7 @@ export default function LoginForm() {
         disabled={loading}
         className="col-span-6 rounded-md border border-blue-600 bg-blue-600 px-12 py-3 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {loading ? "Logging in..." : "Log In"}
+        {loading ? "Checking details..." : "Log In"}
       </button>
     </form>
   );

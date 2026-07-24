@@ -1,4 +1,4 @@
-import NextAuth, { DefaultSession } from "next-auth";
+import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -17,7 +17,7 @@ import {
 import { getUserFromDb } from "@/app/login/actions";
 
 /* =========================================================
-   SHARED TYPES
+   LOCAL TYPES
 ========================================================= */
 
 type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
@@ -29,31 +29,22 @@ type ActiveDepartment = {
   type: DepartmentType;
 };
 
-/* =========================================================
-   EXTEND NEXTAUTH TYPES
-========================================================= */
+type WasteXToken = {
+  id?: string;
+  organisationId?: string | null;
+  departmentId?: string | null;
+  role?: string | null;
+  profileCompleted?: boolean;
+};
 
-declare module "next-auth" {
-  interface Session {
-    user: {
-      id: string;
-      organisationId: string | null;
-      departmentId: string | null;
-      role: string;
-      profileCompleted: boolean;
-      activeDepartment: ActiveDepartment | null;
-    } & DefaultSession["user"];
-  }
-
-  interface User {
-    id: string;
-    name?: string | null;
-    email?: string | null;
-    organisationId?: string | null;
-    departmentId?: string | null;
-    role?: string;
-  }
-}
+type WasteXSessionUser = {
+  id: string;
+  organisationId: string | null;
+  departmentId: string | null;
+  role: string;
+  profileCompleted: boolean;
+  activeDepartment: ActiveDepartment | null;
+};
 
 /* =========================================================
    NEXTAUTH CONFIG
@@ -115,19 +106,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     ========================================================= */
 
     async jwt({ token, user }) {
-      const t = token as typeof token & {
-        id?: string;
-        organisationId?: string | null;
-        departmentId?: string | null;
-        role?: string;
-        profileCompleted?: boolean;
-      };
+      const wasteXToken = token as typeof token & WasteXToken;
 
       if (user?.id) {
-        t.id = user.id;
+        wasteXToken.id = user.id;
       }
 
-      if (t.id) {
+      if (wasteXToken.id) {
         const [dbUser] = await database
           .select({
             id: users.id,
@@ -136,12 +121,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             role: users.role,
           })
           .from(users)
-          .where(eq(users.id, t.id));
+          .where(eq(users.id, String(wasteXToken.id)));
 
         if (dbUser) {
-          t.organisationId = dbUser.organisationId;
-          t.departmentId = dbUser.departmentId;
-          t.role = dbUser.role ?? "employee";
+          wasteXToken.organisationId = dbUser.organisationId;
+          wasteXToken.departmentId = dbUser.departmentId;
+          wasteXToken.role = dbUser.role ?? "employee";
 
           const [profile] = await database
             .select({
@@ -150,11 +135,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             .from(userProfiles)
             .where(eq(userProfiles.userId, dbUser.id));
 
-          t.profileCompleted = Boolean(profile);
+          wasteXToken.profileCompleted = Boolean(profile);
         }
       }
 
-      return t;
+      return wasteXToken;
     },
 
     /* =========================================================
@@ -162,17 +147,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     ========================================================= */
 
     async session({ session, token }) {
-      const t = token as {
-        id?: string;
-        organisationId?: string | null;
-        departmentId?: string | null;
-        role?: string;
-        profileCompleted?: boolean;
-      };
+      const wasteXToken = token as typeof token & WasteXToken;
 
       let activeDepartment: ActiveDepartment | null = null;
 
-      if (t.departmentId) {
+      if (wasteXToken.departmentId) {
         const [department] = await database
           .select({
             id: departments.id,
@@ -181,7 +160,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             type: departments.type,
           })
           .from(departments)
-          .where(eq(departments.id, t.departmentId));
+          .where(eq(departments.id, String(wasteXToken.departmentId)));
 
         if (department) {
           activeDepartment = {
@@ -194,12 +173,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       }
 
       if (session.user) {
-        session.user.id = t.id ?? "";
-        session.user.organisationId = t.organisationId ?? null;
-        session.user.departmentId = t.departmentId ?? null;
-        session.user.role = t.role ?? "employee";
-        session.user.profileCompleted = t.profileCompleted ?? false;
-        session.user.activeDepartment = activeDepartment;
+        const user = session.user as typeof session.user & WasteXSessionUser;
+
+        user.id = String(wasteXToken.id ?? "");
+        user.organisationId = wasteXToken.organisationId ?? null;
+        user.departmentId = wasteXToken.departmentId ?? null;
+        user.role = wasteXToken.role ?? "employee";
+        user.profileCompleted = wasteXToken.profileCompleted ?? false;
+        user.activeDepartment = activeDepartment;
       }
 
       return session;
