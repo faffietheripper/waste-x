@@ -1,3 +1,5 @@
+// src/app/home/receiving/intake/[assignmentId]/ReceiveMovementForm.tsx
+
 "use client";
 
 import {
@@ -74,6 +76,47 @@ type FormIssue = {
   section: string;
   message: string;
 };
+
+type PatScenarioId =
+  | "R01"
+  | "R02"
+  | "R03"
+  | "R04"
+  | "R05"
+  | "R07"
+  | "C01"
+  | "C02"
+  | "B01"
+  | "P01"
+  | "H01"
+  | "H02"
+  | "H03"
+  | "X01";
+
+type PatExpectedErrorOverride = "" | "C01" | "H02";
+
+/* =========================================================
+   PAT HELPERS
+========================================================= */
+
+const EXPECTED_DEFRA_ERROR_PAT_SCENARIOS = new Set<PatScenarioId>([
+  "C01",
+  "H02",
+]);
+
+function detectPatScenarioId(
+  ...values: Array<string | null | undefined>
+): PatScenarioId | null {
+  const joined = values.filter(Boolean).join(" ");
+
+  const match = joined.match(
+    /\b(R01|R02|R03|R04|R05|R07|C01|C02|B01|P01|H01|H02|H03|X01)\b/i,
+  );
+
+  if (!match?.[1]) return null;
+
+  return match[1].toUpperCase() as PatScenarioId;
+}
 
 /* =========================================================
    HELPERS
@@ -250,6 +293,9 @@ export default function ReceiveMovementForm({
     string | null
   >(null);
 
+  const [patExpectedErrorOverride, setPatExpectedErrorOverride] =
+    useState<PatExpectedErrorOverride>("");
+
   /* Movement */
   const [receiverApiCode, setReceiverApiCode] = useState(
     defaultReceiverApiCode,
@@ -355,6 +401,30 @@ export default function ReceiveMovementForm({
   const hasSavedReceiverApiCode = useMemo(() => {
     return defaultReceiverApiCode.trim().length > 0;
   }, [defaultReceiverApiCode]);
+
+  const detectedPatScenarioId = useMemo(() => {
+    return detectPatScenarioId(
+      listingName,
+      yourUniqueReference,
+      specialHandlingRequirements,
+    );
+  }, [listingName, yourUniqueReference, specialHandlingRequirements]);
+
+  const activePatScenarioId = useMemo<PatScenarioId | null>(() => {
+    if (patExpectedErrorOverride) return patExpectedErrorOverride;
+
+    return detectedPatScenarioId;
+  }, [patExpectedErrorOverride, detectedPatScenarioId]);
+
+  const isExpectedDefraErrorPatTest = useMemo(() => {
+    return activePatScenarioId
+      ? EXPECTED_DEFRA_ERROR_PAT_SCENARIOS.has(activePatScenarioId)
+      : false;
+  }, [activePatScenarioId]);
+
+  const allowMissingCarrierRegistrationForPat = activePatScenarioId === "C01";
+
+  const allowMissingHazardousConsignmentForPat = activePatScenarioId === "H02";
 
   function issueMessagesFor(keys: string[]) {
     return issues
@@ -566,6 +636,7 @@ export default function ReceiveMovementForm({
 
     if (containsHazardous) {
       if (
+        !allowMissingHazardousConsignmentForPat &&
         !hazardousWasteConsignmentCode.trim() &&
         !reasonForNoConsignmentCode
       ) {
@@ -667,6 +738,7 @@ export default function ReceiveMovementForm({
     }
 
     if (
+      !allowMissingCarrierRegistrationForPat &&
       !carrierRegistrationNumber.trim() &&
       !carrierReasonForNoRegistrationNumber
     ) {
@@ -745,6 +817,7 @@ export default function ReceiveMovementForm({
           "Use the issue list below to see exactly what needs fixing.",
         ],
       });
+
       jumpToFeedback();
       return;
     }
@@ -773,31 +846,49 @@ export default function ReceiveMovementForm({
 
         const serverWarnings = result.warnings?.map(mapDefraIssue) ?? [];
 
+        const hasDefraValidationErrors = Boolean(result.errors?.length);
+
+        const isExpectedPatRejection =
+          isExpectedDefraErrorPatTest && serverIssues.length > 0;
+
         setIssues(serverIssues);
         setWarnings(serverWarnings);
 
         setSubmitFeedback({
-          type: "error",
-          title: "Submission not successful",
-          message:
-            result.message ||
-            "Waste X could not complete the Digital Waste Tracking submission.",
-          details: [
-            serverIssues.length > 0
-              ? `${serverIssues.length} issue${
-                  serverIssues.length === 1 ? "" : "s"
-                } need attention.`
-              : "The request failed before a detailed validation list was returned.",
-            "Review the issue list below and fix the marked fields.",
-            "If the issue says Waste Tracking Service, the external service rejected or failed the request.",
-          ],
+          type: isExpectedPatRejection ? "warning" : "error",
+          title: isExpectedPatRejection
+            ? `Expected PAT error received (${activePatScenarioId})`
+            : "Submission not successful",
+          message: isExpectedPatRejection
+            ? hasDefraValidationErrors
+              ? "This is the correct result for this DEFRA PAT scenario. Waste X allowed the invalid test payload through the frontend, and the Waste Tracking Service returned validation errors as expected."
+              : "Waste X allowed the invalid PAT payload through the frontend, but this may still have been stopped by server-side validation before DEFRA. Check the DWT submission register to confirm whether the external request was logged."
+            : result.message ||
+              "Waste X could not complete the Digital Waste Tracking submission.",
+          details: isExpectedPatRejection
+            ? [
+                "No Waste Tracking ID is expected for this scenario.",
+                "For the DEFRA email, include the scenario ID, scenario description, EWC codes, tested time and the returned error.",
+                hasDefraValidationErrors
+                  ? "This appears to be DEFRA validation evidence."
+                  : "If no DWT submission record was created, patch the server action next so this expected-error PAT test can reach DEFRA.",
+              ]
+            : [
+                serverIssues.length > 0
+                  ? `${serverIssues.length} issue${
+                      serverIssues.length === 1 ? "" : "s"
+                    } need attention.`
+                  : "The request failed before a detailed validation list was returned.",
+                "Review the issue list below and fix the marked fields.",
+                "If the issue says Waste Tracking Service, the external service rejected or failed the request.",
+              ],
         });
 
         jumpToFeedback();
         return;
       }
 
-      const serverWarnings = result.warnings.map(mapDefraIssue);
+      const serverWarnings = result.warnings?.map(mapDefraIssue) ?? [];
 
       setIssues([]);
       setWarnings(serverWarnings);
@@ -839,9 +930,11 @@ export default function ReceiveMovementForm({
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
             Receive Movement
           </p>
+
           <h2 className="mt-2 text-2xl font-semibold text-black">
             Waste Tracking Service submission
           </h2>
+
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
             Confirm the waste received at site. Waste X will validate the data
             locally, then submit it to the receive movement endpoint.
@@ -857,9 +950,11 @@ export default function ReceiveMovementForm({
           <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-black/35">
             Submission mode
           </p>
+
           <p className="mt-1 text-sm font-semibold text-black">
             {isUpdate ? "Update existing movement" : "Create new movement"}
           </p>
+
           <p className="mt-1 break-all text-xs text-black/45">
             {wasteTrackingId || "No tracking ID yet"}
           </p>
@@ -870,6 +965,17 @@ export default function ReceiveMovementForm({
         hasSavedReceiverApiCode={hasSavedReceiverApiCode}
         receiverApiCode={receiverApiCode}
       />
+
+      <PatExpectedErrorOverridePanel
+        detectedScenarioId={detectedPatScenarioId}
+        activeScenarioId={activePatScenarioId}
+        override={patExpectedErrorOverride}
+        onOverrideChange={setPatExpectedErrorOverride}
+      />
+
+      {isExpectedDefraErrorPatTest && (
+        <PatExpectedErrorNotice scenarioId={activePatScenarioId} />
+      )}
 
       <div className="mt-8 space-y-8">
         {/* ================= MOVEMENT ================= */}
@@ -954,9 +1060,15 @@ export default function ReceiveMovementForm({
             <Field
               label="Hazardous consignment code"
               required={
-                containsHazardous && !reasonForNoConsignmentCode
+                containsHazardous &&
+                !reasonForNoConsignmentCode &&
+                !allowMissingHazardousConsignmentForPat
               }
-              helper="Required for hazardous waste unless a valid reason is selected."
+              helper={
+                allowMissingHazardousConsignmentForPat
+                  ? "PAT H02 expected-error test: leave this blank so DEFRA can reject the payload."
+                  : "Required for hazardous waste unless a valid reason is selected."
+              }
               error={issueMessagesFor(["hazardousWasteConsignmentCode"])}
             >
               <input
@@ -972,9 +1084,15 @@ export default function ReceiveMovementForm({
             <Field
               label="Reason for no consignment code"
               required={
-                containsHazardous && !hazardousWasteConsignmentCode.trim()
+                containsHazardous &&
+                !hazardousWasteConsignmentCode.trim() &&
+                !allowMissingHazardousConsignmentForPat
               }
-              helper="Only needed when hazardous waste has no consignment code."
+              helper={
+                allowMissingHazardousConsignmentForPat
+                  ? "PAT H02 expected-error test: leave this as Not applicable."
+                  : "Only needed when hazardous waste has no consignment code."
+              }
               error={issueMessagesFor(["reasonForNoConsignmentCode"])}
             >
               <select
@@ -1143,9 +1261,7 @@ export default function ReceiveMovementForm({
             <Field
               label="Weight metric"
               required
-              error={issueMessagesFor([
-                "wasteItems[0].weight.metric",
-              ])}
+              error={issueMessagesFor(["wasteItems[0].weight.metric"])}
             >
               <select
                 value={weightMetric}
@@ -1452,8 +1568,15 @@ export default function ReceiveMovementForm({
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Field
               label="Carrier registration number"
-              required={!carrierReasonForNoRegistrationNumber}
-              helper="Add the registration number, or choose a reason why there is no registration number."
+              required={
+                !carrierReasonForNoRegistrationNumber &&
+                !allowMissingCarrierRegistrationForPat
+              }
+              helper={
+                allowMissingCarrierRegistrationForPat
+                  ? "PAT C01 expected-error test: leave this blank so DEFRA can reject the payload."
+                  : "Add the registration number, or choose a reason why there is no registration number."
+              }
               error={issueMessagesFor(["carrier.registrationNumber"])}
             >
               <input
@@ -1468,8 +1591,15 @@ export default function ReceiveMovementForm({
 
             <Field
               label="Reason for no registration number"
-              required={!carrierRegistrationNumber.trim()}
-              helper="Required if no carrier registration number is available."
+              required={
+                !carrierRegistrationNumber.trim() &&
+                !allowMissingCarrierRegistrationForPat
+              }
+              helper={
+                allowMissingCarrierRegistrationForPat
+                  ? "PAT C01 expected-error test: leave this as Not applicable."
+                  : "Required if no carrier registration number is available."
+              }
               error={issueMessagesFor([
                 "carrier.reasonForNoRegistrationNumber",
               ])}
@@ -1478,9 +1608,7 @@ export default function ReceiveMovementForm({
                 value={carrierReasonForNoRegistrationNumber}
                 onChange={(event) =>
                   setCarrierReasonForNoRegistrationNumber(
-                    event.target.value as
-                      | ReasonForNoRegistrationNumber
-                      | "",
+                    event.target.value as ReasonForNoRegistrationNumber | "",
                   )
                 }
                 className={inputClassFor([
@@ -1710,10 +1838,18 @@ export default function ReceiveMovementForm({
             <p className="text-sm font-semibold">
               Submit receive movement to Waste Tracking Service
             </p>
+
             <p className="mt-2 max-w-2xl text-sm leading-6 text-white/50">
               Feedback appears directly above this submit area so you do not
               have to scroll back to the top to find out what happened.
             </p>
+
+            {isExpectedDefraErrorPatTest && (
+              <p className="mt-3 rounded-2xl border border-orange-400/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
+                PAT {activePatScenarioId} is expected to fail. Submit this only
+                while using the DEFRA test/sandbox environment.
+              </p>
+            )}
 
             {!canSubmit && (
               <p className="mt-3 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
@@ -1734,7 +1870,9 @@ export default function ReceiveMovementForm({
               ? "Submitting..."
               : isUpdate
                 ? "Update movement"
-                : "Submit movement"}
+                : isExpectedDefraErrorPatTest
+                  ? "Submit expected-error PAT"
+                  : "Submit movement"}
           </button>
         </section>
       </div>
@@ -1812,6 +1950,119 @@ function ReceiverApiCodeNotice({
             {hasSavedReceiverApiCode ? "Change in settings" : "Add in settings"} →
           </Link>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function PatExpectedErrorOverridePanel({
+  detectedScenarioId,
+  activeScenarioId,
+  override,
+  onOverrideChange,
+}: {
+  detectedScenarioId: PatScenarioId | null;
+  activeScenarioId: PatScenarioId | null;
+  override: PatExpectedErrorOverride;
+  onOverrideChange: (value: PatExpectedErrorOverride) => void;
+}) {
+  return (
+    <section className="mt-6 rounded-3xl border border-orange-200 bg-orange-50 p-5 text-orange-900">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
+            DEFRA PAT testing tools
+          </p>
+
+          <h3 className="mt-2 text-lg font-semibold">
+            Expected-error scenario override
+          </h3>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6">
+            Use this only for DEFRA PAT scenarios that are supposed to fail.
+            This lets the invalid test payload reach the DEFRA test/sandbox API
+            so DEFRA can return the expected rejection.
+          </p>
+
+          <p className="mt-3 text-xs leading-5 opacity-75">
+            Detected scenario:{" "}
+            <span className="font-semibold">
+              {detectedScenarioId ?? "None detected"}
+            </span>
+            . Active scenario:{" "}
+            <span className="font-semibold">
+              {activeScenarioId ?? "Normal submission"}
+            </span>
+            .
+          </p>
+        </div>
+
+        <div className="w-full max-w-xs">
+          <label className="block">
+            <span className="mb-2 block text-xs font-semibold opacity-75">
+              PAT override
+            </span>
+
+            <select
+              value={override}
+              onChange={(event) =>
+                onOverrideChange(event.target.value as PatExpectedErrorOverride)
+              }
+              className="w-full rounded-2xl border border-orange-200 bg-white px-4 py-3 text-sm font-semibold text-black outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+            >
+              <option value="">Auto / normal submission</option>
+              <option value="C01">
+                C01 - no carrier registration and no reason
+              </option>
+              <option value="H02">
+                H02 - no hazardous consignment code and no reason
+              </option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PatExpectedErrorNotice({
+  scenarioId,
+}: {
+  scenarioId: PatScenarioId | null;
+}) {
+  if (!scenarioId) return null;
+
+  return (
+    <section className="mt-6 rounded-3xl border border-red-200 bg-red-50 p-5 text-red-800">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
+        DEFRA PAT expected-error test
+      </p>
+
+      <h3 className="mt-2 text-lg font-semibold">
+        {scenarioId} is expected to be rejected
+      </h3>
+
+      <p className="mt-2 max-w-3xl text-sm leading-6">
+        Waste X is allowing this invalid test payload through the frontend
+        because this DEFRA PAT scenario requires a real rejection. This bypass
+        only applies to PAT scenarios C01 and H02.
+      </p>
+
+      <div className="mt-4 rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm leading-6">
+        {scenarioId === "C01" && (
+          <p>
+            For C01, leave the carrier registration number blank and leave the
+            reason for no registration number as Not applicable.
+          </p>
+        )}
+
+        {scenarioId === "H02" && (
+          <p>
+            For H02, turn on hazardous properties, leave the hazardous
+            consignment code blank, and leave the reason for no consignment code
+            as Not applicable.
+          </p>
+        )}
       </div>
     </section>
   );
