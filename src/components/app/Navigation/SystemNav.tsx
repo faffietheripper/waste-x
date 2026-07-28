@@ -1,9 +1,13 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users, supportTickets } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
-import Link from "next/link";
+import {
+  notifications,
+  supportTickets,
+  users,
+} from "@/db/schema";
+import { and, eq } from "drizzle-orm";
 import Image from "next/image";
+import Link from "next/link";
 
 import { getProfileByUserId } from "@/data-access/profiles";
 import SignOutButton from "../SignOutButton";
@@ -30,15 +34,20 @@ type NavSection = {
   items: NavItem[];
 };
 
+type ActiveDepartmentSummary = {
+  name: string;
+  type: DepartmentType | null;
+} | null;
+
 /* =========================================================
    NAV STYLES
 ========================================================= */
 
 const navItem =
-  "group flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-medium text-black/55 transition hover:bg-orange-50 hover:text-orange-600";
+  "group flex items-center justify-between rounded-2xl border border-transparent px-4 py-3 text-sm font-medium text-black/55 transition hover:border-orange-200 hover:bg-white hover:text-black hover:shadow-sm";
 
 const navSectionLabel =
-  "px-4 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/35";
+  "px-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/30";
 
 /* =========================================================
    HELPERS
@@ -54,42 +63,223 @@ function getInitials(name: string) {
 }
 
 function formatDepartmentType(type: DepartmentType | null) {
-  if (!type) return "Not assigned";
+  if (!type) return "Department not assigned";
 
-  if (type === "generator") return "Generator";
-  if (type === "carrier") return "Logistics";
+  if (type === "generator") return "Waste Generator";
+  if (type === "carrier") return "Waste Carrier";
   if (type === "manager") return "Waste Manager";
   if (type === "compliance") return "Compliance";
 
-  return "Department";
+  return "Operational Department";
 }
 
-function getDepartmentContextMessage(type: DepartmentType | null) {
-  if (!type) {
-    return "Assign a department to unlock operational navigation.";
-  }
+function formatBadgeCount(count: number) {
+  if (count > 99) return "99+";
 
-  if (type === "generator") {
-    return "Generator workspace: create listings, assign jobs and manage pre-collection work.";
-  }
-
-  if (type === "carrier") {
-    return "Logistics workspace: manage assigned collections, verification and incidents.";
-  }
-
-  if (type === "manager") {
-    return "Waste manager workspace: bid for handling work, receive waste and manage intake records.";
-  }
-
-  if (type === "compliance") {
-    return "Compliance workspace: review incidents, audit trails, reports and Digital Waste Tracking records.";
-  }
-
-  return "Operational workspace.";
+  return count.toString();
 }
 
 /* =========================================================
-   OPERATIONAL NAV
+   SIMPLE ICONS
+========================================================= */
+
+function BellIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-5 w-5"
+    >
+      <path
+        d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      <path
+        d="M10 21h4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SupportIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-5 w-5"
+    >
+      <path
+        d="M4 12a8 8 0 0 1 16 0v5a2 2 0 0 1-2 2h-2v-6h4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      <path
+        d="M4 13h4v6H6a2 2 0 0 1-2-2v-4Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      <path
+        d="M16 19c0 1.1-.9 2-2 2h-2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-5 w-5"
+    >
+      <path
+        d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+
+      <path
+        d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.55v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.1 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.3V9.55h.1A1.7 1.7 0 0 0 4.1 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.56 3.7l.06.06A1.7 1.7 0 0 0 8.5 4.1a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.3h4.05v.1A1.7 1.7 0 0 0 15 4.1a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 8.5a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.1v4.05h-.1A1.7 1.7 0 0 0 19.4 15Z"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ArrowIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill="none"
+      className="h-4 w-4"
+    >
+      <path
+        d="m7.5 5 5 5-5 5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/* =========================================================
+   ACTIVE DEPARTMENT
+========================================================= */
+
+function ActiveDepartmentPill({
+  department,
+}: {
+  department: ActiveDepartmentSummary;
+}) {
+  if (!department) {
+    return (
+      <Link
+        href="/home/settings/departments?reason=no-active-department"
+        className="hidden items-center gap-3 rounded-2xl border border-orange-300 bg-orange-50 px-4 py-2 transition hover:border-orange-400 hover:bg-orange-100 lg:flex"
+      >
+        <span className="h-2.5 w-2.5 rounded-full bg-orange-500" />
+
+        <span>
+          <span className="block text-[9px] font-semibold uppercase tracking-[0.2em] text-orange-700/60">
+            Workspace
+          </span>
+
+          <span className="block text-xs font-semibold text-orange-800">
+            Assign department
+          </span>
+        </span>
+      </Link>
+    );
+  }
+
+  return (
+    <Link
+      href="/home/settings/departments"
+      className="hidden items-center gap-3 rounded-2xl border border-black/10 bg-white px-4 py-2 transition hover:border-orange-300 hover:bg-orange-50 lg:flex"
+    >
+      <span className="relative flex h-2.5 w-2.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-40" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-orange-500" />
+      </span>
+
+      <span className="min-w-0">
+        <span className="block text-[9px] font-semibold uppercase tracking-[0.2em] text-black/35">
+          Active department
+        </span>
+
+        <span className="block max-w-[180px] truncate text-xs font-semibold text-black">
+          {department.name}
+
+          <span className="ml-1.5 font-normal text-black/40">
+            · {formatDepartmentType(department.type)}
+          </span>
+        </span>
+      </span>
+    </Link>
+  );
+}
+
+/* =========================================================
+   NOTIFICATION BUTTON
+========================================================= */
+
+function NotificationButton({
+  unreadCount,
+}: {
+  unreadCount: number;
+}) {
+  const notificationLabel =
+    unreadCount > 0
+      ? `${unreadCount} unread notification${
+          unreadCount === 1 ? "" : "s"
+        }`
+      : "Notifications";
+
+  return (
+    <Link
+      href="/home/notifications"
+      aria-label={notificationLabel}
+      title={notificationLabel}
+      className="relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-black/10 bg-white text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-600"
+    >
+      <BellIcon />
+
+      {unreadCount > 0 && (
+        <span className="absolute -right-1.5 -top-1.5 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-[#f7f3ed] bg-orange-500 px-1 text-[9px] font-bold text-black">
+          {formatBadgeCount(unreadCount)}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+/* =========================================================
+   OPERATIONAL NAVIGATION
 ========================================================= */
 
 function OperationalNav({
@@ -109,17 +299,6 @@ function OperationalNav({
     });
   }
 
-  /*
-    Important model:
-
-    organisation.capabilities = what the company is allowed to do overall
-    activeDepartmentType = what this user is allowed to do right now
-
-    Example:
-    A company can have generator + carrier + manager capabilities,
-    but a compliance user still only sees compliance/audit/DWT work.
-  */
-
   /* Listings */
   const canViewListings = can("listing:view");
   const canCreateListings = can("listing:create");
@@ -135,17 +314,29 @@ function OperationalNav({
   /* Assignments */
   const canViewAssignments = can("assignment:view");
 
-  /* Receiving / intake */
+  /* Receiving */
   const canViewReceiving = can("receiving:view");
   const canCreateReceiving = can("receiving:create");
   const canSubmitReceiving = can("receiving:submit");
 
   /* Digital Waste Tracking */
   const canViewDigitalWasteTracking = can("dwt:view");
-  const canSubmitDigitalWasteTracking = can("dwt:submit_receive_movement");
-  const canUpdateDigitalWasteTracking = can("dwt:update_receive_movement");
-  const canViewDwtReferenceData = can("dwt:reference_data:view");
-  const canSyncDwtReferenceData = can("dwt:reference_data:sync");
+
+  const canSubmitDigitalWasteTracking = can(
+    "dwt:submit_receive_movement",
+  );
+
+  const canUpdateDigitalWasteTracking = can(
+    "dwt:update_receive_movement",
+  );
+
+  const canViewDwtReferenceData = can(
+    "dwt:reference_data:view",
+  );
+
+  const canSyncDwtReferenceData = can(
+    "dwt:reference_data:sync",
+  );
 
   const canAccessDwtArea =
     canViewDigitalWasteTracking ||
@@ -154,20 +345,17 @@ function OperationalNav({
     canViewDwtReferenceData ||
     canSyncDwtReferenceData;
 
-  /* Incidents / Compliance */
+  /* Incidents and compliance */
   const canViewIncidents = can("incident:view");
-  const canViewCompliance = can("compliance:view");
   const canViewComplianceReports = can("compliance:reports");
   const canViewComplianceAudit = can("compliance:audit");
 
-  /* Shared */
+  /* Shared workspace */
   const canViewTeam = can("team:view") || hasOrganisation;
-  const canViewSupport = can("support:view") || hasOrganisation;
-  const canViewNotifications = can("notification:view") || hasOrganisation;
 
   const sections: NavSection[] = [
     {
-      label: "Core",
+      label: "Overview",
       items: [
         {
           label: "Dashboard",
@@ -185,7 +373,7 @@ function OperationalNav({
           show: canViewListings || canCreateListings,
         },
         {
-          label: "Assignments Overview",
+          label: "Assignments",
           href: "/home/operations/assignments",
           show: canViewAssignments,
         },
@@ -199,16 +387,6 @@ function OperationalNav({
           href: "/home/operations/assignments/completed",
           show: canViewAssignments,
         },
-        {
-          label: "Templates",
-          href: "/home/operations/templates",
-          show: canViewTemplates || canCreateTemplates,
-        },
-      ],
-    },
-    {
-      label: "Receiving",
-      items: [
         {
           label: "Intake Queue",
           href: "/home/receiving/intake",
@@ -270,10 +448,15 @@ function OperationalNav({
       ],
     },
     {
-      label: "Team",
+      label: "Workspace",
       items: [
         {
-          label: "Members",
+          label: "Templates",
+          href: "/home/operations/templates",
+          show: canViewTemplates || canCreateTemplates,
+        },
+        {
+          label: "Team Members",
           href: "/home/team/members",
           show: canViewTeam,
         },
@@ -289,30 +472,10 @@ function OperationalNav({
         },
       ],
     },
-    {
-      label: "System",
-      items: [
-        {
-          label: "Notifications",
-          href: "/home/notifications",
-          show: canViewNotifications,
-        },
-        {
-          label: "Support",
-          href: "/home/support",
-          show: canViewSupport,
-        },
-        {
-          label: "Settings",
-          href: "/home/settings/profile",
-          show: true,
-        },
-      ],
-    },
   ];
 
   return (
-    <nav className="flex flex-col gap-7">
+    <nav className="flex flex-col gap-6">
       {sections.map((section) => {
         const visibleItems = section.items.filter(
           (item) => item.show !== false,
@@ -321,21 +484,32 @@ function OperationalNav({
         if (visibleItems.length === 0) return null;
 
         return (
-          <div key={section.label} className="space-y-2">
-            <p className={navSectionLabel}>{section.label}</p>
+          <section
+            key={section.label}
+            className="space-y-2"
+          >
+            <p className={navSectionLabel}>
+              {section.label}
+            </p>
 
             <div className="space-y-1">
               {visibleItems.map((item) => (
-                <Link key={item.href} href={item.href} className={navItem}>
-                  <span>{item.label}</span>
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={navItem}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {item.label}
+                  </span>
 
-                  <span className="text-black/20 transition group-hover:translate-x-0.5 group-hover:text-orange-500">
-                    →
+                  <span className="text-black/15 transition group-hover:translate-x-0.5 group-hover:text-orange-500">
+                    <ArrowIcon />
                   </span>
                 </Link>
               ))}
             </div>
-          </div>
+          </section>
         );
       })}
     </nav>
@@ -343,71 +517,49 @@ function OperationalNav({
 }
 
 /* =========================================================
-   CAPABILITY PILLS
+   SIDEBAR FOOTER
 ========================================================= */
 
-function CapabilityPills({ capabilities }: { capabilities: Capability[] }) {
-  if (!capabilities.length) {
-    return (
-      <span className="rounded-full border border-orange-300 bg-orange-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-orange-700">
-        Setup Required
-      </span>
-    );
-  }
-
+function SidebarFooter({
+  waitingOnUserCount,
+}: {
+  waitingOnUserCount: number;
+}) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {capabilities.map((capability) => (
-        <span
-          key={capability}
-          className="rounded-full border border-black/10 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-black/45"
+    <div className="border-t border-black/10 bg-[#f7f3ed] p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <Link
+          href="/home/support"
+          className="relative flex items-center justify-center gap-2 rounded-2xl border border-black/10 bg-white px-3 py-3 text-xs font-semibold text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-600"
         >
-          {capability}
-        </span>
-      ))}
+          <SupportIcon />
+
+          <span>Support</span>
+
+          {waitingOnUserCount > 0 && (
+            <span className="absolute -right-1.5 -top-1.5 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-[#f7f3ed] bg-red-500 px-1 text-[9px] font-bold text-white">
+              {waitingOnUserCount > 9
+                ? "9+"
+                : waitingOnUserCount}
+            </span>
+          )}
+        </Link>
+
+        <Link
+          href="/home/settings/profile"
+          className="flex items-center justify-center gap-2 rounded-2xl border border-black/10 bg-white px-3 py-3 text-xs font-semibold text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-600"
+        >
+          <SettingsIcon />
+
+          <span>Settings</span>
+        </Link>
+      </div>
     </div>
   );
 }
 
 /* =========================================================
-   ACTIVE DEPARTMENT PILL
-========================================================= */
-
-function ActiveDepartmentPill({
-  activeDepartment,
-}: {
-  activeDepartment: {
-    id: string;
-    name: string;
-    type: string;
-  } | null;
-}) {
-  if (!activeDepartment) {
-    return (
-      <Link
-        href="/home/settings/departments"
-        className="hidden rounded-full border border-orange-300 bg-orange-50 px-4 py-2 text-xs font-medium text-orange-700 transition hover:border-orange-400 hover:bg-orange-100 lg:block"
-      >
-        Department setup required
-      </Link>
-    );
-  }
-
-  return (
-    <Link
-      href="/home/settings/departments"
-      className="hidden rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-medium text-black/55 transition hover:border-orange-300 hover:text-orange-600 lg:block"
-    >
-      Active:{" "}
-      <span className="font-semibold capitalize text-black">
-        {activeDepartment.name}
-      </span>
-    </Link>
-  );
-}
-
-/* =========================================================
-   MAIN NAV
+   MAIN NAVIGATION
 ========================================================= */
 
 export default async function SystemNav() {
@@ -416,7 +568,7 @@ export default async function SystemNav() {
   if (!session?.user?.id) return null;
 
   /* =========================================================
-     USER + ORGANISATION
+     USER, ORGANISATION AND DEPARTMENT
   ========================================================= */
 
   const user = await database.query.users.findFirst({
@@ -428,44 +580,93 @@ export default async function SystemNav() {
   });
 
   const capabilities =
-    (user?.organisation?.capabilities as Capability[] | null) ?? [];
+    (user?.organisation?.capabilities as
+      | Capability[]
+      | null) ?? [];
 
-  const hasOrganisation = Boolean(user?.organisationId && user?.organisation);
+  const hasOrganisation = Boolean(
+    user?.organisationId && user?.organisation,
+  );
 
   const activeDepartment = user?.department ?? null;
 
   const activeDepartmentType =
-    (activeDepartment?.type as DepartmentType | undefined) ?? null;
+    (activeDepartment?.type as
+      | DepartmentType
+      | undefined) ?? null;
 
   /* =========================================================
-     PROFILE
+     PROFILE, NOTIFICATIONS AND SUPPORT COUNTS
   ========================================================= */
 
-  const profile = await getProfileByUserId(session.user.id);
+  const profilePromise = getProfileByUserId(
+    session.user.id,
+  );
 
-  const fullName = profile?.fullName ?? user?.name ?? "Unknown User";
-
-  const profileImage = profile?.profilePicture ?? null;
-
-  /* =========================================================
-     SUPPORT BADGE
-  ========================================================= */
-
-  let waitingOnUserCount = 0;
-
-  if (user?.organisationId) {
-    const waitingTickets = await database.query.supportTickets.findMany({
-      where: and(
-        eq(supportTickets.organisationId, user.organisationId),
-        eq(supportTickets.status, "waiting_on_user"),
+  const unreadNotificationsPromise = database
+    .select({
+      id: notifications.id,
+    })
+    .from(notifications)
+    .where(
+      and(
+        eq(
+          notifications.recipientId,
+          session.user.id,
+        ),
+        eq(notifications.isRead, false),
       ),
-      columns: {
-        id: true,
-      },
-    });
+    );
 
-    waitingOnUserCount = waitingTickets.length;
-  }
+  const waitingTicketsPromise = user?.organisationId
+    ? database.query.supportTickets.findMany({
+        where: and(
+          eq(
+            supportTickets.organisationId,
+            user.organisationId,
+          ),
+          eq(
+            supportTickets.status,
+            "waiting_on_user",
+          ),
+        ),
+        columns: {
+          id: true,
+        },
+      })
+    : Promise.resolve([]);
+
+  const [
+    profile,
+    unreadNotifications,
+    waitingTickets,
+  ] = await Promise.all([
+    profilePromise,
+    unreadNotificationsPromise,
+    waitingTicketsPromise,
+  ]);
+
+  const fullName =
+    profile?.fullName ??
+    user?.name ??
+    "Unknown User";
+
+  const profileImage =
+    profile?.profilePicture ?? null;
+
+  const unreadNotificationCount =
+    unreadNotifications.length;
+
+  const waitingOnUserCount =
+    waitingTickets.length;
+
+  const departmentSummary: ActiveDepartmentSummary =
+    activeDepartment
+      ? {
+          name: activeDepartment.name,
+          type: activeDepartmentType,
+        }
+      : null;
 
   /* =========================================================
      UI
@@ -474,9 +675,13 @@ export default async function SystemNav() {
   return (
     <>
       {/* ================= TOP BAR ================= */}
-      <header className="fixed left-0 top-0 z-50 flex h-[13vh] w-full items-center justify-between border-b border-black/10 bg-[#f7f3ed]/95 px-10 backdrop-blur">
+      <header className="fixed left-0 top-0 z-50 flex h-[13vh] w-full items-center justify-between border-b border-black/10 bg-[#f7f3ed]/95 px-6 backdrop-blur lg:px-10">
         {/* LOGO */}
-        <Link href="/home" className="flex items-center">
+        <Link
+          href="/home"
+          aria-label="Waste X dashboard"
+          className="flex items-center"
+        >
           <Image
             src="/wastexblack.png"
             height={140}
@@ -487,44 +692,35 @@ export default async function SystemNav() {
           />
         </Link>
 
-        {/* RIGHT */}
-        <div className="flex items-center gap-5">
-          {/* ACTIVE DEPARTMENT */}
-          <ActiveDepartmentPill activeDepartment={activeDepartment} />
+        {/* TOP BAR ACTIONS */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          <ActiveDepartmentPill
+            department={departmentSummary}
+          />
 
-          {/* PROFILE */}
+          <NotificationButton
+            unreadCount={unreadNotificationCount}
+          />
+
           <Link
             href="/home/settings/profile"
-            className="flex items-center gap-3 rounded-full border border-black/10 bg-white px-3 py-2 transition hover:border-orange-300 hover:bg-orange-50"
+            className="flex h-11 items-center gap-3 rounded-2xl border border-black/10 bg-white px-2.5 transition hover:border-orange-300 hover:bg-orange-50 sm:px-3"
           >
             {profileImage ? (
               <img
                 src={profileImage}
                 alt={fullName}
-                className="h-8 w-8 rounded-full object-cover"
+                className="h-8 w-8 rounded-xl object-cover"
               />
             ) : (
-              <div className="grid h-8 w-8 place-items-center rounded-full bg-black text-xs font-semibold text-orange-400">
+              <div className="grid h-8 w-8 place-items-center rounded-xl bg-black text-xs font-semibold text-orange-400">
                 {getInitials(fullName) || "WX"}
               </div>
             )}
 
-            <span className="hidden text-sm font-medium text-black/65 md:block">
+            <span className="hidden max-w-[150px] truncate text-sm font-medium text-black/65 md:block">
               {fullName}
             </span>
-          </Link>
-
-          {/* SUPPORT */}
-          <Link
-            href="/home/support"
-            className="relative rounded-full bg-black px-5 py-2.5 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
-          >
-            Support
-            {waitingOnUserCount > 0 && (
-              <span className="absolute -right-2 -top-2 rounded-full bg-red-500 px-2 py-0.5 text-xs font-semibold text-white">
-                {waitingOnUserCount > 9 ? "9+" : waitingOnUserCount}
-              </span>
-            )}
           </Link>
 
           <SignOutButton />
@@ -533,78 +729,24 @@ export default async function SystemNav() {
 
       {/* ================= SIDE NAV ================= */}
       <aside className="fixed left-0 top-[13vh] z-40 flex h-[87vh] w-[20vw] flex-col border-r border-black/10 bg-[#f7f3ed]">
-        <div className="flex h-full flex-col overflow-y-auto p-8">
-          {/* ORG SUMMARY */}
-          <section className="mb-8 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-              Organisation
-            </p>
+        <div className="flex h-full min-h-0 flex-col">
+          {/* SCROLLABLE NAV ITEMS */}
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+            <OperationalNav
+              capabilities={capabilities}
+              activeDepartmentType={
+                activeDepartmentType
+              }
+              hasOrganisation={hasOrganisation}
+            />
+          </div>
 
-            <h2 className="mt-2 line-clamp-2 text-base font-semibold text-black">
-              {user?.organisation?.teamName ?? "No organisation"}
-            </h2>
-
-            <div className="mt-4">
-              <CapabilityPills capabilities={capabilities} />
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-black/10 bg-[#f7f3ed] p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-black/35">
-                Current Department
-              </p>
-
-              <p className="mt-2 text-sm font-semibold text-black">
-                {activeDepartment?.name ?? "No department assigned"}
-              </p>
-
-              <p className="mt-1 text-xs text-black/45">
-                {formatDepartmentType(activeDepartmentType)}
-              </p>
-
-              <p className="mt-3 text-xs leading-5 text-black/45">
-                {getDepartmentContextMessage(activeDepartmentType)}
-              </p>
-            </div>
-
-            {!user?.organisationId && (
-              <Link
-                href="/home/settings/organisation?reason=no-organisation"
-                className="mt-5 inline-flex rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
-              >
-                Create Organisation →
-              </Link>
-            )}
-
-            {user?.organisationId && !activeDepartment && (
-              <Link
-                href="/home/settings/departments?reason=no-active-department"
-                className="mt-5 inline-flex rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
-              >
-                Assign Department →
-              </Link>
-            )}
-          </section>
-
-          {/* NAV */}
-          <OperationalNav
-            capabilities={capabilities}
-            activeDepartmentType={activeDepartmentType}
-            hasOrganisation={hasOrganisation}
+          {/* ALWAYS-VISIBLE FOOTER ACTIONS */}
+          <SidebarFooter
+            waitingOnUserCount={
+              waitingOnUserCount
+            }
           />
-
-          {/* FOOTER CONTEXT */}
-          <section className="mt-auto pt-8">
-            <div className="rounded-3xl border border-black/10 bg-black p-5 text-white">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-400">
-                Waste X MVP
-              </p>
-
-              <p className="mt-2 text-xs leading-5 text-white/50">
-                Digital infrastructure for waste tracking, assignments,
-                compliance and operational chain-of-custody.
-              </p>
-            </div>
-          </section>
         </div>
       </aside>
     </>
