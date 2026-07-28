@@ -306,48 +306,79 @@ export default function DigitalWasteTrackingSettingsForm({
           </select>
         </Field>
 
-        <div className="rounded-3xl border border-black/10 bg-[#f7f3ed] p-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-black">
-                Enable Digital Waste Tracking submissions
-              </p>
+    <div
+  className={`rounded-3xl border p-5 transition ${
+    isEnabled
+      ? "border-emerald-200 bg-emerald-50"
+      : "border-orange-200 bg-[#f7f3ed]"
+  }`}
+>
+  <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold text-black">
+          Digital Waste Tracking submissions
+        </p>
 
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-black/50">
-                When enabled, Waste X can use this Receiver API Code during
-                receive movement submission. When disabled, the settings are
-                saved but submissions are blocked.
-              </p>
-            </div>
+        <span
+          className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+            isEnabled
+              ? "border-emerald-300 bg-white text-emerald-700"
+              : "border-orange-300 bg-white text-orange-700"
+          }`}
+        >
+          {isEnabled ? "Active" : "Disabled"}
+        </span>
+      </div>
 
-            <button
-              type="button"
-              disabled={!canEdit || isPending}
-              onClick={() => setIsEnabled((current) => !current)}
-              className={`relative h-8 w-14 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                isEnabled ? "bg-orange-500" : "bg-black/20"
-              }`}
-            >
-              <span
-                className={`absolute top-1 h-6 w-6 rounded-full bg-white transition ${
-                  isEnabled ? "left-7" : "left-1"
-                }`}
-              />
-            </button>
-          </div>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-black/55">
+        {isEnabled
+          ? "DWT submissions are active for this organisation. Receive movement forms can now submit to the selected DEFRA environment."
+          : "DWT settings are saved, but receive movement submissions are currently blocked until this is enabled."}
+      </p>
 
-          <div className="mt-4">
-            <span
-              className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                isEnabled
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-orange-200 bg-orange-50 text-orange-700"
-              }`}
-            >
-              {isEnabled ? "Enabled" : "Disabled"}
-            </span>
-          </div>
-        </div>
+      {!canEdit && (
+        <p className="mt-3 rounded-2xl border border-orange-200 bg-white px-4 py-3 text-xs font-semibold leading-5 text-orange-700">
+          Your role can submit DWT movements, but only an organisation admin can
+          enable or change DWT settings.
+        </p>
+      )}
+
+      {environment === "production" && (
+        <p className="mt-3 rounded-2xl border border-red-200 bg-white px-4 py-3 text-xs font-semibold leading-5 text-red-700">
+          DEFRA production should only be used after DEFRA has approved
+          production access. For PAT testing, keep this set to Test / Sandbox.
+        </p>
+      )}
+    </div>
+
+    <button
+      type="button"
+      disabled={!canEdit || isPending}
+      onClick={() => setIsEnabled((current) => !current)}
+      className={`group flex min-w-[12rem] items-center justify-between gap-4 rounded-full border px-4 py-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+        isEnabled
+          ? "border-emerald-300 bg-emerald-600 text-white hover:bg-emerald-700"
+          : "border-orange-300 bg-white text-orange-700 hover:border-orange-400 hover:bg-orange-50"
+      }`}
+      aria-pressed={isEnabled}
+    >
+      <span>{isEnabled ? "DWT enabled" : "Enable DWT"}</span>
+
+      <span
+        className={`relative h-7 w-12 rounded-full transition ${
+          isEnabled ? "bg-white/25" : "bg-black/15"
+        }`}
+      >
+        <span
+          className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition ${
+            isEnabled ? "left-6" : "left-1"
+          }`}
+        />
+      </span>
+    </button>
+  </div>
+</div>
 
         <div className="rounded-3xl border border-black/10 bg-[#f7f3ed] p-5">
           <p className="text-sm font-semibold text-black">
