@@ -15,86 +15,34 @@ import { submitReceiveMovementAction } from "@/modules/digital-waste-tracking/ac
 
 import {
   MEANS_OF_TRANSPORT,
-  PHYSICAL_FORMS,
   REASON_FOR_NO_CONSIGNMENT_CODE,
   REASON_FOR_NO_REGISTRATION_NUMBER,
-  SOURCE_OF_COMPONENTS,
-  WEIGHT_METRICS,
   type DefraValidationResult,
   type MeansOfTransport,
-  type PhysicalForm,
   type ReasonForNoConsignmentCode,
   type ReasonForNoRegistrationNumber,
   type ReceiveMovementInput,
-  type SourceOfComponents,
-  type WeightMetric,
 } from "@/modules/digital-waste-tracking/types/receiveMovement.types";
 
-/* =========================================================
-   TYPES
-========================================================= */
+import BrokerDealerPanel from "./BrokerDealerPanel";
+import WasteItemsEditor from "./WasteItemsEditor";
 
-type DefaultCarrier = {
-  organisationName: string;
-  fullAddress: string;
-  postcode: string;
-  emailAddress: string;
-  phoneNumber: string;
-};
+import {
+  createDefaultBrokerDealer,
+  createDefaultWasteItem,
+  type BrokerDealerFormState,
+  type FormIssue,
+  type PatExpectedErrorOverride,
+  type PatScenarioId,
+  type ReceiveMovementFormProps,
+  type SubmitFeedback,
+  type WasteItemFormState,
+} from "./receiveMovementFormTypes";
 
-type DefaultReceiver = {
-  siteName: string;
-  fullAddress: string;
-  postcode: string;
-  emailAddress: string;
-  phoneNumber: string;
-};
-
-type Props = {
-  assignmentId: string;
-  listingId: number;
-  listingName: string;
-  listingLocation: string;
-  canSubmit: boolean;
-  existingWasteTrackingId?: string | null;
-  defaultReceiverApiCode: string;
-  defaultCarrier: DefaultCarrier;
-  defaultReceiver: DefaultReceiver;
-};
-
-type FeedbackType = "success" | "warning" | "error" | "info";
-
-type SubmitFeedback = {
-  type: FeedbackType;
-  title: string;
-  message: string;
-  details?: string[];
-  isExpectedPatRejection?: boolean;
-};
-
-type FormIssue = {
-  key: string;
-  section: string;
-  message: string;
-};
-
-type PatScenarioId =
-  | "R01"
-  | "R02"
-  | "R03"
-  | "R04"
-  | "R05"
-  | "R07"
-  | "C01"
-  | "C02"
-  | "B01"
-  | "P01"
-  | "H01"
-  | "H02"
-  | "H03"
-  | "X01";
-
-type PatExpectedErrorOverride = "" | "C01" | "H02";
+import {
+  getPatScenarioTemplate,
+  PAT_SCENARIO_OPTIONS,
+} from "./receiveMovementPatScenarios";
 
 /* =========================================================
    PAT HELPERS
@@ -145,6 +93,12 @@ function parseOptionalNumber(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function numberFromText(value: string): number {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function nowAsIsoLocalInputValue() {
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -172,6 +126,14 @@ function formatStatus(value: string | null | undefined) {
     .join(" ");
 }
 
+function issueMatchesKey(issueKey: string, fieldKey: string) {
+  return (
+    issueKey === fieldKey ||
+    issueKey.startsWith(`${fieldKey}.`) ||
+    issueKey.startsWith(`${fieldKey}[`)
+  );
+}
+
 function sectionForKey(key: string) {
   if (
     key === "apiCode" ||
@@ -185,25 +147,16 @@ function sectionForKey(key: string) {
     return "Movement details";
   }
 
-  if (
-    key.startsWith("wasteItems") &&
-    !key.includes("pops") &&
-    !key.includes("hazardous") &&
-    !key.includes("disposalOrRecoveryCodes")
-  ) {
-    return "Waste item received";
-  }
-
-  if (key.includes("pops") || key.includes("hazardous")) {
-    return "POPs and hazardous details";
-  }
-
-  if (key.includes("disposalOrRecoveryCodes")) {
-    return "Disposal or recovery";
+  if (key.startsWith("wasteItems")) {
+    return "Waste items";
   }
 
   if (key.startsWith("carrier")) {
     return "Carrier details";
+  }
+
+  if (key.startsWith("brokerOrDealer")) {
+    return "Broker / dealer details";
   }
 
   if (key.startsWith("receiver") || key.startsWith("receipt")) {
@@ -223,21 +176,12 @@ function sectionForKey(key: string) {
 
 function sectionIdForIssue(section: string) {
   if (section === "Movement details") return "movement-details";
-  if (section === "Waste item received") return "waste-item-received";
-  if (section === "POPs and hazardous details") return "risk-details";
-  if (section === "Disposal or recovery") return "disposal-recovery";
+  if (section === "Waste items") return "waste-items";
   if (section === "Carrier details") return "carrier-details";
+  if (section === "Broker / dealer details") return "broker-dealer-details";
   if (section === "Receiver and receipt site") return "receiver-details";
 
   return "submit-feedback";
-}
-
-function issueMatchesKey(issueKey: string, fieldKey: string) {
-  return (
-    issueKey === fieldKey ||
-    issueKey.startsWith(`${fieldKey}.`) ||
-    issueKey.startsWith(`${fieldKey}[`)
-  );
 }
 
 function mapDefraIssue(issue: DefraValidationResult): FormIssue {
@@ -260,6 +204,17 @@ function mapFlatIssue(issue: string): FormIssue {
   };
 }
 
+function hasAnyBrokerDealerData(broker: BrokerDealerFormState) {
+  return Boolean(
+    broker.organisationName.trim() ||
+      broker.fullAddress.trim() ||
+      broker.postcode.trim() ||
+      broker.emailAddress.trim() ||
+      broker.phoneNumber.trim() ||
+      broker.registrationNumber.trim(),
+  );
+}
+
 /* =========================================================
    COMPONENT
 ========================================================= */
@@ -274,7 +229,7 @@ export default function ReceiveMovementForm({
   defaultReceiverApiCode,
   defaultCarrier,
   defaultReceiver,
-}: Props) {
+}: ReceiveMovementFormProps) {
   const [isPending, startTransition] = useTransition();
 
   const feedbackRef = useRef<HTMLDivElement | null>(null);
@@ -293,6 +248,10 @@ export default function ReceiveMovementForm({
   const [lastSubmissionStatus, setLastSubmissionStatus] = useState<
     string | null
   >(null);
+
+  const [selectedPatScenarioId, setSelectedPatScenarioId] = useState<
+    PatScenarioId | ""
+  >("");
 
   const [patExpectedErrorOverride, setPatExpectedErrorOverride] =
     useState<PatExpectedErrorOverride>("");
@@ -314,39 +273,10 @@ export default function ReceiveMovementForm({
   const [specialHandlingRequirements, setSpecialHandlingRequirements] =
     useState("");
 
-  /* Waste item */
-  const [ewcCodes, setEwcCodes] = useState("");
-  const [wasteDescription, setWasteDescription] = useState(listingName);
-  const [physicalForm, setPhysicalForm] = useState<PhysicalForm>("Solid");
-  const [numberOfContainers, setNumberOfContainers] = useState("1");
-  const [typeOfContainers, setTypeOfContainers] = useState("SKI");
-  const [weightMetric, setWeightMetric] = useState<WeightMetric>("Tonnes");
-  const [weightAmount, setWeightAmount] = useState("");
-  const [weightIsEstimate, setWeightIsEstimate] = useState(true);
-
-  /* POPs */
-  const [containsPops, setContainsPops] = useState(false);
-  const [popsSourceOfComponents, setPopsSourceOfComponents] =
-    useState<SourceOfComponents>("NOT_PROVIDED");
-  const [popsCode, setPopsCode] = useState("");
-  const [popsConcentration, setPopsConcentration] = useState("");
-
-  /* Hazardous */
-  const [containsHazardous, setContainsHazardous] = useState(false);
-  const [hazardousSourceOfComponents, setHazardousSourceOfComponents] =
-    useState<SourceOfComponents>("NOT_PROVIDED");
-  const [hazCodes, setHazCodes] = useState("");
-  const [hazardousComponentName, setHazardousComponentName] = useState("");
-  const [hazardousComponentConcentration, setHazardousComponentConcentration] =
-    useState("");
-
-  /* Disposal / recovery */
-  const [disposalOrRecoveryCode, setDisposalOrRecoveryCode] = useState("");
-  const [disposalWeightAmount, setDisposalWeightAmount] = useState("");
-  const [disposalWeightMetric, setDisposalWeightMetric] =
-    useState<WeightMetric>("Tonnes");
-  const [disposalWeightIsEstimate, setDisposalWeightIsEstimate] =
-    useState(true);
+  /* Waste items */
+  const [wasteItems, setWasteItems] = useState<WasteItemFormState[]>([
+    createDefaultWasteItem(listingName),
+  ]);
 
   /* Carrier */
   const [carrierRegistrationNumber, setCarrierRegistrationNumber] =
@@ -374,6 +304,12 @@ export default function ReceiveMovementForm({
     useState<MeansOfTransport>("Road");
   const [carrierVehicleRegistration, setCarrierVehicleRegistration] =
     useState("");
+
+  /* Broker / dealer */
+  const [brokerDealerEnabled, setBrokerDealerEnabled] = useState(false);
+  const [brokerOrDealer, setBrokerOrDealer] = useState<BrokerDealerFormState>(
+    createDefaultBrokerDealer(),
+  );
 
   /* Receiver */
   const [receiverSiteName, setReceiverSiteName] = useState(
@@ -424,7 +360,6 @@ export default function ReceiveMovementForm({
   }, [activePatScenarioId]);
 
   const allowMissingCarrierRegistrationForPat = activePatScenarioId === "C01";
-
   const allowMissingHazardousConsignmentForPat = activePatScenarioId === "H02";
 
   function issueMessagesFor(keys: string[]) {
@@ -479,42 +414,131 @@ export default function ReceiveMovementForm({
     jumpToFeedback();
   }
 
+  function applyPatScenario(scenarioId: PatScenarioId) {
+    const template = getPatScenarioTemplate(scenarioId);
+
+    setSelectedPatScenarioId(scenarioId);
+
+    setYourUniqueReference(template.yourUniqueReference);
+    setSpecialHandlingRequirements(template.specialHandlingRequirements);
+    setHazardousWasteConsignmentCode(
+      template.hazardousWasteConsignmentCode,
+    );
+    setReasonForNoConsignmentCode(template.reasonForNoConsignmentCode);
+
+    setWasteItems(template.wasteItems);
+
+    setCarrierRegistrationNumber(template.carrierRegistrationNumber);
+    setCarrierReasonForNoRegistrationNumber(
+      template.carrierReasonForNoRegistrationNumber,
+    );
+    setCarrierOrganisationName(template.carrierOrganisationName);
+    setCarrierFullAddress(template.carrierFullAddress);
+    setCarrierPostcode(template.carrierPostcode);
+    setCarrierEmailAddress(template.carrierEmailAddress);
+    setCarrierPhoneNumber(template.carrierPhoneNumber);
+    setCarrierMeansOfTransport(template.carrierMeansOfTransport);
+    setCarrierVehicleRegistration(template.carrierVehicleRegistration);
+
+    setReceiverSiteName(template.receiverSiteName);
+    setReceiverAuthorisationNumber(template.receiverAuthorisationNumber);
+    setReceiverEmailAddress(template.receiverEmailAddress);
+    setReceiverPhoneNumber(template.receiverPhoneNumber);
+    setReceiptFullAddress(template.receiptFullAddress);
+    setReceiptPostcode(template.receiptPostcode);
+
+    setBrokerDealerEnabled(template.brokerDealerEnabled);
+    setBrokerOrDealer(template.brokerOrDealer);
+
+    setPatExpectedErrorOverride(template.expectedErrorScenarioId ?? "");
+
+    setSubmitFeedback({
+      type: template.expectedResult === "error" ? "warning" : "info",
+      title: `${template.scenarioId} loaded`,
+      message:
+        template.expectedResult === "error"
+          ? "This PAT scenario is expected to fail at DEFRA. Submit the invalid payload and use the returned rejection as evidence."
+          : "This PAT scenario has been loaded into the form. Review the values and submit to DEFRA test/sandbox.",
+      details: [
+        template.label,
+        template.description,
+        `Expected result: ${
+          template.expectedResult === "error"
+            ? "Expected error / no WTID"
+            : "WTID returned"
+        }`,
+      ],
+    });
+
+    setIssues([]);
+    setWarnings([]);
+
+    jumpToFeedback();
+  }
+
   function buildInput(): ReceiveMovementInput {
-    const popsComponents =
-      containsPops && popsCode.trim()
-        ? [
-            {
-              code: popsCode.trim(),
-              concentration: parseOptionalNumber(popsConcentration),
-            },
-          ]
+    const mappedWasteItems = wasteItems.map((item) => {
+      const disposalOrRecoveryCodes = item.disposalOrRecoveryCodes
+        .filter((row) => row.code.trim() || row.weightAmount.trim())
+        .map((row) => ({
+          code: row.code.trim(),
+          weight: {
+            metric: row.weightMetric,
+            amount: numberFromText(row.weightAmount),
+            isEstimate: row.weightIsEstimate,
+          },
+        }));
+
+      const popsComponents = item.containsPops
+        ? item.popsComponents
+            .filter((component) => {
+              return component.code.trim() || component.concentration.trim();
+            })
+            .map((component) => ({
+              code: component.code.trim(),
+              concentration: parseOptionalNumber(component.concentration),
+            }))
         : [];
 
-    const hazardousComponents =
-      containsHazardous && hazardousComponentName.trim()
-        ? [
-            {
-              name: hazardousComponentName.trim(),
-              concentration: parseOptionalNumber(
-                hazardousComponentConcentration,
-              ),
-            },
-          ]
+      const hazardousComponents = item.containsHazardous
+        ? item.hazardousComponents
+            .filter((component) => {
+              return component.name.trim() || component.concentration.trim();
+            })
+            .map((component) => ({
+              name: component.name.trim(),
+              concentration: parseOptionalNumber(component.concentration),
+            }))
         : [];
 
-    const disposalOrRecoveryCodes =
-      disposalOrRecoveryCode.trim() && disposalWeightAmount.trim()
-        ? [
-            {
-              code: disposalOrRecoveryCode.trim(),
-              weight: {
-                metric: disposalWeightMetric,
-                amount: Number(disposalWeightAmount),
-                isEstimate: disposalWeightIsEstimate,
-              },
-            },
-          ]
-        : [];
+      return {
+        ewcCodes: splitCodeList(item.ewcCodes),
+        wasteDescription: item.wasteDescription,
+        physicalForm: item.physicalForm,
+        numberOfContainers: numberFromText(item.numberOfContainers),
+        typeOfContainers: item.typeOfContainers,
+        weight: {
+          metric: item.weightMetric,
+          amount: numberFromText(item.weightAmount),
+          isEstimate: item.weightIsEstimate,
+        },
+        containsPops: item.containsPops,
+        popsSourceOfComponents: item.containsPops
+          ? item.popsSourceOfComponents
+          : null,
+        popsComponents,
+        containsHazardous: item.containsHazardous,
+        hazardousSourceOfComponents: item.containsHazardous
+          ? item.hazardousSourceOfComponents
+          : null,
+        hazCodes: item.containsHazardous ? splitCodeList(item.hazCodes) : [],
+        hazardousComponents,
+        disposalOrRecoveryCodes,
+      };
+    });
+
+    const includeBrokerDealer =
+      brokerDealerEnabled || hasAnyBrokerDealerData(brokerOrDealer);
 
     return {
       receiverApiCode,
@@ -529,6 +553,14 @@ export default function ReceiveMovementForm({
       yourUniqueReference: yourUniqueReference.trim() || null,
 
       otherReferencesForMovement: [
+        ...(activePatScenarioId
+          ? [
+              {
+                label: "DEFRA PAT Scenario",
+                reference: activePatScenarioId,
+              },
+            ]
+          : []),
         {
           label: "Waste X Assignment",
           reference: assignmentId,
@@ -542,32 +574,7 @@ export default function ReceiveMovementForm({
       specialHandlingRequirements:
         specialHandlingRequirements.trim() || null,
 
-      wasteItems: [
-        {
-          ewcCodes: splitCodeList(ewcCodes),
-          wasteDescription,
-          physicalForm,
-          numberOfContainers: Number(numberOfContainers),
-          typeOfContainers,
-          weight: {
-            metric: weightMetric,
-            amount: Number(weightAmount),
-            isEstimate: weightIsEstimate,
-          },
-          containsPops,
-          popsSourceOfComponents: containsPops
-            ? popsSourceOfComponents
-            : null,
-          popsComponents,
-          containsHazardous,
-          hazardousSourceOfComponents: containsHazardous
-            ? hazardousSourceOfComponents
-            : null,
-          hazCodes: splitCodeList(hazCodes),
-          hazardousComponents,
-          disposalOrRecoveryCodes,
-        },
-      ],
+      wasteItems: mappedWasteItems,
 
       carrier: {
         registrationNumber: carrierRegistrationNumber.trim() || null,
@@ -585,6 +592,19 @@ export default function ReceiveMovementForm({
         vehicleRegistration: carrierVehicleRegistration || null,
         meansOfTransport: carrierMeansOfTransport,
       },
+
+      brokerOrDealer: includeBrokerDealer
+        ? {
+            organisationName: brokerOrDealer.organisationName || null,
+            address: {
+              fullAddress: brokerOrDealer.fullAddress,
+              postcode: brokerOrDealer.postcode,
+            },
+            emailAddress: brokerOrDealer.emailAddress || null,
+            phoneNumber: brokerOrDealer.phoneNumber || null,
+            registrationNumber: brokerOrDealer.registrationNumber || null,
+          }
+        : null,
 
       receiver: {
         siteName: receiverSiteName,
@@ -617,126 +637,162 @@ export default function ReceiveMovementForm({
     if (!canSubmit) {
       addIssue(
         "submission.permission",
-        "Submission is currently locked. This usually means the assignment is not ready, has an unresolved incident, or your active department does not have permission to submit DWT records.",
+        "Submission is currently locked. Check assignment stage, incidents and department permissions.",
       );
     }
 
     if (!receiverApiCode.trim()) {
       addIssue(
         "apiCode",
-        "Receiver API Code is required. Add it in Digital Waste Tracking settings so users do not need to enter it every time, or enter it here for this test submission.",
+        "Receiver API Code is required. Add it in settings or enter it here.",
       );
     }
 
     if (!dateTimeReceived.trim()) {
-      addIssue(
-        "dateTimeReceived",
-        "Date and time received is required.",
-      );
+      addIssue("dateTimeReceived", "Date and time received is required.");
     }
 
-    if (containsHazardous) {
-      if (
-        !allowMissingHazardousConsignmentForPat &&
-        !hazardousWasteConsignmentCode.trim() &&
-        !reasonForNoConsignmentCode
-      ) {
-        addIssue(
-          "reasonForNoConsignmentCode",
-          "Hazardous waste needs either a consignment code or a reason for no consignment code.",
-        );
-      }
-    }
-
-    if (!ewcCodes.trim()) {
-      addIssue(
-        "wasteItems[0].ewcCodes",
-        "At least one EWC code is required. Example: 170904.",
-      );
-    }
-
-    if (!wasteDescription.trim()) {
-      addIssue(
-        "wasteItems[0].wasteDescription",
-        "Waste description is required.",
-      );
-    }
-
-    if (!typeOfContainers.trim()) {
-      addIssue(
-        "wasteItems[0].typeOfContainers",
-        "Container type code is required.",
-      );
-    }
+    const containsHazardousWaste = wasteItems.some(
+      (item) =>
+        item.containsHazardous ||
+        splitCodeList(item.ewcCodes).some((code) => code.endsWith("*")),
+    );
 
     if (
-      numberOfContainers.trim() === "" ||
-      !Number.isFinite(Number(numberOfContainers)) ||
-      Number(numberOfContainers) < 0
+      containsHazardousWaste &&
+      !allowMissingHazardousConsignmentForPat &&
+      !hazardousWasteConsignmentCode.trim() &&
+      !reasonForNoConsignmentCode
     ) {
       addIssue(
-        "wasteItems[0].numberOfContainers",
-        "Number of containers must be 0 or more.",
+        "reasonForNoConsignmentCode",
+        "Hazardous waste needs either a consignment code or a reason for no consignment code.",
       );
     }
 
-    if (
-      weightAmount.trim() === "" ||
-      !Number.isFinite(Number(weightAmount)) ||
-      Number(weightAmount) <= 0
-    ) {
-      addIssue(
-        "wasteItems[0].weight.amount",
-        "Weight amount is required and must be greater than 0.",
-      );
+    if (wasteItems.length === 0) {
+      addIssue("wasteItems", "At least one waste item is required.");
     }
 
-    if (containsPops) {
-      if (
-        (popsSourceOfComponents === "GUIDANCE" ||
-          popsSourceOfComponents === "OWN_TESTING") &&
-        !popsCode.trim()
-      ) {
+    wasteItems.forEach((item, index) => {
+      const prefix = `wasteItems[${index}]`;
+
+      if (!item.ewcCodes.trim()) {
         addIssue(
-          "wasteItems[0].pops.components[0].code",
-          "POP code is required when POP source is GUIDANCE or OWN_TESTING.",
+          `${prefix}.ewcCodes`,
+          `Waste item ${index + 1}: at least one EWC code is required.`,
         );
       }
-    }
 
-    if (containsHazardous) {
-      if (!hazCodes.trim()) {
+      if (!item.wasteDescription.trim()) {
         addIssue(
-          "wasteItems[0].hazardous.hazCodes",
-          "At least one hazardous property code is required when the waste contains hazardous properties.",
+          `${prefix}.wasteDescription`,
+          `Waste item ${index + 1}: waste description is required.`,
+        );
+      }
+
+      if (!item.typeOfContainers.trim()) {
+        addIssue(
+          `${prefix}.typeOfContainers`,
+          `Waste item ${index + 1}: container type is required.`,
         );
       }
 
       if (
-        (hazardousSourceOfComponents === "GUIDANCE" ||
-          hazardousSourceOfComponents === "OWN_TESTING") &&
-        !hazardousComponentName.trim()
+        item.numberOfContainers.trim() === "" ||
+        !Number.isFinite(Number(item.numberOfContainers)) ||
+        Number(item.numberOfContainers) < 0
       ) {
         addIssue(
-          "wasteItems[0].hazardous.components[0].name",
-          "Hazardous component name is required when hazardous source is GUIDANCE or OWN_TESTING.",
+          `${prefix}.numberOfContainers`,
+          `Waste item ${index + 1}: number of containers must be 0 or more.`,
         );
       }
-    }
 
-    if (disposalOrRecoveryCode.trim() && !disposalWeightAmount.trim()) {
-      addIssue(
-        "wasteItems[0].disposalOrRecoveryCodes[0].weight.amount",
-        "Add a disposal/recovery weight amount or remove the disposal/recovery code.",
-      );
-    }
+      if (
+        item.weightAmount.trim() === "" ||
+        !Number.isFinite(Number(item.weightAmount)) ||
+        Number(item.weightAmount) <= 0
+      ) {
+        addIssue(
+          `${prefix}.weight.amount`,
+          `Waste item ${index + 1}: weight amount must be greater than 0.`,
+        );
+      }
 
-    if (disposalWeightAmount.trim() && !disposalOrRecoveryCode.trim()) {
-      addIssue(
-        "wasteItems[0].disposalOrRecoveryCodes[0].code",
-        "Add a disposal/recovery code or remove the disposal/recovery weight.",
-      );
-    }
+      if (item.containsPops) {
+        if (!item.popsSourceOfComponents) {
+          addIssue(
+            `${prefix}.pops.sourceOfComponents`,
+            `Waste item ${index + 1}: POP source is required.`,
+          );
+        }
+
+        const hasPopComponent = item.popsComponents.some((component) =>
+          component.code.trim(),
+        );
+
+        if (
+          (item.popsSourceOfComponents === "GUIDANCE" ||
+            item.popsSourceOfComponents === "OWN_TESTING") &&
+          !hasPopComponent
+        ) {
+          addIssue(
+            `${prefix}.pops.components`,
+            `Waste item ${index + 1}: at least one POP component is required.`,
+          );
+        }
+      }
+
+      if (item.containsHazardous) {
+        if (!item.hazardousSourceOfComponents) {
+          addIssue(
+            `${prefix}.hazardous.sourceOfComponents`,
+            `Waste item ${index + 1}: hazardous source is required.`,
+          );
+        }
+
+        if (!item.hazCodes.trim()) {
+          addIssue(
+            `${prefix}.hazardous.hazCodes`,
+            `Waste item ${index + 1}: hazardous property codes are required.`,
+          );
+        }
+
+        const hasHazardousComponent = item.hazardousComponents.some(
+          (component) => component.name.trim(),
+        );
+
+        if (
+          (item.hazardousSourceOfComponents === "GUIDANCE" ||
+            item.hazardousSourceOfComponents === "OWN_TESTING") &&
+          !hasHazardousComponent
+        ) {
+          addIssue(
+            `${prefix}.hazardous.components`,
+            `Waste item ${index + 1}: at least one hazardous component is required.`,
+          );
+        }
+      }
+
+      item.disposalOrRecoveryCodes.forEach((row, rowIndex) => {
+        const rowPrefix = `${prefix}.disposalOrRecoveryCodes[${rowIndex}]`;
+
+        if (row.code.trim() && !row.weightAmount.trim()) {
+          addIssue(
+            `${rowPrefix}.weight.amount`,
+            `Waste item ${index + 1}: add a weight for disposal/recovery code ${row.code}.`,
+          );
+        }
+
+        if (row.weightAmount.trim() && !row.code.trim()) {
+          addIssue(
+            `${rowPrefix}.code`,
+            `Waste item ${index + 1}: add a disposal/recovery code or remove the weight.`,
+          );
+        }
+      });
+    });
 
     if (
       !allowMissingCarrierRegistrationForPat &&
@@ -768,6 +824,22 @@ export default function ReceiveMovementForm({
         "carrier.vehicleRegistration",
         "Vehicle registration is required when the means of transport is Road.",
       );
+    }
+
+    if (brokerDealerEnabled || hasAnyBrokerDealerData(brokerOrDealer)) {
+      if (!brokerOrDealer.organisationName.trim()) {
+        addIssue(
+          "brokerOrDealer.organisationName",
+          "Broker/dealer organisation name is required.",
+        );
+      }
+
+      if (!brokerOrDealer.postcode.trim()) {
+        addIssue(
+          "brokerOrDealer.address.postcode",
+          "Broker/dealer postcode is required.",
+        );
+      }
     }
 
     if (!receiverSiteName.trim()) {
@@ -811,11 +883,10 @@ export default function ReceiveMovementForm({
         title: "Submission not sent",
         message: `Waste X found ${clientIssues.length} issue${
           clientIssues.length === 1 ? "" : "s"
-        } before contacting the Waste Tracking Service. Fix the marked fields and try again.`,
+        } before contacting the Waste Tracking Service.`,
         details: [
           "Nothing has been sent to the government service yet.",
-          "Required fields are marked with a red star.",
-          "Use the issue list below to see exactly what needs fixing.",
+          "Fix the marked fields and submit again.",
         ],
       });
 
@@ -827,7 +898,7 @@ export default function ReceiveMovementForm({
       type: "info",
       title: "Submitting receive movement",
       message:
-        "Waste X is validating the record, creating a submission log and contacting the Waste Tracking Service. Do not close this page.",
+        "Waste X is validating the record, creating a submission log and contacting the Waste Tracking Service.",
     });
 
     jumpToFeedback();
@@ -852,14 +923,11 @@ export default function ReceiveMovementForm({
 
         const serverWarnings = result.warnings?.map(mapDefraIssue) ?? [];
 
-        const hasDefraValidationErrors = Boolean(result.errors?.length);
-
         const isExpectedPatRejection =
           isExpectedDefraErrorPatTest && serverIssues.length > 0;
 
         setLastSubmissionId(result.submissionId ?? null);
         setLastSubmissionStatus(result.status ?? null);
-
         setIssues(serverIssues);
         setWarnings(serverWarnings);
 
@@ -870,18 +938,16 @@ export default function ReceiveMovementForm({
             ? `Expected DEFRA rejection recorded (${activePatScenarioId})`
             : "Submission not successful",
           message: isExpectedPatRejection
-            ? hasDefraValidationErrors
-              ? "This is the correct result for this DEFRA PAT scenario. Waste X allowed the invalid test payload through the frontend, and the Waste Tracking Service returned validation errors as expected."
-              : "Waste X allowed the invalid PAT payload through the frontend, but this may still have been stopped by server-side validation before DEFRA. Check the DWT submission register to confirm whether the external request was logged."
+            ? "This is the correct result for this DEFRA PAT scenario. Waste X allowed the invalid test payload through and the Waste Tracking Service rejected it as expected."
             : result.message ||
               "Waste X could not complete the Digital Waste Tracking submission.",
           details: isExpectedPatRejection
             ? [
                 "No Waste Tracking ID is expected for this scenario.",
-                "For the DEFRA email, include the scenario ID, scenario description, EWC codes, tested time and the returned error.",
-                hasDefraValidationErrors
-                  ? "This appears to be DEFRA validation evidence."
-                  : "If no DWT submission record was created, patch the server action next so this expected-error PAT test can reach DEFRA.",
+                "Use the submission ID, tested time, HTTP status and error message as PAT evidence.",
+                result.submissionId
+                  ? `Submission record: ${result.submissionId}`
+                  : "No submission ID was returned.",
               ]
             : [
                 serverIssues.length > 0
@@ -889,8 +955,7 @@ export default function ReceiveMovementForm({
                       serverIssues.length === 1 ? "" : "s"
                     } need attention.`
                   : "The request failed before a detailed validation list was returned.",
-                "Review the issue list below and fix the marked fields.",
-                "If the issue says Waste Tracking Service, the external service rejected or failed the request.",
+                "Review the issue list below.",
               ],
         });
 
@@ -918,7 +983,7 @@ export default function ReceiveMovementForm({
             : "Submission successful",
         message:
           result.status === "accepted_with_warnings"
-            ? "The receive movement was accepted, but the Waste Tracking Service returned warnings. Waste X saved the response so compliance can review it."
+            ? "The receive movement was accepted, but the Waste Tracking Service returned warnings."
             : "The receive movement was accepted successfully. Waste X saved the submission record and response.",
         details: [
           `Status: ${formatStatus(result.status)}`,
@@ -946,13 +1011,8 @@ export default function ReceiveMovementForm({
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
-            Confirm the waste received at site. Waste X will validate the data
-            locally, then submit it to the receive movement endpoint.
-          </p>
-
-          <p className="mt-3 text-xs font-medium text-black/45">
-            <span className="font-semibold text-red-500">*</span> Required
-            fields must be completed before submission.
+            Submit one or more waste items to the DEFRA receive movement
+            endpoint. This form now supports the full PAT scenario set.
           </p>
         </div>
 
@@ -976,6 +1036,15 @@ export default function ReceiveMovementForm({
         receiverApiCode={receiverApiCode}
       />
 
+      <PatQuickFillPanel
+        selectedPatScenarioId={selectedPatScenarioId}
+        onSelectedPatScenarioIdChange={setSelectedPatScenarioId}
+        onApply={() => {
+          if (!selectedPatScenarioId) return;
+          applyPatScenario(selectedPatScenarioId);
+        }}
+      />
+
       <PatExpectedErrorOverridePanel
         detectedScenarioId={detectedPatScenarioId}
         activeScenarioId={activePatScenarioId}
@@ -988,7 +1057,6 @@ export default function ReceiveMovementForm({
       )}
 
       <div className="mt-8 space-y-8">
-        {/* ================= MOVEMENT ================= */}
         <section
           id="movement-details"
           className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
@@ -1003,60 +1071,30 @@ export default function ReceiveMovementForm({
               required
               helper={
                 hasSavedReceiverApiCode
-                  ? "Loaded from organisation Digital Waste Tracking settings. To change it, update the settings page."
-                  : "No Receiver API Code is saved yet. Enter one here for testing, or save it in DWT settings so users do not type it every time."
+                  ? "Loaded from organisation settings."
+                  : "Enter the test receiver API code or save it in settings."
               }
               error={issueMessagesFor(["apiCode", "receiverApiCode"])}
             >
-              <div className="space-y-3">
-                <input
-                  value={receiverApiCode}
-                  readOnly={hasSavedReceiverApiCode}
-                  onChange={(event) => setReceiverApiCode(event.target.value)}
-                  className={`${inputClassFor([
-                    "apiCode",
-                    "receiverApiCode",
-                  ])} ${
-                    hasSavedReceiverApiCode
-                      ? "cursor-not-allowed bg-black/5 text-black/55"
-                      : ""
-                  }`}
-                  placeholder="1f83215e-4b90-4785-9ab2-2614839aa2e9"
-                />
-
-                <div
-                  className={`rounded-2xl border px-4 py-3 text-xs leading-5 ${
-                    hasSavedReceiverApiCode
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                      : "border-orange-200 bg-orange-50 text-orange-800"
-                  }`}
-                >
-                  <p className="font-semibold">
-                    {hasSavedReceiverApiCode
-                      ? "Receiver API Code loaded from settings"
-                      : "Receiver API Code not saved yet"}
-                  </p>
-
-                  <p className="mt-1">
-                    {hasSavedReceiverApiCode
-                      ? "This code belongs to the receiving organisation/operator and is stored against the organisation, not typed manually for every movement."
-                      : "Admins should add the code in settings. This avoids mistakes and stops users from guessing which code to use."}
-                  </p>
-
-                  <Link
-                    href="/home/settings/digital-waste-tracking"
-                    className="mt-2 inline-flex font-semibold underline underline-offset-4"
-                  >
-                    Open DWT settings →
-                  </Link>
-                </div>
-              </div>
+              <input
+                value={receiverApiCode}
+                readOnly={hasSavedReceiverApiCode}
+                onChange={(event) => setReceiverApiCode(event.target.value)}
+                className={`${inputClassFor([
+                  "apiCode",
+                  "receiverApiCode",
+                ])} ${
+                  hasSavedReceiverApiCode
+                    ? "cursor-not-allowed bg-black/5 text-black/55"
+                    : ""
+                }`}
+                placeholder="1f83215e-4b90-4785-9ab2-2614839aa2e9"
+              />
             </Field>
 
             <Field
               label="Date/time received"
               required
-              helper="Use the time the waste was actually received at the site."
               error={issueMessagesFor(["dateTimeReceived"])}
             >
               <input
@@ -1070,13 +1108,13 @@ export default function ReceiveMovementForm({
             <Field
               label="Hazardous consignment code"
               required={
-                containsHazardous &&
+                wasteItems.some((item) => item.containsHazardous) &&
                 !reasonForNoConsignmentCode &&
                 !allowMissingHazardousConsignmentForPat
               }
               helper={
                 allowMissingHazardousConsignmentForPat
-                  ? "PAT H02 expected-error test: leave this blank so DEFRA can reject the payload."
+                  ? "PAT H02: leave blank so DEFRA rejects the payload."
                   : "Required for hazardous waste unless a valid reason is selected."
               }
               error={issueMessagesFor(["hazardousWasteConsignmentCode"])}
@@ -1087,20 +1125,20 @@ export default function ReceiveMovementForm({
                   setHazardousWasteConsignmentCode(event.target.value)
                 }
                 className={inputClassFor(["hazardousWasteConsignmentCode"])}
-                placeholder="CJ32LE/A0001"
+                placeholder="H01206/HW001"
               />
             </Field>
 
             <Field
               label="Reason for no consignment code"
               required={
-                containsHazardous &&
+                wasteItems.some((item) => item.containsHazardous) &&
                 !hazardousWasteConsignmentCode.trim() &&
                 !allowMissingHazardousConsignmentForPat
               }
               helper={
                 allowMissingHazardousConsignmentForPat
-                  ? "PAT H02 expected-error test: leave this as Not applicable."
+                  ? "PAT H02: leave as Not applicable."
                   : "Only needed when hazardous waste has no consignment code."
               }
               error={issueMessagesFor(["reasonForNoConsignmentCode"])}
@@ -1125,7 +1163,6 @@ export default function ReceiveMovementForm({
 
             <Field
               label="Your unique reference"
-              helper="Waste X adds the assignment and listing references automatically as additional references."
               error={issueMessagesFor(["yourUniqueReference"])}
             >
               <input
@@ -1139,7 +1176,6 @@ export default function ReceiveMovementForm({
 
             <Field
               label="Special handling requirements"
-              helper="Optional. Add handling notes, access issues, contamination notes or site instructions."
               error={issueMessagesFor(["specialHandlingRequirements"])}
             >
               <textarea
@@ -1156,423 +1192,20 @@ export default function ReceiveMovementForm({
           </div>
         </section>
 
-        {/* ================= WASTE ITEM ================= */}
-        <section
-          id="waste-item-received"
-          className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
-        >
-          <h3 className="text-lg font-semibold text-black">
-            2. Waste item received
-          </h3>
+        <WasteItemsEditor
+          listingName={listingName}
+          wasteItems={wasteItems}
+          onChange={setWasteItems}
+          issueMessagesFor={issueMessagesFor}
+          inputClassFor={inputClassFor}
+        />
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <Field
-              label="EWC codes"
-              required
-              helper="Use six-digit EWC codes. Separate multiple codes with commas."
-              error={issueMessagesFor(["wasteItems[0].ewcCodes"])}
-            >
-              <input
-                value={ewcCodes}
-                onChange={(event) => setEwcCodes(event.target.value)}
-                className={inputClassFor(["wasteItems[0].ewcCodes"])}
-                placeholder="170904, 150109"
-              />
-            </Field>
-
-            <Field
-              label="Waste description"
-              required
-              helper="Describe what was actually received, not only what was expected."
-              error={issueMessagesFor(["wasteItems[0].wasteDescription"])}
-            >
-              <textarea
-                value={wasteDescription}
-                onChange={(event) => setWasteDescription(event.target.value)}
-                className={`${inputClassFor([
-                  "wasteItems[0].wasteDescription",
-                ])} min-h-24`}
-              />
-            </Field>
-
-            <Field
-              label="Physical form"
-              required
-              error={issueMessagesFor(["wasteItems[0].physicalForm"])}
-            >
-              <select
-                value={physicalForm}
-                onChange={(event) =>
-                  setPhysicalForm(event.target.value as PhysicalForm)
-                }
-                className={inputClassFor(["wasteItems[0].physicalForm"])}
-              >
-                {PHYSICAL_FORMS.map((form) => (
-                  <option key={form} value={form}>
-                    {form}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field
-              label="Container type code"
-              required
-              helper="Use a valid container type code from synced reference data."
-              error={issueMessagesFor(["wasteItems[0].typeOfContainers"])}
-            >
-              <input
-                value={typeOfContainers}
-                onChange={(event) => setTypeOfContainers(event.target.value)}
-                className={inputClassFor(["wasteItems[0].typeOfContainers"])}
-                placeholder="SKI"
-              />
-            </Field>
-
-            <Field
-              label="Number of containers"
-              required
-              error={issueMessagesFor(["wasteItems[0].numberOfContainers"])}
-            >
-              <input
-                type="number"
-                min="0"
-                value={numberOfContainers}
-                onChange={(event) =>
-                  setNumberOfContainers(event.target.value)
-                }
-                className={inputClassFor(["wasteItems[0].numberOfContainers"])}
-              />
-            </Field>
-
-            <Field
-              label="Weight amount"
-              required
-              helper="Must be greater than 0."
-              error={issueMessagesFor([
-                "wasteItems[0].weight",
-                "wasteItems[0].weight.amount",
-              ])}
-            >
-              <input
-                type="number"
-                min="0"
-                step="0.001"
-                value={weightAmount}
-                onChange={(event) => setWeightAmount(event.target.value)}
-                className={inputClassFor([
-                  "wasteItems[0].weight",
-                  "wasteItems[0].weight.amount",
-                ])}
-                placeholder="1.5"
-              />
-            </Field>
-
-            <Field
-              label="Weight metric"
-              required
-              error={issueMessagesFor(["wasteItems[0].weight.metric"])}
-            >
-              <select
-                value={weightMetric}
-                onChange={(event) =>
-                  setWeightMetric(event.target.value as WeightMetric)
-                }
-                className={inputClassFor(["wasteItems[0].weight.metric"])}
-              >
-                {WEIGHT_METRICS.map((metric) => (
-                  <option key={metric} value={metric}>
-                    {metric}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <ToggleField
-              label="Weight is estimated"
-              checked={weightIsEstimate}
-              onChange={setWeightIsEstimate}
-            />
-          </div>
-        </section>
-
-        {/* ================= POPS / HAZARDOUS ================= */}
-        <section
-          id="risk-details"
-          className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
-        >
-          <h3 className="text-lg font-semibold text-black">
-            3. POPs and hazardous details
-          </h3>
-
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <ToggleField
-              label="Contains POPs"
-              checked={containsPops}
-              onChange={setContainsPops}
-            />
-
-            <ToggleField
-              label="Contains hazardous properties"
-              checked={containsHazardous}
-              onChange={setContainsHazardous}
-            />
-
-            {containsPops && (
-              <>
-                <Field
-                  label="POPs source of components"
-                  required
-                  error={issueMessagesFor([
-                    "wasteItems[0].pops.sourceOfComponents",
-                  ])}
-                >
-                  <select
-                    value={popsSourceOfComponents}
-                    onChange={(event) =>
-                      setPopsSourceOfComponents(
-                        event.target.value as SourceOfComponents,
-                      )
-                    }
-                    className={inputClassFor([
-                      "wasteItems[0].pops.sourceOfComponents",
-                    ])}
-                  >
-                    {SOURCE_OF_COMPONENTS.map((source) => (
-                      <option key={source} value={source}>
-                        {source}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-
-                <Field
-                  label="POP code"
-                  required={
-                    popsSourceOfComponents === "GUIDANCE" ||
-                    popsSourceOfComponents === "OWN_TESTING"
-                  }
-                  helper="Required when source is GUIDANCE or OWN_TESTING."
-                  error={issueMessagesFor([
-                    "wasteItems[0].pops.components",
-                    "wasteItems[0].pops.components[0].code",
-                  ])}
-                >
-                  <input
-                    value={popsCode}
-                    onChange={(event) => setPopsCode(event.target.value)}
-                    className={inputClassFor([
-                      "wasteItems[0].pops.components",
-                      "wasteItems[0].pops.components[0].code",
-                    ])}
-                    placeholder="PFHXS"
-                  />
-                </Field>
-
-                <Field
-                  label="POP concentration"
-                  helper="Optional unless your source data requires it."
-                  error={issueMessagesFor([
-                    "wasteItems[0].pops.components[0].concentration",
-                  ])}
-                >
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={popsConcentration}
-                    onChange={(event) =>
-                      setPopsConcentration(event.target.value)
-                    }
-                    className={inputClassFor([
-                      "wasteItems[0].pops.components[0].concentration",
-                    ])}
-                    placeholder="Optional"
-                  />
-                </Field>
-              </>
-            )}
-
-            {containsHazardous && (
-              <>
-                <Field
-                  label="Hazardous source of components"
-                  required
-                  error={issueMessagesFor([
-                    "wasteItems[0].hazardous.sourceOfComponents",
-                  ])}
-                >
-                  <select
-                    value={hazardousSourceOfComponents}
-                    onChange={(event) =>
-                      setHazardousSourceOfComponents(
-                        event.target.value as SourceOfComponents,
-                      )
-                    }
-                    className={inputClassFor([
-                      "wasteItems[0].hazardous.sourceOfComponents",
-                    ])}
-                  >
-                    {SOURCE_OF_COMPONENTS.map((source) => (
-                      <option key={source} value={source}>
-                        {source}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-
-                <Field
-                  label="Hazardous property codes"
-                  required
-                  helper="Separate multiple hazardous property codes with commas."
-                  error={issueMessagesFor([
-                    "wasteItems[0].hazardous.hazCodes",
-                  ])}
-                >
-                  <input
-                    value={hazCodes}
-                    onChange={(event) => setHazCodes(event.target.value)}
-                    className={inputClassFor([
-                      "wasteItems[0].hazardous.hazCodes",
-                    ])}
-                    placeholder="HP_5, HP_10"
-                  />
-                </Field>
-
-                <Field
-                  label="Hazardous component name"
-                  required={
-                    hazardousSourceOfComponents === "GUIDANCE" ||
-                    hazardousSourceOfComponents === "OWN_TESTING"
-                  }
-                  helper="Required when source is GUIDANCE or OWN_TESTING."
-                  error={issueMessagesFor([
-                    "wasteItems[0].hazardous.components",
-                    "wasteItems[0].hazardous.components[0].name",
-                  ])}
-                >
-                  <input
-                    value={hazardousComponentName}
-                    onChange={(event) =>
-                      setHazardousComponentName(event.target.value)
-                    }
-                    className={inputClassFor([
-                      "wasteItems[0].hazardous.components",
-                      "wasteItems[0].hazardous.components[0].name",
-                    ])}
-                    placeholder="lead"
-                  />
-                </Field>
-
-                <Field
-                  label="Hazardous component concentration"
-                  helper="Optional unless your source data requires it."
-                  error={issueMessagesFor([
-                    "wasteItems[0].hazardous.components[0].concentration",
-                  ])}
-                >
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={hazardousComponentConcentration}
-                    onChange={(event) =>
-                      setHazardousComponentConcentration(event.target.value)
-                    }
-                    className={inputClassFor([
-                      "wasteItems[0].hazardous.components[0].concentration",
-                    ])}
-                    placeholder="Optional"
-                  />
-                </Field>
-              </>
-            )}
-          </div>
-        </section>
-
-        {/* ================= DISPOSAL / RECOVERY ================= */}
-        <section
-          id="disposal-recovery"
-          className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
-        >
-          <h3 className="text-lg font-semibold text-black">
-            4. Disposal or recovery
-          </h3>
-
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <Field
-              label="Disposal/recovery code"
-              required={Boolean(disposalWeightAmount.trim())}
-              helper="Optional, but if you add a weight you must also add a code."
-              error={issueMessagesFor([
-                "wasteItems[0].disposalOrRecoveryCodes",
-                "wasteItems[0].disposalOrRecoveryCodes[0].code",
-              ])}
-            >
-              <input
-                value={disposalOrRecoveryCode}
-                onChange={(event) =>
-                  setDisposalOrRecoveryCode(event.target.value)
-                }
-                className={inputClassFor([
-                  "wasteItems[0].disposalOrRecoveryCodes",
-                  "wasteItems[0].disposalOrRecoveryCodes[0].code",
-                ])}
-                placeholder="R1"
-              />
-            </Field>
-
-            <Field
-              label="Disposal/recovery weight amount"
-              required={Boolean(disposalOrRecoveryCode.trim())}
-              helper="Optional, but if you add a code you must also add a weight."
-              error={issueMessagesFor([
-                "wasteItems[0].disposalOrRecoveryCodes[0].weight.amount",
-              ])}
-            >
-              <input
-                type="number"
-                step="0.001"
-                value={disposalWeightAmount}
-                onChange={(event) =>
-                  setDisposalWeightAmount(event.target.value)
-                }
-                className={inputClassFor([
-                  "wasteItems[0].disposalOrRecoveryCodes[0].weight.amount",
-                ])}
-                placeholder="Optional"
-              />
-            </Field>
-
-            <Field label="Disposal/recovery weight metric">
-              <select
-                value={disposalWeightMetric}
-                onChange={(event) =>
-                  setDisposalWeightMetric(event.target.value as WeightMetric)
-                }
-                className={inputClass}
-              >
-                {WEIGHT_METRICS.map((metric) => (
-                  <option key={metric} value={metric}>
-                    {metric}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <ToggleField
-              label="Disposal/recovery weight is estimated"
-              checked={disposalWeightIsEstimate}
-              onChange={setDisposalWeightIsEstimate}
-            />
-          </div>
-        </section>
-
-        {/* ================= CARRIER ================= */}
         <section
           id="carrier-details"
           className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
         >
           <h3 className="text-lg font-semibold text-black">
-            5. Carrier details
+            3. Carrier details
           </h3>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -1584,8 +1217,8 @@ export default function ReceiveMovementForm({
               }
               helper={
                 allowMissingCarrierRegistrationForPat
-                  ? "PAT C01 expected-error test: leave this blank so DEFRA can reject the payload."
-                  : "Add the registration number, or choose a reason why there is no registration number."
+                  ? "PAT C01: leave blank so DEFRA rejects the payload."
+                  : "Add the registration number or select a reason."
               }
               error={issueMessagesFor(["carrier.registrationNumber"])}
             >
@@ -1595,7 +1228,7 @@ export default function ReceiveMovementForm({
                   setCarrierRegistrationNumber(event.target.value)
                 }
                 className={inputClassFor(["carrier.registrationNumber"])}
-                placeholder="CBDU999999"
+                placeholder="CBDL999999"
               />
             </Field>
 
@@ -1604,11 +1237,6 @@ export default function ReceiveMovementForm({
               required={
                 !carrierRegistrationNumber.trim() &&
                 !allowMissingCarrierRegistrationForPat
-              }
-              helper={
-                allowMissingCarrierRegistrationForPat
-                  ? "PAT C01 expected-error test: leave this as Not applicable."
-                  : "Required if no carrier registration number is available."
               }
               error={issueMessagesFor([
                 "carrier.reasonForNoRegistrationNumber",
@@ -1716,7 +1344,6 @@ export default function ReceiveMovementForm({
             <Field
               label="Vehicle registration"
               required={carrierMeansOfTransport === "Road"}
-              helper="Required when the means of transport is Road."
               error={issueMessagesFor(["carrier.vehicleRegistration"])}
             >
               <input
@@ -1725,19 +1352,27 @@ export default function ReceiveMovementForm({
                   setCarrierVehicleRegistration(event.target.value)
                 }
                 className={inputClassFor(["carrier.vehicleRegistration"])}
-                placeholder="Required for Road"
+                placeholder="AB12 CDE"
               />
             </Field>
           </div>
         </section>
 
-        {/* ================= RECEIVER ================= */}
+        <BrokerDealerPanel
+          enabled={brokerDealerEnabled}
+          brokerOrDealer={brokerOrDealer}
+          onEnabledChange={setBrokerDealerEnabled}
+          onChange={setBrokerOrDealer}
+          issueMessagesFor={issueMessagesFor}
+          inputClassFor={inputClassFor}
+        />
+
         <section
           id="receiver-details"
           className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
         >
           <h3 className="text-lg font-semibold text-black">
-            6. Receiver and receipt site
+            5. Receiver and receipt site
           </h3>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -1756,7 +1391,6 @@ export default function ReceiveMovementForm({
             <Field
               label="Receiver authorisation number"
               required
-              helper="Permit, licence, exemption or authorisation reference for the receiving site."
               error={issueMessagesFor(["receiver.authorisationNumber"])}
             >
               <input
@@ -1765,7 +1399,7 @@ export default function ReceiveMovementForm({
                   setReceiverAuthorisationNumber(event.target.value)
                 }
                 className={inputClassFor(["receiver.authorisationNumber"])}
-                placeholder="EPR/DD2522BF"
+                placeholder="PPC/A/9999999"
               />
             </Field>
 
@@ -1827,7 +1461,6 @@ export default function ReceiveMovementForm({
           </div>
         </section>
 
-        {/* ================= BOTTOM FEEDBACK ================= */}
         <div id="submit-feedback" ref={feedbackRef} className="scroll-mt-32">
           <FeedbackPanel
             feedback={submitFeedback}
@@ -1842,7 +1475,6 @@ export default function ReceiveMovementForm({
           />
         </div>
 
-        {/* ================= SUBMIT ================= */}
         <section className="sticky bottom-4 z-20 flex flex-col gap-4 rounded-3xl border border-black/10 bg-black p-6 text-white shadow-2xl md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm font-semibold">
@@ -1850,22 +1482,14 @@ export default function ReceiveMovementForm({
             </p>
 
             <p className="mt-2 max-w-2xl text-sm leading-6 text-white/50">
-              Feedback appears directly above this submit area so you do not
-              have to scroll back to the top to find out what happened.
+              This submits the current payload to DEFRA test/sandbox and saves
+              the response in Waste X.
             </p>
 
             {isExpectedDefraErrorPatTest && (
               <p className="mt-3 rounded-2xl border border-orange-400/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
                 PAT {activePatScenarioId} is expected to fail. Submit this only
                 while using the DEFRA test/sandbox environment.
-              </p>
-            )}
-
-            {!canSubmit && (
-              <p className="mt-3 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                Submission is locked for this assignment. Check collection
-                status, unresolved incidents, and your active department
-                permissions.
               </p>
             )}
           </div>
@@ -1891,7 +1515,7 @@ export default function ReceiveMovementForm({
 }
 
 /* =========================================================
-   SMALL UI COMPONENTS
+   UI COMPONENTS
 ========================================================= */
 
 const inputClass =
@@ -1926,15 +1550,8 @@ function ReceiverApiCodeNotice({
 
           <p className="mt-2 max-w-3xl text-sm leading-6 opacity-80">
             {hasSavedReceiverApiCode
-              ? "Waste X has loaded the Receiver API Code from this organisation's Digital Waste Tracking settings. Users should not need to type it manually for each submission."
-              : "No Receiver API Code is saved for this organisation. You can type one into this form for testing, but the proper setup is to save it once in Digital Waste Tracking settings."}
-          </p>
-
-          <p className="mt-3 max-w-3xl text-xs leading-5 opacity-75">
-            The Receiver API Code is not your Defra client ID or client secret.
-            The client credentials stay on the server. The Receiver API Code
-            identifies the receiving waste operator/site in the receive movement
-            payload.
+              ? "Waste X loaded the Receiver API Code from organisation settings."
+              : "No Receiver API Code is saved for this organisation. Add one in settings or enter it here for testing."}
           </p>
         </div>
 
@@ -1957,8 +1574,87 @@ function ReceiverApiCodeNotice({
                 : "bg-orange-600 text-white hover:bg-orange-500"
             }`}
           >
-            {hasSavedReceiverApiCode ? "Change in settings" : "Add in settings"} →
+            Open DWT settings →
           </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PatQuickFillPanel({
+  selectedPatScenarioId,
+  onSelectedPatScenarioIdChange,
+  onApply,
+}: {
+  selectedPatScenarioId: PatScenarioId | "";
+  onSelectedPatScenarioIdChange: (value: PatScenarioId | "") => void;
+  onApply: () => void;
+}) {
+  const selectedTemplate = selectedPatScenarioId
+    ? getPatScenarioTemplate(selectedPatScenarioId)
+    : null;
+
+  return (
+    <section className="mt-6 rounded-3xl border border-black/10 bg-black p-5 text-white">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-400">
+            DEFRA PAT quick-fill
+          </p>
+
+          <h3 className="mt-2 text-lg font-semibold">
+            Load one of the 14 PAT scenarios
+          </h3>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-white/55">
+            Select a scenario and Waste X will fill the waste items, POPs,
+            hazardous components, disposal/recovery codes, broker/dealer and
+            carrier settings for that test.
+          </p>
+
+          {selectedTemplate && (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-white/70">
+              <p className="font-semibold text-white">
+                {selectedTemplate.label}
+              </p>
+              <p className="mt-1">{selectedTemplate.description}</p>
+              <p className="mt-1">
+                Expected:{" "}
+                {selectedTemplate.expectedResult === "error"
+                  ? "Error / no WTID"
+                  : "WTID returned"}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="grid w-full gap-3 lg:max-w-md">
+          <select
+            value={selectedPatScenarioId}
+            onChange={(event) =>
+              onSelectedPatScenarioIdChange(
+                event.target.value as PatScenarioId | "",
+              )
+            }
+            className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm font-semibold text-black outline-none"
+          >
+            <option value="">Choose PAT scenario</option>
+            {PAT_SCENARIO_OPTIONS.map((scenario) => (
+              <option key={scenario.id} value={scenario.id}>
+                {scenario.label}
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            disabled={!selectedPatScenarioId}
+            onClick={onApply}
+            className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:bg-white/20 disabled:text-white/40"
+          >
+            Apply scenario data
+          </button>
         </div>
       </div>
     </section>
@@ -1981,17 +1677,16 @@ function PatExpectedErrorOverridePanel({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
-            DEFRA PAT testing tools
+            DEFRA PAT expected-error override
           </p>
 
           <h3 className="mt-2 text-lg font-semibold">
-            Expected-error scenario override
+            Only use for C01 and H02
           </h3>
 
           <p className="mt-2 max-w-3xl text-sm leading-6">
-            Use this only for DEFRA PAT scenarios that are supposed to fail.
-            This lets the invalid test payload reach the DEFRA test/sandbox API
-            so DEFRA can return the expected rejection.
+            This lets intentionally invalid PAT payloads reach DEFRA so their
+            API can reject them and Waste X can save the evidence.
           </p>
 
           <p className="mt-3 text-xs leading-5 opacity-75">
@@ -2053,27 +1748,9 @@ function PatExpectedErrorNotice({
       </h3>
 
       <p className="mt-2 max-w-3xl text-sm leading-6">
-        Waste X is allowing this invalid test payload through the frontend
-        because this DEFRA PAT scenario requires a real rejection. This bypass
-        only applies to PAT scenarios C01 and H02.
+        Do not fix the intentionally invalid field for this scenario. Submit it
+        and use DEFRA’s rejection as evidence.
       </p>
-
-      <div className="mt-4 rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm leading-6">
-        {scenarioId === "C01" && (
-          <p>
-            For C01, leave the carrier registration number blank and leave the
-            reason for no registration number as Not applicable.
-          </p>
-        )}
-
-        {scenarioId === "H02" && (
-          <p>
-            For H02, turn on hazardous properties, leave the hazardous
-            consignment code blank, and leave the reason for no consignment code
-            as Not applicable.
-          </p>
-        )}
-      </div>
     </section>
   );
 }
@@ -2121,36 +1798,6 @@ function Field({
   );
 }
 
-function ToggleField({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label className="flex min-h-[48px] items-center justify-between rounded-2xl border border-black/10 bg-white px-4 py-3">
-      <span className="text-sm font-medium text-black/60">{label}</span>
-
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 rounded-full transition ${
-          checked ? "bg-orange-500" : "bg-black/15"
-        }`}
-      >
-        <span
-          className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${
-            checked ? "left-6" : "left-1"
-          }`}
-        />
-      </button>
-    </label>
-  );
-}
-
 function FeedbackPanel({
   feedback,
   issues,
@@ -2185,14 +1832,14 @@ function FeedbackPanel({
 
         <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
           {canSubmit
-            ? "Complete the required fields marked with a red star, then submit. Any success or failure message will appear here beside the submit button."
-            : "This assignment cannot be submitted yet. Check whether collection has been verified, whether there is an unresolved incident, and whether your active department has DWT submission permission."}
+            ? "Complete the required fields or use PAT quick-fill, then submit."
+            : "This assignment cannot be submitted yet."}
         </p>
       </section>
     );
   }
 
-  const colourClasses: Record<FeedbackType, string> = {
+  const colourClasses = {
     success: "border-emerald-200 bg-emerald-50 text-emerald-800",
     warning: "border-orange-200 bg-orange-50 text-orange-800",
     error: "border-red-200 bg-red-50 text-red-800",
@@ -2251,7 +1898,7 @@ function FeedbackPanel({
               Waste tracking ID
             </p>
             <p className="mt-2 break-all text-sm font-semibold">
-              {wasteTrackingId || "Not issued yet"}
+              {wasteTrackingId || "Not issued / expected error"}
             </p>
           </div>
 
@@ -2296,8 +1943,8 @@ function FeedbackPanel({
                 }`}
               >
                 {feedback?.isExpectedPatRejection
-                  ? "Do not fix this form for this scenario. This error is the evidence for the PAT expected-error test."
-                  : "Fix these issues and submit again. The matching fields are also highlighted in red."}
+                  ? "Do not fix this form for this scenario. This error is the evidence."
+                  : "Fix these issues and submit again."}
               </p>
             </div>
 
@@ -2333,17 +1980,6 @@ function FeedbackPanel({
               </li>
             ))}
           </ul>
-
-          {feedback?.isExpectedPatRejection && (
-            <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm leading-6 text-orange-900">
-              <p className="font-semibold">Use this for the DEFRA PAT table.</p>
-              <p className="mt-1">
-                No WTID is expected. Record the scenario ID, scenario
-                description, EWC code, tested time, and the returned error
-                message.
-              </p>
-            </div>
-          )}
         </div>
       )}
 
