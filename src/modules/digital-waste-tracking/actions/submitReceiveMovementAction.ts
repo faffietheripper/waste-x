@@ -41,7 +41,6 @@ import {
 
 import {
   flattenValidationResults,
-  getReceiveMovementValidationMessage,
   validateReceiveMovementInput,
 } from "../core/validateReceiveMovementInput";
 
@@ -63,6 +62,8 @@ import type { WasteTrackingEnvironment } from "../types/referenceData.types";
    ACTION TYPES
 ========================================================= */
 
+type ExpectedPatErrorScenarioId = "C01" | "H02";
+
 export type SubmitReceiveMovementActionInput = {
   assignmentId: string;
   receiptId?: string | null;
@@ -73,6 +74,15 @@ export type SubmitReceiveMovementActionInput = {
     the latest stored submission for the assignment.
   */
   wasteTrackingId?: string | null;
+
+  /*
+    PAT-only override.
+
+    DEFRA expects C01 and H02 to be rejected by their API.
+    Normal validation would block these before DEFRA sees them,
+    so this allows only the expected invalid fields through.
+  */
+  patExpectedErrorScenarioId?: ExpectedPatErrorScenarioId | null;
 
   receiveMovementInput: ReceiveMovementInput;
 };
@@ -89,6 +99,8 @@ export type SubmitReceiveMovementActionResult =
   | {
       success: false;
       message: string;
+      submissionId?: string;
+      status?: ReceiveMovementSubmissionStatus;
       errors?: DefraValidationResult[];
       flattenedErrors?: string[];
       warnings?: DefraValidationResult[];
@@ -139,6 +151,139 @@ function canSubmitReceiveMovement(params: {
   });
 }
 
+type LocalReceiveMovementValidation = ReturnType<
+  typeof validateReceiveMovementInput
+>;
+
+function getLocalValidationErrors(
+  localValidation: LocalReceiveMovementValidation,
+): DefraValidationResult[] {
+  if (
+    "errors" in localValidation &&
+    Array.isArray(localValidation.errors)
+  ) {
+    return localValidation.errors;
+  }
+
+  return [];
+}
+
+function getLocalValidationWarnings(
+  localValidation: LocalReceiveMovementValidation,
+): DefraValidationResult[] {
+  if (
+    "warnings" in localValidation &&
+    Array.isArray(localValidation.warnings)
+  ) {
+    return localValidation.warnings;
+  }
+
+  return [];
+}
+
+function buildLocalValidationMessage(errors: DefraValidationResult[]) {
+  const firstMessage = errors[0]?.message;
+
+  if (firstMessage) return firstMessage;
+
+  return "Waste X found validation issues before contacting the Waste Tracking Service.";
+}
+
+function detectExpectedPatScenarioFromInput(
+  receiveMovementInput: ReceiveMovementInput,
+): ExpectedPatErrorScenarioId | null {
+  const values = [
+    receiveMovementInput.yourUniqueReference,
+    receiveMovementInput.specialHandlingRequirements,
+    ...(receiveMovementInput.otherReferencesForMovement ?? []).map(
+      (reference) => `${reference.label} ${reference.reference}`,
+    ),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const match = values.match(/\b(C01|H02)\b/i);
+
+  if (!match?.[1]) return null;
+
+  return match[1].toUpperCase() as ExpectedPatErrorScenarioId;
+}
+
+function resolveExpectedPatScenarioId(
+  input: SubmitReceiveMovementActionInput,
+): ExpectedPatErrorScenarioId | null {
+  if (
+    input.patExpectedErrorScenarioId === "C01" ||
+    input.patExpectedErrorScenarioId === "H02"
+  ) {
+    return input.patExpectedErrorScenarioId;
+  }
+
+  return detectExpectedPatScenarioFromInput(input.receiveMovementInput);
+}
+
+function isAllowedExpectedPatLocalValidationError(params: {
+  scenarioId: ExpectedPatErrorScenarioId | null;
+  error: DefraValidationResult;
+}) {
+  const { scenarioId, error } = params;
+
+  if (!scenarioId) return false;
+
+  const key = error.key.toLowerCase();
+  const message = error.message.toLowerCase();
+
+  if (scenarioId === "H02") {
+    return (
+      key.includes("hazardouswasteconsignmentcode") ||
+      key.includes("reasonfornoconsignmentcode") ||
+      key.includes("hazardous") ||
+      (message.includes("hazardous") &&
+        message.includes("consignment") &&
+        message.includes("reason"))
+    );
+  }
+
+  if (scenarioId === "C01") {
+    return (
+      key.includes("carrier.registrationnumber") ||
+      key.includes("carrier.reasonfornoregistrationnumber") ||
+      key.includes("carrier") ||
+      (message.includes("carrier") &&
+        message.includes("registration") &&
+        message.includes("reason"))
+    );
+  }
+
+  return false;
+}
+
+function splitLocalValidationErrorsForPat(params: {
+  scenarioId: ExpectedPatErrorScenarioId | null;
+  errors: DefraValidationResult[];
+}) {
+  const allowedExpectedPatErrors: DefraValidationResult[] = [];
+  const blockingErrors: DefraValidationResult[] = [];
+
+  for (const error of params.errors) {
+    if (
+      isAllowedExpectedPatLocalValidationError({
+        scenarioId: params.scenarioId,
+        error,
+      })
+    ) {
+      allowedExpectedPatErrors.push(error);
+    } else {
+      blockingErrors.push(error);
+    }
+  }
+
+  return {
+    allowedExpectedPatErrors,
+    blockingErrors,
+  };
+}
+
 async function readResponseBody(response: Response): Promise<unknown> {
   const text = await response.text().catch(() => "");
 
@@ -185,6 +330,8 @@ function revalidateDwtPaths(assignmentId: string) {
   revalidatePath(`/home/receiving/intake/${assignmentId}`);
   revalidatePath("/home/operations/assignments");
   revalidatePath(`/home/operations/assignments/${assignmentId}`);
+  revalidatePath("/admin/digital-waste-tracking");
+  revalidatePath("/admin/digital-waste-tracking/pat");
 }
 
 /* =========================================================
@@ -406,13 +553,33 @@ export async function submitReceiveMovementAction(
     referenceData,
   });
 
-  if (!localValidation.valid) {
+  const expectedPatScenarioId = resolveExpectedPatScenarioId(input);
+
+  const localValidationErrors = getLocalValidationErrors(localValidation);
+  const localValidationWarnings = getLocalValidationWarnings(localValidation);
+
+  const { allowedExpectedPatErrors, blockingErrors } =
+    splitLocalValidationErrorsForPat({
+      scenarioId: expectedPatScenarioId,
+      errors: localValidationErrors,
+    });
+
+  /*
+    Normal behaviour:
+    - Any local validation error blocks the request.
+
+    PAT expected-error behaviour:
+    - C01 and H02 are intentionally invalid.
+    - Only the expected invalid field is allowed through.
+    - Any other local validation error still blocks the request.
+  */
+  if (blockingErrors.length > 0) {
     return {
       success: false,
-      message: getReceiveMovementValidationMessage(localValidation),
-      errors: localValidation.errors,
-      flattenedErrors: flattenValidationResults(localValidation.errors),
-      warnings: localValidation.warnings,
+      message: buildLocalValidationMessage(blockingErrors),
+      errors: blockingErrors,
+      flattenedErrors: flattenValidationResults(blockingErrors),
+      warnings: localValidationWarnings,
     };
   }
 
@@ -443,8 +610,9 @@ export async function submitReceiveMovementAction(
     method,
     endpoint,
     payloadSnapshot: payload,
-    validationWarnings: localValidation.warnings,
-    validationErrors: null,
+    validationWarnings: localValidationWarnings,
+    validationErrors:
+      allowedExpectedPatErrors.length > 0 ? allowedExpectedPatErrors : null,
     submittedAt: null,
     lastAttemptedAt: new Date(),
   });
@@ -512,6 +680,8 @@ export async function submitReceiveMovementAction(
         message:
           finalErrors[0]?.message ??
           "The Waste Tracking Service rejected the receive movement.",
+        submissionId: draftSubmission.id,
+        status,
         errors: finalErrors,
         flattenedErrors: flattenValidationResults(finalErrors),
         warnings,
@@ -581,7 +751,7 @@ export async function submitReceiveMovementAction(
         endpoint,
         error: message,
       },
-      validationWarnings: localValidation.warnings,
+      validationWarnings: localValidationWarnings,
       validationErrors: [finalError],
       submittedAt: null,
       lastAttemptedAt: new Date(),
@@ -592,10 +762,11 @@ export async function submitReceiveMovementAction(
     return {
       success: false,
       message,
+      submissionId: draftSubmission.id,
+      status: "failed",
       errors: [finalError],
       flattenedErrors: flattenValidationResults([finalError]),
-      warnings: localValidation.warnings,
+      warnings: localValidationWarnings,
     };
   }
 }
-

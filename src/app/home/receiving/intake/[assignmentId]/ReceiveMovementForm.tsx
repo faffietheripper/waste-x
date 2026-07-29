@@ -69,6 +69,7 @@ type SubmitFeedback = {
   title: string;
   message: string;
   details?: string[];
+  isExpectedPatRejection?: boolean;
 };
 
 type FormIssue = {
@@ -835,6 +836,11 @@ export default function ReceiveMovementForm({
       const result = await submitReceiveMovementAction({
         assignmentId,
         wasteTrackingId: wasteTrackingId || null,
+        patExpectedErrorScenarioId:
+          isExpectedDefraErrorPatTest &&
+          (activePatScenarioId === "C01" || activePatScenarioId === "H02")
+            ? activePatScenarioId
+            : null,
         receiveMovementInput: buildInput(),
       });
 
@@ -851,13 +857,17 @@ export default function ReceiveMovementForm({
         const isExpectedPatRejection =
           isExpectedDefraErrorPatTest && serverIssues.length > 0;
 
+        setLastSubmissionId(result.submissionId ?? null);
+        setLastSubmissionStatus(result.status ?? null);
+
         setIssues(serverIssues);
         setWarnings(serverWarnings);
 
         setSubmitFeedback({
           type: isExpectedPatRejection ? "warning" : "error",
+          isExpectedPatRejection,
           title: isExpectedPatRejection
-            ? `Expected PAT error received (${activePatScenarioId})`
+            ? `Expected DEFRA rejection recorded (${activePatScenarioId})`
             : "Submission not successful",
           message: isExpectedPatRejection
             ? hasDefraValidationErrors
@@ -2257,38 +2267,83 @@ function FeedbackPanel({
       )}
 
       {issues.length > 0 && (
-        <div className="mt-5 rounded-2xl border border-red-200 bg-white/60 p-5">
+        <div
+          className={`mt-5 rounded-2xl border bg-white/60 p-5 ${
+            feedback?.isExpectedPatRejection
+              ? "border-orange-200"
+              : "border-red-200"
+          }`}
+        >
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm font-semibold text-red-800">
-                Why this did not work
+              <p
+                className={`text-sm font-semibold ${
+                  feedback?.isExpectedPatRejection
+                    ? "text-orange-900"
+                    : "text-red-800"
+                }`}
+              >
+                {feedback?.isExpectedPatRejection
+                  ? "DEFRA returned the expected rejection"
+                  : "Why this did not work"}
               </p>
-              <p className="mt-1 text-sm leading-6 text-red-700/80">
-                Fix these issues and submit again. The matching fields are also
-                highlighted in red.
+
+              <p
+                className={`mt-1 text-sm leading-6 ${
+                  feedback?.isExpectedPatRejection
+                    ? "text-orange-800/80"
+                    : "text-red-700/80"
+                }`}
+              >
+                {feedback?.isExpectedPatRejection
+                  ? "Do not fix this form for this scenario. This error is the evidence for the PAT expected-error test."
+                  : "Fix these issues and submit again. The matching fields are also highlighted in red."}
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={onJumpToFirstIssue}
-              className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
-            >
-              Jump to first issue
-            </button>
+            {!feedback?.isExpectedPatRejection && (
+              <button
+                type="button"
+                onClick={onJumpToFirstIssue}
+                className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
+              >
+                Jump to first issue
+              </button>
+            )}
           </div>
 
-          <ul className="mt-4 space-y-2 text-sm leading-6 text-red-800">
+          <ul
+            className={`mt-4 space-y-2 text-sm leading-6 ${
+              feedback?.isExpectedPatRejection
+                ? "text-orange-900"
+                : "text-red-800"
+            }`}
+          >
             {issues.map((issue, index) => (
               <li
                 key={`${issue.key}-${index}`}
-                className="rounded-2xl bg-red-50 px-4 py-3"
+                className={`rounded-2xl px-4 py-3 ${
+                  feedback?.isExpectedPatRejection
+                    ? "bg-orange-50"
+                    : "bg-red-50"
+                }`}
               >
                 <span className="font-semibold">{issue.section}:</span>{" "}
                 {issue.message}
               </li>
             ))}
           </ul>
+
+          {feedback?.isExpectedPatRejection && (
+            <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm leading-6 text-orange-900">
+              <p className="font-semibold">Use this for the DEFRA PAT table.</p>
+              <p className="mt-1">
+                No WTID is expected. Record the scenario ID, scenario
+                description, EWC code, tested time, and the returned error
+                message.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
