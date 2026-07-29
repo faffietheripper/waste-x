@@ -9,6 +9,9 @@ import { wasteTrackingSubmissions } from "@/db/schema";
 import { getPatResultsAction } from "./actions";
 import PatTrackerClient, {
   type DwtEvidenceSuggestion,
+  type EvidencePartySummary,
+  type EvidenceSummary,
+  type EvidenceWasteItemSummary,
   type PatResult,
 } from "./PatTrackerClient";
 
@@ -22,7 +25,7 @@ export default async function DigitalWasteTrackingPatPage() {
       .limit(250),
   ]);
 
-  const safeResults: PatResult[] = patResults.map((result) => ({
+  const baseResults: PatResult[] = patResults.map((result) => ({
     id: result.id,
     scenarioId: result.scenarioId,
     scenarioOrder: result.scenarioOrder,
@@ -43,6 +46,8 @@ export default async function DigitalWasteTrackingPatPage() {
     errorMessage: result.errorMessage,
     testedAt: toIso(result.testedAt),
 
+    evidenceSummary: null,
+
     defraStatus: result.defraStatus,
     defraSentAt: toIso(result.defraSentAt),
     defraConfirmedAt: toIso(result.defraConfirmedAt),
@@ -53,6 +58,11 @@ export default async function DigitalWasteTrackingPatPage() {
 
     createdAt: toIso(result.createdAt),
     updatedAt: toIso(result.updatedAt),
+  }));
+
+  const safeResults = baseResults.map((result) => ({
+    ...result,
+    evidenceSummary: buildAttachedEvidenceSummary(result, submissions),
   }));
 
   const suggestions = buildEvidenceSuggestions(safeResults, submissions);
@@ -73,8 +83,9 @@ export default async function DigitalWasteTrackingPatPage() {
 
             <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
               Waste X scans existing DWT submissions, suggests which records
-              satisfy DEFRA PAT scenarios, and helps you attach evidence instead
-              of manually filling all 14 scenario rows.
+              satisfy DEFRA PAT scenarios, and now shows the payload-level
+              evidence for multiple waste items, disposal/recovery codes, POPs,
+              hazardous components and broker/dealer details.
             </p>
           </div>
 
@@ -149,10 +160,10 @@ function matchSubmissionToScenario(
 
   if (!isRecord(payload)) return null;
 
-  const wasteItems = getWasteItems(payload);
-  const carrier = isRecord(payload.carrier) ? payload.carrier : {};
+  const evidenceSummary = buildEvidenceSummaryFromPayload(payload);
   const status = getString(getField(submission, "status"));
   const httpStatus = getResponseStatusCode(response);
+
   const isAccepted =
     status === "accepted" ||
     status === "accepted_with_warnings" ||
@@ -163,58 +174,11 @@ function matchSubmissionToScenario(
     status === "failed" ||
     Number(httpStatus) >= 400;
 
-  const ewcCodes = Array.from(
-    new Set(
-      wasteItems.flatMap((item) =>
-        Array.isArray(item.ewcCodes)
-          ? item.ewcCodes.map((code) => String(code))
-          : [],
-      ),
-    ),
-  );
-
-  const disposalCodeCounts = wasteItems.map((item) =>
-    Array.isArray(item.disposalOrRecoveryCodes)
-      ? item.disposalOrRecoveryCodes.length
-      : 0,
-  );
-
-  const totalDisposalCodes = disposalCodeCounts.reduce(
-    (total, value) => total + value,
-    0,
-  );
-
-  const containsPops = wasteItems.some(
-    (item) =>
-      item.containsPops === true ||
-      getArrayLength(item.popsComponents) > 0 ||
-      getArrayLength(getField(item, "pops.components")) > 0,
-  );
-
-  const containsHazardous = wasteItems.some(
-    (item) =>
-      item.containsHazardous === true ||
-      getArrayLength(item.hazardousComponents) > 0 ||
-      getArrayLength(item.hazCodes) > 0,
-  );
-
-  const hazardousComponentCount = wasteItems.reduce((total, item) => {
-    const components = getArrayLength(item.hazardousComponents);
-    const hazCodes = getArrayLength(item.hazCodes);
-
-    return total + Math.max(components, hazCodes);
-  }, 0);
-
-  const popsComponentCount = wasteItems.reduce((total, item) => {
-    return total + getArrayLength(item.popsComponents);
-  }, 0);
-
+  const carrier = isRecord(payload.carrier) ? payload.carrier : {};
   const carrierRegistration = getString(carrier.registrationNumber);
   const carrierNoRegistrationReason = getString(
     carrier.reasonForNoRegistrationNumber,
   );
-
-  const meansOfTransport = getString(carrier.meansOfTransport);
 
   const hazardousConsignmentCode = getString(
     payload.hazardousWasteConsignmentCode,
@@ -225,17 +189,16 @@ function matchSubmissionToScenario(
   );
 
   const matchReasons: string[] = [];
-
   let matched = false;
 
   switch (result.scenarioId) {
     case "R01": {
       matched =
         isAccepted &&
-        wasteItems.length === 1 &&
-        totalDisposalCodes > 0 &&
-        !containsPops &&
-        !containsHazardous;
+        evidenceSummary.wasteItemCount === 1 &&
+        evidenceSummary.disposalOrRecoveryCodes.length > 0 &&
+        !evidenceSummary.containsPops &&
+        !evidenceSummary.containsHazardous;
 
       if (matched) {
         matchReasons.push(
@@ -250,7 +213,7 @@ function matchSubmissionToScenario(
     }
 
     case "R02": {
-      matched = isAccepted && wasteItems.length > 1;
+      matched = isAccepted && evidenceSummary.wasteItemCount > 1;
 
       if (matched) {
         matchReasons.push("Accepted submission", "Multiple waste items");
@@ -260,7 +223,7 @@ function matchSubmissionToScenario(
     }
 
     case "R03": {
-      matched = isAccepted && meansOfTransport === "Road";
+      matched = isAccepted && evidenceSummary.meansOfTransport === "Road";
 
       if (matched) {
         matchReasons.push("Accepted submission", "Means of transport is Road");
@@ -270,7 +233,7 @@ function matchSubmissionToScenario(
     }
 
     case "R04": {
-      matched = isAccepted && totalDisposalCodes === 0;
+      matched = isAccepted && evidenceSummary.disposalOrRecoveryCodes.length === 0;
 
       if (matched) {
         matchReasons.push(
@@ -283,7 +246,7 @@ function matchSubmissionToScenario(
     }
 
     case "R05": {
-      matched = isAccepted && totalDisposalCodes > 1;
+      matched = isAccepted && evidenceSummary.disposalOrRecoveryCodes.length > 1;
 
       if (matched) {
         matchReasons.push(
@@ -296,7 +259,7 @@ function matchSubmissionToScenario(
     }
 
     case "R07": {
-      matched = isAccepted && ewcCodes.length >= 2;
+      matched = isAccepted && evidenceSummary.ewcCodes.length >= 2;
 
       if (matched) {
         matchReasons.push("Accepted submission", "Multiple EWC codes");
@@ -336,13 +299,7 @@ function matchSubmissionToScenario(
     }
 
     case "B01": {
-      matched =
-        isAccepted &&
-        (isRecord(payload.broker) ||
-          isRecord(payload.dealer) ||
-          isRecord(payload.brokerDealer) ||
-          Array.isArray(payload.brokers) ||
-          Array.isArray(payload.dealers));
+      matched = isAccepted && evidenceSummary.brokerDealerIncluded;
 
       if (matched) {
         matchReasons.push("Accepted submission", "Broker/dealer details found");
@@ -352,7 +309,10 @@ function matchSubmissionToScenario(
     }
 
     case "P01": {
-      matched = isAccepted && containsPops && popsComponentCount >= 2;
+      matched =
+        isAccepted &&
+        evidenceSummary.containsPops &&
+        evidenceSummary.popsComponentCount >= 2;
 
       if (matched) {
         matchReasons.push("Accepted submission", "Multiple POPs components");
@@ -362,7 +322,10 @@ function matchSubmissionToScenario(
     }
 
     case "H01": {
-      matched = isAccepted && containsHazardous && hazardousComponentCount >= 2;
+      matched =
+        isAccepted &&
+        evidenceSummary.containsHazardous &&
+        evidenceSummary.hazardousComponentCount >= 2;
 
       if (matched) {
         matchReasons.push(
@@ -377,7 +340,7 @@ function matchSubmissionToScenario(
     case "H02": {
       matched =
         isRejected &&
-        containsHazardous &&
+        evidenceSummary.containsHazardous &&
         !hazardousConsignmentCode &&
         !reasonForNoConsignmentCode;
 
@@ -396,7 +359,7 @@ function matchSubmissionToScenario(
     case "H03": {
       matched =
         isAccepted &&
-        containsHazardous &&
+        evidenceSummary.containsHazardous &&
         !hazardousConsignmentCode &&
         Boolean(reasonForNoConsignmentCode);
 
@@ -413,7 +376,8 @@ function matchSubmissionToScenario(
     }
 
     case "X01": {
-      matched = isAccepted && containsHazardous && containsPops;
+      matched =
+        isAccepted && evidenceSummary.containsHazardous && evidenceSummary.containsPops;
 
       if (matched) {
         matchReasons.push(
@@ -465,12 +429,221 @@ function matchSubmissionToScenario(
       toIso(getField(submission, "lastAttemptedAt")) ??
       toIso(getField(submission, "createdAt")),
 
-    ewcCodes: ewcCodes.join(", "),
+    ewcCodes: evidenceSummary.ewcCodes.join(", "),
     reason: buildSuggestionReason(result.scenarioId, matchReasons),
     errorMessage: result.expectedResult === "error" ? responseError : null,
+    evidenceSummary,
 
     confidence,
     matchReasons,
+  };
+}
+
+/* =========================================================
+   EVIDENCE SUMMARY
+========================================================= */
+
+function buildAttachedEvidenceSummary(
+  result: PatResult,
+  submissions: unknown[],
+): EvidenceSummary | null {
+  if (!result.dwtSubmissionId) return null;
+
+  const matchingSubmission = submissions.find((submission) => {
+    return getString(getField(submission, "id")) === result.dwtSubmissionId;
+  });
+
+  if (!matchingSubmission) return null;
+
+  const payload = parseJsonValue(getField(matchingSubmission, "payloadSnapshot"));
+
+  if (!isRecord(payload)) return null;
+
+  return buildEvidenceSummaryFromPayload(payload);
+}
+
+function buildEvidenceSummaryFromPayload(
+  payload: Record<string, unknown>,
+): EvidenceSummary {
+  const wasteItems = getWasteItems(payload);
+  const carrier = isRecord(payload.carrier) ? payload.carrier : {};
+  const brokerOrDealer = getBrokerOrDealer(payload);
+
+  const wasteItemSummaries = wasteItems.map((item, index) =>
+    buildWasteItemSummary(item, index),
+  );
+
+  const ewcCodes = unique(
+    wasteItemSummaries.flatMap((item) => item.ewcCodes),
+  );
+
+  const disposalOrRecoveryCodes = wasteItemSummaries.flatMap(
+    (item) => item.disposalOrRecoveryCodes,
+  );
+
+  const popsComponents = wasteItemSummaries.flatMap(
+    (item) => item.popsComponents,
+  );
+
+  const hazardousPropertyCodes = unique(
+    wasteItemSummaries.flatMap((item) => item.hazardousPropertyCodes),
+  );
+
+  const hazardousComponents = wasteItemSummaries.flatMap(
+    (item) => item.hazardousComponents,
+  );
+
+  const containsPops = wasteItemSummaries.some(
+    (item) => item.containsPops || item.popsComponents.length > 0,
+  );
+
+  const containsHazardous = wasteItemSummaries.some(
+    (item) =>
+      item.containsHazardous ||
+      item.hazardousPropertyCodes.length > 0 ||
+      item.hazardousComponents.length > 0,
+  );
+
+  return {
+    wasteItemCount: wasteItemSummaries.length,
+    ewcCodes,
+    disposalOrRecoveryCodes,
+    containsPops,
+    popsComponentCount: popsComponents.length,
+    popsComponents,
+    containsHazardous,
+    hazardousComponentCount:
+      hazardousComponents.length > 0
+        ? hazardousComponents.length
+        : hazardousPropertyCodes.length,
+    hazardousPropertyCodes,
+    hazardousComponents,
+    meansOfTransport: getString(carrier.meansOfTransport) || null,
+    carrierRegistrationNumber: getString(carrier.registrationNumber) || null,
+    brokerDealerIncluded: Boolean(brokerOrDealer),
+    brokerOrDealer,
+    wasteItems: wasteItemSummaries,
+  };
+}
+
+function buildWasteItemSummary(
+  item: Record<string, unknown>,
+  index: number,
+): EvidenceWasteItemSummary {
+  const ewcCodes = getStringArray(item.ewcCodes);
+  const disposalOrRecoveryCodes = getDisposalOrRecoveryCodes(item);
+  const popsComponents = getPopsComponents(item);
+  const hazardousPropertyCodes = unique([
+    ...getStringArray(item.hazCodes),
+    ...getStringArray(getField(item, "hazardous.hazCodes")),
+  ]);
+  const hazardousComponents = getHazardousComponents(item);
+
+  return {
+    index: index + 1,
+    ewcCodes,
+    wasteDescription: getString(item.wasteDescription),
+    containerType: getString(item.typeOfContainers) || null,
+    numberOfContainers: getNumberOrNull(item.numberOfContainers),
+    weightLabel: formatWeight(item.weight),
+    disposalOrRecoveryCodes,
+    containsPops:
+      item.containsPops === true ||
+      getString(getField(item, "pops.containsPops")) === "true" ||
+      popsComponents.length > 0,
+    popsComponents,
+    containsHazardous:
+      item.containsHazardous === true ||
+      getString(getField(item, "hazardous.containsHazardous")) === "true" ||
+      hazardousPropertyCodes.length > 0 ||
+      hazardousComponents.length > 0,
+    hazardousPropertyCodes,
+    hazardousComponents,
+  };
+}
+
+function getDisposalOrRecoveryCodes(item: Record<string, unknown>) {
+  const rows = getRecordArray(item.disposalOrRecoveryCodes);
+
+  return rows
+    .map((row) => {
+      const code = getString(row.code);
+      const weight = formatWeight(row.weight);
+
+      if (!code && !weight) return "";
+      if (!weight) return code;
+      if (!code) return weight;
+
+      return `${code} (${weight})`;
+    })
+    .filter(Boolean);
+}
+
+function getPopsComponents(item: Record<string, unknown>) {
+  const rows = [
+    ...getRecordArray(item.popsComponents),
+    ...getRecordArray(getField(item, "pops.components")),
+  ];
+
+  return rows
+    .map((row) => {
+      const code = getString(row.code) || getString(row.name);
+      const concentration = getString(row.concentration);
+
+      if (!code && !concentration) return "";
+      if (!concentration) return code;
+      if (!code) return concentration;
+
+      return `${code} (${concentration})`;
+    })
+    .filter(Boolean);
+}
+
+function getHazardousComponents(item: Record<string, unknown>) {
+  const rows = [
+    ...getRecordArray(item.hazardousComponents),
+    ...getRecordArray(getField(item, "hazardous.components")),
+  ];
+
+  return rows
+    .map((row) => {
+      const name = getString(row.name) || getString(row.code);
+      const concentration = getString(row.concentration);
+
+      if (!name && !concentration) return "";
+      if (!concentration) return name;
+      if (!name) return concentration;
+
+      return `${name} (${concentration})`;
+    })
+    .filter(Boolean);
+}
+
+function getBrokerOrDealer(
+  payload: Record<string, unknown>,
+): EvidencePartySummary | null {
+  const direct = firstRecord(
+    payload.brokerOrDealer,
+    payload.brokerDealer,
+    payload.broker,
+    payload.dealer,
+  );
+
+  const fromArray =
+    getRecordArray(payload.brokers)[0] ?? getRecordArray(payload.dealers)[0];
+
+  const party = direct ?? fromArray;
+
+  if (!party) return null;
+
+  const address = isRecord(party.address) ? party.address : {};
+
+  return {
+    organisationName: getString(party.organisationName) || null,
+    registrationNumber: getString(party.registrationNumber) || null,
+    postcode: getString(address.postcode) || getString(party.postcode) || null,
+    emailAddress: getString(party.emailAddress) || null,
+    phoneNumber: getString(party.phoneNumber) || null,
   };
 }
 
@@ -500,6 +673,48 @@ function getWasteItems(payload: Record<string, unknown>): Record<string, unknown
   if (!Array.isArray(value)) return [];
 
   return value.filter(isRecord);
+}
+
+function getRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function getStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (typeof item === "string" || typeof item === "number") {
+        return String(item).trim();
+      }
+
+      if (isRecord(item)) {
+        return getString(item.code) || getString(item.name) || getString(item.value);
+      }
+
+      return "";
+    })
+    .filter(Boolean);
+}
+
+function firstRecord(...values: unknown[]) {
+  return values.find(isRecord) as Record<string, unknown> | undefined;
+}
+
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function formatWeight(value: unknown) {
+  if (!isRecord(value)) return null;
+
+  const amount = getString(value.amount);
+  const metric = getString(value.metric);
+  const isEstimate = value.isEstimate === true;
+
+  if (!amount && !metric) return null;
+
+  return `${amount || "—"} ${metric || ""}${isEstimate ? " estimated" : ""}`.trim();
 }
 
 function getArrayLength(value: unknown) {

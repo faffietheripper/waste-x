@@ -14,6 +14,47 @@ import {
   type PatActionState,
 } from "./pat-action-state";
 
+export type EvidenceWasteItemSummary = {
+  index: number;
+  ewcCodes: string[];
+  wasteDescription: string;
+  containerType: string | null;
+  numberOfContainers: number | null;
+  weightLabel: string | null;
+  disposalOrRecoveryCodes: string[];
+  containsPops: boolean;
+  popsComponents: string[];
+  containsHazardous: boolean;
+  hazardousPropertyCodes: string[];
+  hazardousComponents: string[];
+};
+
+export type EvidencePartySummary = {
+  organisationName: string | null;
+  registrationNumber: string | null;
+  postcode: string | null;
+  emailAddress: string | null;
+  phoneNumber: string | null;
+};
+
+export type EvidenceSummary = {
+  wasteItemCount: number;
+  ewcCodes: string[];
+  disposalOrRecoveryCodes: string[];
+  containsPops: boolean;
+  popsComponentCount: number;
+  popsComponents: string[];
+  containsHazardous: boolean;
+  hazardousComponentCount: number;
+  hazardousPropertyCodes: string[];
+  hazardousComponents: string[];
+  meansOfTransport: string | null;
+  carrierRegistrationNumber: string | null;
+  brokerDealerIncluded: boolean;
+  brokerOrDealer: EvidencePartySummary | null;
+  wasteItems: EvidenceWasteItemSummary[];
+};
+
 export type PatResult = {
   id: string;
   scenarioId: string;
@@ -34,6 +75,8 @@ export type PatResult = {
   httpStatus: number | null;
   errorMessage: string | null;
   testedAt: string | null;
+
+  evidenceSummary: EvidenceSummary | null;
 
   defraStatus:
     | "not_started"
@@ -75,6 +118,7 @@ export type DwtEvidenceSuggestion = {
   ewcCodes: string;
   reason: string;
   errorMessage: string | null;
+  evidenceSummary: EvidenceSummary | null;
 
   confidence: "high" | "medium" | "low";
   matchReasons: string[];
@@ -505,6 +549,10 @@ function AttachedEvidencePanel({ result }: { result: PatResult }) {
         />
       </div>
 
+      {result.evidenceSummary && (
+        <EvidenceBreakdownPanel evidenceSummary={result.evidenceSummary} />
+      )}
+
       {result.reason && (
         <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
@@ -516,6 +564,7 @@ function AttachedEvidencePanel({ result }: { result: PatResult }) {
     </section>
   );
 }
+
 
 function SuggestedEvidencePanel({
   suggestions,
@@ -548,7 +597,7 @@ function SuggestionCard({ suggestion }: { suggestion: DwtEvidenceSuggestion }) {
   return (
     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap gap-2">
             <ConfidenceBadge confidence={suggestion.confidence} />
 
@@ -561,6 +610,13 @@ function SuggestionCard({ suggestion }: { suggestion: DwtEvidenceSuggestion }) {
                 HTTP {suggestion.httpStatus}
               </span>
             )}
+
+            {suggestion.evidenceSummary?.wasteItemCount ? (
+              <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
+                {suggestion.evidenceSummary.wasteItemCount} waste item
+                {suggestion.evidenceSummary.wasteItemCount === 1 ? "" : "s"}
+              </span>
+            ) : null}
           </div>
 
           <p className="mt-3 text-sm font-bold text-gray-950">
@@ -579,6 +635,13 @@ function SuggestionCard({ suggestion }: { suggestion: DwtEvidenceSuggestion }) {
               <li key={reason}>✓ {reason}</li>
             ))}
           </ul>
+
+          {suggestion.evidenceSummary && (
+            <EvidenceBreakdownPanel
+              evidenceSummary={suggestion.evidenceSummary}
+              compact
+            />
+          )}
         </div>
 
         <AttachSuggestionForm suggestion={suggestion} />
@@ -586,6 +649,157 @@ function SuggestionCard({ suggestion }: { suggestion: DwtEvidenceSuggestion }) {
     </div>
   );
 }
+
+function EvidenceBreakdownPanel({
+  evidenceSummary,
+  compact = false,
+}: {
+  evidenceSummary: EvidenceSummary;
+  compact?: boolean;
+}) {
+  return (
+    <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+            Payload evidence breakdown
+          </p>
+
+          <p className="mt-2 text-sm font-semibold text-gray-950">
+            {evidenceSummary.wasteItemCount} waste item
+            {evidenceSummary.wasteItemCount === 1 ? "" : "s"} in the submitted
+            payload
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {evidenceSummary.brokerDealerIncluded && (
+            <MiniBadge>Broker/dealer included</MiniBadge>
+          )}
+
+          {evidenceSummary.containsPops && (
+            <MiniBadge>{evidenceSummary.popsComponentCount} POPs</MiniBadge>
+          )}
+
+          {evidenceSummary.containsHazardous && (
+            <MiniBadge>
+              {evidenceSummary.hazardousComponentCount} hazardous
+            </MiniBadge>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <EvidenceItem
+          label="All EWC codes"
+          value={joinEvidenceValues(evidenceSummary.ewcCodes)}
+        />
+
+        <EvidenceItem
+          label="Disposal/recovery"
+          value={joinEvidenceValues(evidenceSummary.disposalOrRecoveryCodes)}
+        />
+
+        <EvidenceItem
+          label="POPs components"
+          value={joinEvidenceValues(evidenceSummary.popsComponents)}
+        />
+
+        <EvidenceItem
+          label="Hazardous evidence"
+          value={joinEvidenceValues([
+            ...evidenceSummary.hazardousPropertyCodes,
+            ...evidenceSummary.hazardousComponents,
+          ])}
+        />
+
+        <EvidenceItem
+          label="Transport"
+          value={evidenceSummary.meansOfTransport ?? "—"}
+        />
+
+        <EvidenceItem
+          label="Carrier registration"
+          value={evidenceSummary.carrierRegistrationNumber ?? "—"}
+        />
+
+        <EvidenceItem
+          label="Broker/dealer"
+          value={
+            evidenceSummary.brokerOrDealer?.organisationName ??
+            (evidenceSummary.brokerDealerIncluded ? "Included" : "—")
+          }
+        />
+
+        <EvidenceItem
+          label="Broker/dealer reg"
+          value={evidenceSummary.brokerOrDealer?.registrationNumber ?? "—"}
+        />
+      </div>
+
+      {!compact && evidenceSummary.wasteItems.length > 0 && (
+        <div className="mt-4 space-y-3">
+          {evidenceSummary.wasteItems.map((item) => (
+            <div
+              key={item.index}
+              className="rounded-2xl border border-gray-200 bg-gray-50 p-4"
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+                Waste item {item.index}
+              </p>
+
+              <p className="mt-2 text-sm font-semibold text-gray-950">
+                {item.wasteDescription || "No description captured"}
+              </p>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <EvidenceItem label="EWC" value={joinEvidenceValues(item.ewcCodes)} />
+                <EvidenceItem
+                  label="Container"
+                  value={
+                    [item.numberOfContainers, item.containerType]
+                      .filter((value) => value !== null && value !== "")
+                      .join(" × ") || "—"
+                  }
+                />
+                <EvidenceItem label="Weight" value={item.weightLabel ?? "—"} />
+                <EvidenceItem
+                  label="D/R codes"
+                  value={joinEvidenceValues(item.disposalOrRecoveryCodes)}
+                />
+                <EvidenceItem
+                  label="POPs"
+                  value={joinEvidenceValues(item.popsComponents)}
+                />
+                <EvidenceItem
+                  label="Haz codes"
+                  value={joinEvidenceValues(item.hazardousPropertyCodes)}
+                />
+                <EvidenceItem
+                  label="Haz components"
+                  value={joinEvidenceValues(item.hazardousComponents)}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
+      {children}
+    </span>
+  );
+}
+
+function joinEvidenceValues(values: string[]) {
+  return values.length > 0 ? values.join(", ") : "—";
+}
+
 
 function MissingScenarioPanel({ result }: { result: PatResult }) {
   return (
@@ -1274,6 +1488,9 @@ function buildDefraEmailTable(results: PatResult[]) {
 
       const details = [
         result.reason,
+        result.evidenceSummary
+          ? buildEmailEvidenceSummary(result.evidenceSummary)
+          : null,
         result.additionalDetails,
         result.unableToRunReason
           ? `Unable to run: ${result.unableToRunReason}`
@@ -1283,13 +1500,39 @@ function buildDefraEmailTable(results: PatResult[]) {
         .join(" ");
 
       return `${result.scenarioId} | ${result.scenarioDescription} | ${wtid} | ${
-        result.ewcCodes || "—"
+        result.ewcCodes || result.evidenceSummary?.ewcCodes.join(", ") || "—"
       } | ${details || "—"}`;
     })
     .join("\n");
 
   return `${header}\n${divider}\n${body}`;
 }
+
+function buildEmailEvidenceSummary(summary: EvidenceSummary) {
+  const parts = [
+    `${summary.wasteItemCount} waste item${summary.wasteItemCount === 1 ? "" : "s"}`,
+    summary.disposalOrRecoveryCodes.length > 0
+      ? `D/R codes: ${summary.disposalOrRecoveryCodes.join(", ")}`
+      : null,
+    summary.popsComponents.length > 0
+      ? `POPs: ${summary.popsComponents.join(", ")}`
+      : null,
+    summary.hazardousPropertyCodes.length > 0
+      ? `Hazard properties: ${summary.hazardousPropertyCodes.join(", ")}`
+      : null,
+    summary.hazardousComponents.length > 0
+      ? `Haz components: ${summary.hazardousComponents.join(", ")}`
+      : null,
+    summary.brokerDealerIncluded
+      ? `Broker/dealer: ${
+          summary.brokerOrDealer?.organisationName ?? "included"
+        }`
+      : null,
+  ].filter(Boolean);
+
+  return parts.join(". ");
+}
+
 
 function scenarioRequirement(scenarioId: string) {
   const requirements: Record<string, string> = {
