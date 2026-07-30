@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { and, eq, isNull, or } from "drizzle-orm";
-
+import { requireActiveSession } from "@/modules/auth/core/requireActiveSession";
 import { auth, signOut } from "@/auth";
 import { database } from "@/db/database";
 import { supportTickets, users } from "@/db/schema";
@@ -20,6 +20,7 @@ export default async function AdminLayout({
 }: {
   children: ReactNode;
 }) {
+    await requireActiveSession();
   const session = await auth();
 
   if (!session?.user?.id) {

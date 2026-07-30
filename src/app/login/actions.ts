@@ -25,6 +25,7 @@ export async function getUserFromDb(email: string, password?: string) {
 
   if (password) {
     const isValid = await bcrypt.compare(password, user.passwordHash!);
+
     if (!isValid) {
       return { success: false, message: "Incorrect password." };
     }
@@ -43,10 +44,6 @@ export async function getUserFromDb(email: string, password?: string) {
 
 export const login = withErrorHandling(
   async ({ email, password }: { email: string; password: string }) => {
-    /* ===============================
-       VALIDATION (UX SAFE)
-    ============================== */
-
     const parsed = LoginSchema.safeParse({ email, password });
 
     if (!parsed.success) {
@@ -56,14 +53,32 @@ export const login = withErrorHandling(
       };
     }
 
-    /* ===============================
-       AUTH ATTEMPT
-    ============================== */
+    const normalizedEmail = parsed.data.email.toLowerCase().trim();
+
+    const userResult = await getUserFromDb(normalizedEmail, parsed.data.password);
+
+    if (!userResult.success || !userResult.data) {
+      return {
+        success: false,
+        message: userResult.message || "Invalid email or password.",
+      };
+    }
+
+    const activeSessionToken = crypto.randomUUID();
+
+    await database
+      .update(users)
+      .set({
+        activeSessionToken,
+        activeSessionStartedAt: new Date(),
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.id, userResult.data.id));
 
     const res = await signIn("credentials", {
       redirect: false,
-      email,
-      password,
+      email: normalizedEmail,
+      password: parsed.data.password,
     });
 
     if (!res || res.error) {
@@ -81,6 +96,6 @@ export const login = withErrorHandling(
   {
     actionName: "login",
     code: ERROR_CODES.AUTH_INVALID_TOKEN,
-    severity: "high", // auth = critical system
+    severity: "high",
   },
 );

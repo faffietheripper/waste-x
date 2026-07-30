@@ -7,10 +7,12 @@ import { database } from "@/db/database";
 import { userProfiles, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import SystemNav from "@/components/app/Navigation/SystemNav";
+import { requireActiveSession } from "@/modules/auth/core/requireActiveSession";
 
 export default async function Layout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+    await requireActiveSession();
   const session = await auth();
 
   /* ===============================

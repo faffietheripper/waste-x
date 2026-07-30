@@ -264,6 +264,10 @@ export const users = pgTable(
 
     departmentId: text("departmentId"),
 
+    activeSessionToken: text("activeSessionToken"),
+activeSessionStartedAt: timestamp("activeSessionStartedAt"),
+lastSeenAt: timestamp("lastSeenAt"),
+
     role: text("role")
       .$type<
         "administrator" | "employee" | "seniorManagement" | "platform_admin"
@@ -288,6 +292,7 @@ export const users = pgTable(
     orgIdx: index("user_org_idx").on(table.organisationId),
     roleIdx: index("user_role_idx").on(table.role),
   }),
+  
 );
 
 /* =========================================================
