@@ -31,7 +31,7 @@ export default async function CreateWasteListing() {
     context.user.role === "seniorManagement";
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] px-10 py-32">
+    <main className="min-h-screen bg-[#f7f3ed] py-32">
       <div className="space-y-8">
         {/* HEADER */}
         <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">

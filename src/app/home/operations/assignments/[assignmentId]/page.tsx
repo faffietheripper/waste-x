@@ -253,6 +253,27 @@ function getWorkflowMessage({
     return "The manager has confirmed receipt and this assignment is complete. If needed, review or update the Digital Waste Tracking receive movement record.";
   }
 
+
+  if (
+    managerAccepted &&
+    !carrierAssigned &&
+    ["pending", "accepted"].includes(assignment.status)
+  ) {
+    if (perspective === "manager") {
+      return "You have accepted this job. Assign a carrier next so the collection workflow can begin.";
+    }
+
+    if (perspective === "generator") {
+      return "The manager has accepted this job. Waiting for the manager to assign a carrier.";
+    }
+
+    if (perspective === "carrier") {
+      return "This job is not ready for carrier response yet. A carrier still needs to be assigned.";
+    }
+
+    return "Manager accepted. Carrier assignment is still required.";
+  }
+
   if (assignment.status === "in_progress" || collectionVerified) {
     if (perspective === "manager") {
       return "The carrier has verified collection. You can confirm operational receipt, then submit or review the Digital Waste Tracking receive movement.";
@@ -507,12 +528,14 @@ export default async function AssignmentDetailPage({
   /*
     Manager assigns carrier after manager has accepted.
   */
-  const managerCanAssignCarrier =
+  const managerNeedsCarrier =
     isManagerForAssignment &&
-    canAssignCarrier &&
-    assignment.status === "pending" &&
+    !jobIsClosed &&
     Boolean(assignment.managerAcceptedAt) &&
-    !assignment.carrierOrganisationId;
+    !assignment.carrierOrganisationId &&
+    ["pending", "accepted"].includes(assignment.status);
+
+  const managerCanAssignCarrier = managerNeedsCarrier && canAssignCarrier;
 
   /*
     Carrier verifies collection before collection has been recorded.
@@ -587,6 +610,7 @@ export default async function AssignmentDetailPage({
 
   const showNoActions =
     !showAssignmentActions &&
+    !managerNeedsCarrier &&
     !managerCanAssignCarrier &&
     !carrierCanVerifyCollection &&
     !carrierVerifyBlockedByMissingCode &&
@@ -715,8 +739,28 @@ export default async function AssignmentDetailPage({
           </div>
         </section>
 
+        {managerNeedsCarrier && (
+          <ManagerNeedsCarrierPanel
+            assignmentId={assignment.id}
+            listingId={assignment.listingId}
+            canAssignCarrier={managerCanAssignCarrier}
+          />
+        )}
+
         {/* PERMISSION / ACTION SUMMARY */}
-        <section className="grid grid-cols-1 gap-5 md:grid-cols-5">
+        <section className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-6">
+          <PermissionCard
+            label="Assign Carrier"
+            allowed={managerCanAssignCarrier}
+            note={
+              managerNeedsCarrier
+                ? canAssignCarrier
+                  ? "Manager accepted — carrier needed"
+                  : "No assign-carrier permission"
+                : "Only needed after manager accepts"
+            }
+          />
+
           <PermissionCard
             label="Verify Collection"
             allowed={carrierCanVerifyCollection}
@@ -1132,12 +1176,26 @@ export default async function AssignmentDetailPage({
               />
             )}
 
-            {managerCanAssignCarrier && (
-              <AssignCarrierPanel
-                assignmentId={assignment.id}
-                carriers={carrierOptions}
-                currentOrganisationId={organisationId}
-              />
+            {managerNeedsCarrier && (
+              <div id="assign-carrier" className="scroll-mt-32">
+                {managerCanAssignCarrier ? (
+                  <AssignCarrierPanel
+                    assignmentId={assignment.id}
+                    carriers={carrierOptions}
+                    currentOrganisationId={organisationId}
+                  />
+                ) : (
+                  <div className="rounded-3xl border border-orange-200 bg-orange-50 p-6 text-sm text-orange-900 shadow-sm">
+                    <p className="font-semibold">Carrier assignment required</p>
+
+                    <p className="mt-2 leading-6">
+                      This job has been accepted by the manager, but your active
+                      department does not currently have permission to assign the
+                      carrier.
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
 
             {carrierCanVerifyCollection && (
@@ -1281,6 +1339,56 @@ export default async function AssignmentDetailPage({
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
+
+function ManagerNeedsCarrierPanel({
+  assignmentId,
+  listingId,
+  canAssignCarrier,
+}: {
+  assignmentId: string;
+  listingId: number | string;
+  canAssignCarrier: boolean;
+}) {
+  return (
+    <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.25em] text-orange-700">
+            Next Step Required
+          </p>
+
+          <h2 className="mt-2 text-xl font-semibold text-black">
+            Manager accepted — assign a carrier
+          </h2>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-orange-900/75">
+            This job has been accepted, but it cannot move into collection until
+            a carrier is assigned. Assign the carrier here, or open the listing
+            record if you want to review the original marketplace details.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row lg:flex-col xl:flex-row">
+          {canAssignCarrier && (
+            <Link
+              href={`/home/operations/assignments/${assignmentId}#assign-carrier`}
+              className="inline-flex justify-center rounded-full bg-black px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+            >
+              Assign carrier here →
+            </Link>
+          )}
+
+          <Link
+            href={`/home/marketplace/browse/${listingId}`}
+            className="inline-flex justify-center rounded-full border border-orange-300 bg-white px-5 py-3 text-sm font-semibold text-orange-800 transition hover:border-orange-500 hover:bg-orange-100"
+          >
+            Open listing →
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function HeaderPill({ children }: { children: React.ReactNode }) {
   return (
