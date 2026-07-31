@@ -1,13 +1,12 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users, carrierAssignments, organisations } from "@/db/schema";
+import { users, carrierAssignments } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 
 import PlaceBid from "@/components/app/MarketPlace/PlaceBid";
 import InternalAssignPanel from "@/components/app/Listings/InternalAssignPanel";
 import BidWinner from "@/components/app/BidWinner";
 import AssignListingButton from "@/components/app/Listings/AssignListingButton";
-import AssignCarrierPanel from "@/components/app/Assignments/AssignCarrierPanel";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -37,12 +36,6 @@ import {
 /* =========================================================
    TYPES
 ========================================================= */
-
-type CarrierOption = {
-  id: string;
-  teamName: string;
-  capabilities: Capability[];
-};
 
 type ListingPageParams = {
   params: {
@@ -408,21 +401,13 @@ export default async function ListingPage({ params }: ListingPageParams) {
     listing.marketMode === "internal_only" &&
     !isAssignmentLocked;
 
-  const [
-    organisation,
-    bids,
-    winningBidResult,
-    internalCarriers,
-    allOrganisations,
-  ] = await Promise.all([
-    getOrganisationById(listing.organisationId),
-    getBidsForListing(listing.id),
-    getWinningBid(listingId),
-    shouldLoadInternalCarriers ? getCarrierDepartments(userOrg) : [],
-    managerCanAssignExternalCarrier
-      ? database.select().from(organisations)
-      : [],
-  ]);
+  const [organisation, bids, winningBidResult, internalCarriers] =
+    await Promise.all([
+      getOrganisationById(listing.organisationId),
+      getBidsForListing(listing.id),
+      getWinningBid(listingId),
+      shouldLoadInternalCarriers ? getCarrierDepartments(userOrg) : [],
+    ]);
 
   const { winningBid } = winningBidResult;
 
@@ -432,23 +417,6 @@ export default async function ListingPage({ params }: ListingPageParams) {
     The canonical winning bid id is already stored on the listing snapshot.
   */
   const winningBidId = listing.winnerBidId ?? null;
-
-  const externalCarrierOptions: CarrierOption[] = allOrganisations
-    .filter((organisationRecord) => {
-      const organisationCapabilities =
-        (organisationRecord.capabilities as Capability[] | null) ?? [];
-
-      return (
-        organisationRecord.status === "ACTIVE" &&
-        organisationCapabilities.includes("carrier")
-      );
-    })
-    .map((organisationRecord) => ({
-      id: organisationRecord.id,
-      teamName: organisationRecord.teamName ?? "Unnamed organisation",
-      capabilities:
-        (organisationRecord.capabilities as Capability[] | null) ?? [],
-    }));
 
   /* =========================================================
      STATE LOGIC
@@ -491,7 +459,7 @@ export default async function ListingPage({ params }: ListingPageParams) {
 
   const showInternalAssignmentPanel = isInternal && isOwner;
 
-  const showManagerCarrierAssignmentPanel =
+  const showManagerCarrierHubPrompt =
     managerCanAssignExternalCarrier && Boolean(existingAssignment);
 
   const showManagerCarrierWaitingPanel =
@@ -637,8 +605,9 @@ export default async function ListingPage({ params }: ListingPageParams) {
 
             {isExternalManagerWorkflow && (
               <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
-                You are managing this external marketplace job. Once accepted,
-                assign a carrier to complete the collection stage.
+                You are managing this external marketplace job. Carrier selection
+                is handled in the Carrier Hub so you can compare carrier details
+                before assigning collection.
               </div>
             )}
 
@@ -776,31 +745,30 @@ export default async function ListingPage({ params }: ListingPageParams) {
             RIGHT SIDEBAR
         ===================================================== */}
         <aside className="sticky top-32 col-span-2 h-fit space-y-6">
-          {/* MANAGER CARRIER ASSIGNMENT FOR EXTERNAL MARKETPLACE JOB */}
-          {showManagerCarrierAssignmentPanel && existingAssignment && (
-            <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
-              <div className="mb-5">
-                <h2 className="text-xl font-semibold text-black">
-                  Assign Carrier
-                </h2>
+          {/* MANAGER CARRIER HUB PROMPT FOR EXTERNAL MARKETPLACE JOB */}
+          {showManagerCarrierHubPrompt && existingAssignment && (
+            <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+              <p className="text-xs uppercase tracking-[0.25em] text-orange-700">
+                Carrier Assignment
+              </p>
 
-                <p className="mt-1 text-sm leading-6 text-black/50">
-                  You have accepted this external marketplace job. Choose the
-                  carrier who will collect and move the waste. This can be your
-                  own organisation if it has carrier capability, or another
-                  active carrier on Waste X.
-                </p>
-              </div>
+              <h2 className="mt-3 text-xl font-semibold text-black">
+                Choose carrier in Carrier Hub
+              </h2>
 
-              {externalCarrierOptions.length > 0 ? (
-                <AssignCarrierPanel
-                  assignmentId={existingAssignment.id}
-                  carriers={externalCarrierOptions}
-                  currentOrganisationId={userOrg}
-                />
-              ) : (
-                <DepartmentBlockedNotice message="No active carrier organisations are available to assign yet." />
-              )}
+              <p className="mt-2 text-sm leading-6 text-orange-900/75">
+                This listing has entered the assignment workflow. Carrier
+                selection is now handled in the Carrier Hub so you can compare
+                carrier workload, incidents, contact details and recommendation
+                signals before assigning the job.
+              </p>
+
+              <Link
+                href={`/home/operations/carriers?assignmentId=${existingAssignment.id}`}
+                className="mt-5 flex w-full justify-center rounded-2xl bg-black px-5 py-4 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+              >
+                Open Carrier Hub →
+              </Link>
             </section>
           )}
 
@@ -812,9 +780,9 @@ export default async function ListingPage({ params }: ListingPageParams) {
               </h2>
 
               <p className="mt-2 text-sm leading-6 text-orange-800">
-                This external job is assigned to your manager organisation, but
-                carrier assignment will unlock after the manager acceptance step
-                is completed.
+                This external job is assigned to your manager organisation. Once
+                the manager acceptance step is completed, carrier selection will
+                unlock in the Carrier Hub.
               </p>
 
               <div className="mt-5 space-y-2 text-sm text-orange-800">
@@ -910,8 +878,20 @@ export default async function ListingPage({ params }: ListingPageParams) {
 
               {isExternalManagerWorkflow && (
                 <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
-                  Your organisation won this marketplace job. Use the carrier
-                  assignment panel above to choose who will collect the waste.
+                  <p>
+                    Your organisation won this marketplace job. Carrier selection
+                    happens in the Carrier Hub so you can compare carriers before
+                    assigning collection.
+                  </p>
+
+                  {existingAssignment && managerCanAssignExternalCarrier && (
+                    <Link
+                      href={`/home/operations/carriers?assignmentId=${existingAssignment.id}`}
+                      className="mt-3 inline-flex rounded-full bg-black px-4 py-2 text-xs font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                    >
+                      Open Carrier Hub →
+                    </Link>
+                  )}
                 </div>
               )}
 

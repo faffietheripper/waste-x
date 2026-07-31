@@ -1,17 +1,28 @@
 import Link from "next/link";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
-import { wasteTrackingSubmissions } from "@/db/schema";
+import { organisations, wasteTrackingSubmissions } from "@/db/schema";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 
 import { getPlatformDashboardStats, getRecentAuditEvents } from "./actions";
+
+const ORGANISATION_APPROVAL_ROUTE = "/admin/organisations";
 
 export default async function AdminDashboard() {
   await requirePlatformAdmin();
 
   const stats = await getPlatformDashboardStats();
   const auditEvents = await getRecentAuditEvents();
+
+  const organisationsAwaitingApproval =
+    await database.query.organisations.findMany({
+      where: eq(organisations.status, "PENDING"),
+      orderBy: [desc(organisations.createdAt)],
+      limit: 5,
+    });
+
+  const pendingOrganisationCount = organisationsAwaitingApproval.length;
 
   const recentDwtSubmissions =
     await database.query.wasteTrackingSubmissions.findMany({
@@ -96,12 +107,25 @@ export default async function AdminDashboard() {
         </div>
       </section>
 
+      {/* ================= PLATFORM ALERTS ================= */}
+      {pendingOrganisationCount > 0 && (
+        <OrganisationApprovalAlert
+          organisationsAwaitingApproval={organisationsAwaitingApproval}
+          pendingOrganisationCount={pendingOrganisationCount}
+        />
+      )}
+
       {/* ================= TOP KPIS ================= */}
       <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           title="Organisations"
           value={stats.totals.organisations}
-          helper="Total registered organisations"
+          helper={
+            pendingOrganisationCount > 0
+              ? `${pendingOrganisationCount} awaiting approval`
+              : "Total registered organisations"
+          }
+          warning={pendingOrganisationCount > 0}
         />
 
         <KpiCard
@@ -251,6 +275,11 @@ export default async function AdminDashboard() {
           actionLabel="Compliance audit"
         >
           <div className="space-y-3">
+            <StatusRow
+              label="Organisations pending approval"
+              value={pendingOrganisationCount}
+              warning={pendingOrganisationCount > 0}
+            />
             <StatusRow label="Open incidents" value={stats.totals.openIncidents} />
             <StatusRow label="Under review" value={stats.risk.underReview} />
             <StatusRow
@@ -357,24 +386,168 @@ export default async function AdminDashboard() {
    COMPONENTS
 ========================================================= */
 
+function OrganisationApprovalAlert({
+  organisationsAwaitingApproval,
+  pendingOrganisationCount,
+}: {
+  organisationsAwaitingApproval: any[];
+  pendingOrganisationCount: number;
+}) {
+  return (
+    <section className="overflow-hidden rounded-[1.75rem] border border-orange-200 bg-orange-50 shadow-sm">
+      <div className="border-b border-orange-200 bg-orange-100/60 px-6 py-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.22em] text-orange-700">
+              New Organisation Alert
+            </p>
+
+            <h2 className="mt-2 text-xl font-bold text-gray-950">
+              {pendingOrganisationCount === 1
+                ? "1 organisation needs approval"
+                : `${pendingOrganisationCount} organisations need approval`}
+            </h2>
+
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-orange-900/75">
+              A new organisation has requested access to Waste X. Review the
+              organisation details and approve or reject the onboarding request.
+            </p>
+          </div>
+
+          <Link
+            href={ORGANISATION_APPROVAL_ROUTE}
+            className="inline-flex justify-center rounded-full bg-gray-950 px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+          >
+            Review approvals →
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+        {organisationsAwaitingApproval.map((organisation) => (
+          <PendingOrganisationCard
+            key={organisation.id}
+            organisation={organisation}
+          />
+        ))}
+      </div>
+
+      {pendingOrganisationCount >= 5 && (
+        <div className="border-t border-orange-200 px-6 py-4">
+          <p className="text-sm leading-6 text-orange-900/70">
+            Showing the latest 5 pending organisations. Open approvals to review
+            all pending requests.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PendingOrganisationCard({ organisation }: { organisation: any }) {
+  const capabilities = Array.isArray(organisation.capabilities)
+    ? organisation.capabilities
+    : [];
+
+  return (
+    <div className="rounded-2xl border border-orange-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-gray-950">
+            {organisation.teamName ?? "Unnamed organisation"}
+          </p>
+
+          {organisation.emailAddress && (
+            <p className="mt-1 truncate text-xs text-gray-500">
+              {organisation.emailAddress}
+            </p>
+          )}
+        </div>
+
+        <span className="shrink-0 rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-orange-700">
+          Pending
+        </span>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {capabilities.length > 0 ? (
+          capabilities.map((capability: string) => (
+            <span
+              key={capability}
+              className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-semibold text-gray-600"
+            >
+              {formatStatus(capability)}
+            </span>
+          ))
+        ) : (
+          <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-semibold text-gray-400">
+            No capabilities selected
+          </span>
+        )}
+      </div>
+
+      <div className="mt-4 grid gap-2 text-xs text-gray-500">
+        {organisation.telephone && (
+          <p>
+            Phone:{" "}
+            <span className="font-medium text-gray-700">
+              {organisation.telephone}
+            </span>
+          </p>
+        )}
+
+        {organisation.industry && (
+          <p>
+            Industry:{" "}
+            <span className="font-medium text-gray-700">
+              {organisation.industry}
+            </span>
+          </p>
+        )}
+
+        <p>
+          Requested:{" "}
+          <span className="font-medium text-gray-700">
+            {formatDate(organisation.createdAt)}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function KpiCard({
   title,
   value,
   helper,
+  warning = false,
 }: {
   title: string;
   value: number | string;
   helper?: string;
+  warning?: boolean;
 }) {
   return (
-    <div className="rounded-[1.5rem] border border-gray-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+    <div
+      className={`rounded-[1.5rem] border bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+        warning ? "border-orange-200" : "border-gray-200"
+      }`}
+    >
       <p className="text-sm font-medium text-gray-500">{title}</p>
 
       <p className="mt-3 text-3xl font-bold tracking-tight text-gray-950">
         {value}
       </p>
 
-      {helper && <p className="mt-2 text-xs leading-5 text-gray-400">{helper}</p>}
+      {helper && (
+        <p
+          className={`mt-2 text-xs leading-5 ${
+            warning ? "font-semibold text-orange-700" : "text-gray-400"
+          }`}
+        >
+          {helper}
+        </p>
+      )}
     </div>
   );
 }
@@ -455,14 +628,33 @@ function Stat({
 function StatusRow({
   label,
   value,
+  warning = false,
 }: {
   label: string;
   value: number | string;
+  warning?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
-      <span className="text-sm text-gray-600">{label}</span>
-      <span className="text-sm font-bold text-gray-950">{value}</span>
+    <div
+      className={`flex items-center justify-between gap-4 rounded-2xl border px-4 py-3 ${
+        warning
+          ? "border-orange-200 bg-orange-50"
+          : "border-gray-200 bg-gray-50"
+      }`}
+    >
+      <span
+        className={`text-sm ${warning ? "font-semibold text-orange-800" : "text-gray-600"}`}
+      >
+        {label}
+      </span>
+
+      <span
+        className={`text-sm font-bold ${
+          warning ? "text-orange-900" : "text-gray-950"
+        }`}
+      >
+        {value}
+      </span>
     </div>
   );
 }
@@ -493,15 +685,15 @@ function formatStatus(status: string | null | undefined) {
 
   return status
     .split("_")
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
 }
 
-function formatDate(value: Date | null | undefined) {
+function formatDate(value: Date | string | null | undefined) {
   if (!value) return "Not recorded";
 
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(value);
+  }).format(new Date(value));
 }

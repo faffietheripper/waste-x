@@ -1,8 +1,8 @@
+
+
+
 import { notFound } from "next/navigation";
 import Link from "next/link";
-
-import { database } from "@/db/database";
-import { organisations } from "@/db/schema";
 
 import { getAssignmentById } from "@/modules/assignments/queries/getAssignmentById";
 
@@ -10,7 +10,6 @@ import AssignmentActions from "@/components/app/Assignments/AssignmentActions";
 import VerificationPanel from "@/components/app/Assignments/VerificationPanel";
 import AssignmentCompliancePanel from "@/components/app/Assignments/AssignmentCompliancePanel";
 import AssignmentIncidentModal from "@/components/app/Assignments/AssignmentIncidentModal";
-import AssignCarrierPanel from "@/components/app/Assignments/AssignCarrierPanel";
 import ManagerReceiptPanel from "@/components/app/Assignments/ManagerReceiptPanel";
 
 import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
@@ -27,11 +26,6 @@ import { getLatestWasteTrackingSubmissionByAssignment } from "@/modules/digital-
 
 type AssignmentPerspective = "generator" | "manager" | "carrier" | "compliance";
 
-type CarrierOption = {
-  id: string;
-  teamName: string;
-  capabilities: ("generator" | "carrier" | "manager")[];
-};
 
 /* =========================================================
    FORMATTERS
@@ -636,32 +630,6 @@ export default async function AssignmentDetailPage({
     status: assignment.status,
   });
 
-  let carrierOptions: CarrierOption[] = [];
-
-  if (managerCanAssignCarrier) {
-    const allOrganisations = await database.select().from(organisations);
-
-    carrierOptions = allOrganisations
-      .filter((org) => {
-        const caps = (org.capabilities ?? []) as (
-          | "generator"
-          | "carrier"
-          | "manager"
-        )[];
-
-        return org.status === "ACTIVE" && caps.includes("carrier");
-      })
-      .map((org) => ({
-        id: org.id,
-        teamName: org.teamName,
-        capabilities: org.capabilities as (
-          | "generator"
-          | "carrier"
-          | "manager"
-        )[],
-      }));
-  }
-
   return (
     <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-12 py-32">
       <div className="space-y-8">
@@ -740,22 +708,18 @@ export default async function AssignmentDetailPage({
         </section>
 
         {managerNeedsCarrier && (
-          <ManagerNeedsCarrierPanel
-            assignmentId={assignment.id}
-            listingId={assignment.listingId}
-            canAssignCarrier={managerCanAssignCarrier}
-          />
+          <ManagerNeedsCarrierPanel listingId={assignment.listingId} />
         )}
 
         {/* PERMISSION / ACTION SUMMARY */}
         <section className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-6">
           <PermissionCard
-            label="Assign Carrier"
+            label="Carrier Hub"
             allowed={managerCanAssignCarrier}
             note={
               managerNeedsCarrier
                 ? canAssignCarrier
-                  ? "Manager accepted — carrier needed"
+                  ? "Choose carrier in Carrier Hub"
                   : "No assign-carrier permission"
                 : "Only needed after manager accepts"
             }
@@ -1177,25 +1141,11 @@ export default async function AssignmentDetailPage({
             )}
 
             {managerNeedsCarrier && (
-              <div id="assign-carrier" className="scroll-mt-32">
-                {managerCanAssignCarrier ? (
-                  <AssignCarrierPanel
-                    assignmentId={assignment.id}
-                    carriers={carrierOptions}
-                    currentOrganisationId={organisationId}
-                  />
-                ) : (
-                  <div className="rounded-3xl border border-orange-200 bg-orange-50 p-6 text-sm text-orange-900 shadow-sm">
-                    <p className="font-semibold">Carrier assignment required</p>
-
-                    <p className="mt-2 leading-6">
-                      This job has been accepted by the manager, but your active
-                      department does not currently have permission to assign the
-                      carrier.
-                    </p>
-                  </div>
-                )}
-              </div>
+              <CarrierHubSidebarPanel
+                assignmentId={assignment.id}
+                listingId={assignment.listingId}
+                canAssignCarrier={managerCanAssignCarrier}
+              />
             )}
 
             {carrierCanVerifyCollection && (
@@ -1292,6 +1242,15 @@ export default async function AssignmentDetailPage({
                   View Listing →
                 </Link>
 
+                {managerNeedsCarrier && (
+                  <Link
+                    href={`/home/operations/carriers?assignmentId=${assignment.id}`}
+                    className="block rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm font-semibold text-orange-800 transition hover:border-orange-400 hover:bg-orange-100"
+                  >
+                    Open Carrier Hub →
+                  </Link>
+                )}
+
                 {canViewReceiving && (
                   <Link
                     href={`/home/receiving/intake/${assignment.id}`}
@@ -1340,7 +1299,7 @@ export default async function AssignmentDetailPage({
    SMALL COMPONENTS
 ========================================================= */
 
-function ManagerNeedsCarrierPanel({
+function CarrierHubSidebarPanel({
   assignmentId,
   listingId,
   canAssignCarrier,
@@ -1348,6 +1307,59 @@ function ManagerNeedsCarrierPanel({
   assignmentId: string;
   listingId: number | string;
   canAssignCarrier: boolean;
+}) {
+  return (
+    <div
+      id="assign-carrier"
+      className="scroll-mt-32 rounded-3xl border border-orange-200 bg-orange-50 p-6 text-sm text-orange-900 shadow-sm"
+    >
+      <p className="text-xs uppercase tracking-[0.25em] text-orange-700">
+        Carrier Selection
+      </p>
+
+      <h3 className="mt-3 text-lg font-semibold text-black">
+        Choose carrier in Carrier Hub
+      </h3>
+
+      <p className="mt-2 leading-6 text-orange-900/75">
+        Carrier assignment now happens in the Carrier Hub so managers can review
+        workload, incident risk, contact details and carrier suitability before
+        choosing who gets the job.
+      </p>
+
+      <div className="mt-5 space-y-3">
+        {canAssignCarrier ? (
+          <Link
+            href={`/home/operations/carriers?assignmentId=${assignmentId}`}
+            className="block rounded-2xl bg-black p-4 text-center font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+          >
+            Choose from Carrier Hub →
+          </Link>
+        ) : (
+          <div className="rounded-2xl border border-orange-200 bg-white p-4 text-sm leading-6 text-orange-900/75">
+            <p className="font-semibold text-black">Permission required</p>
+            <p className="mt-1">
+              Your active department can view this assignment, but it does not
+              currently have permission to assign the carrier.
+            </p>
+          </div>
+        )}
+
+        <Link
+          href={`/home/marketplace/browse/${listingId}`}
+          className="block rounded-2xl border border-orange-200 bg-white p-4 text-center font-semibold text-orange-800 transition hover:border-orange-400 hover:bg-orange-100"
+        >
+          Review listing →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function ManagerNeedsCarrierPanel({
+  listingId,
+}: {
+  listingId: number | string;
 }) {
   return (
     <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
@@ -1358,26 +1370,18 @@ function ManagerNeedsCarrierPanel({
           </p>
 
           <h2 className="mt-2 text-xl font-semibold text-black">
-            Manager accepted — assign a carrier
+            Manager accepted — carrier selection required
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-orange-900/75">
             This job has been accepted, but it cannot move into collection until
-            a carrier is assigned. Assign the carrier here, or open the listing
-            record if you want to review the original marketplace details.
+            a carrier is selected. Carrier assignment now happens in the Carrier
+            Hub so you can compare the available carriers properly before
+            choosing one.
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row lg:flex-col xl:flex-row">
-          {canAssignCarrier && (
-            <Link
-              href={`/home/operations/assignments/${assignmentId}#assign-carrier`}
-              className="inline-flex justify-center rounded-full bg-black px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
-            >
-              Assign carrier here →
-            </Link>
-          )}
-
+        <div className="flex shrink-0 flex-col gap-3 sm:flex-row lg:flex-col xl:flex-row">
           <Link
             href={`/home/marketplace/browse/${listingId}`}
             className="inline-flex justify-center rounded-full border border-orange-300 bg-white px-5 py-3 text-sm font-semibold text-orange-800 transition hover:border-orange-500 hover:bg-orange-100"

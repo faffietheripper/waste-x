@@ -313,6 +313,18 @@ function OperationalNav({
 
   /* Assignments */
   const canViewAssignments = can("assignment:view");
+  const canAssignCarrier = can("assignment:assign_carrier");
+
+  /*
+    Carrier Hub is intentionally manager-side for MVP.
+    Generators can still see assigned carriers through listings/assignments,
+    and carriers use their own assignment queue. The hub is for the manager
+    step: accepted job -> choose carrier -> carrier workflow starts.
+  */
+  const canUseCarrierHub =
+    hasOrganisation &&
+    activeDepartmentType === "manager" &&
+    (canViewAssignments || canAssignCarrier);
 
   /* Receiving */
   const canViewReceiving = can("receiving:view");
@@ -376,6 +388,11 @@ function OperationalNav({
           label: "Assignments",
           href: "/home/operations/assignments",
           show: canViewAssignments,
+        },
+        {
+          label: "Carrier Hub",
+          href: "/home/operations/carriers",
+          show: canUseCarrierHub,
         },
         {
           label: "Active Assignments",
