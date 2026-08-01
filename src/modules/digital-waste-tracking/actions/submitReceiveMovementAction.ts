@@ -584,19 +584,29 @@ export async function submitReceiveMovementAction(
   }
 
   const payload = buildReceiveMovementPayload(receiveMovementInput);
+const latestSubmission =
+  await getLatestWasteTrackingSubmissionByAssignment({
+    organisationId,
+    assignmentId: assignment.id,
+  });
 
-  const latestSubmission =
-    await getLatestWasteTrackingSubmissionByAssignment({
-      organisationId,
-      assignmentId: assignment.id,
-    });
+/*
+  DEFRA PAT rule for Waste X:
+  Each PAT scenario should create its own fresh receive movement.
 
-  const existingWasteTrackingId =
-    cleanString(input.wasteTrackingId) ??
+  Without this, rerunning multiple PAT scenarios against the same assignment
+  can reuse the latest wasteTrackingId and send PUT requests instead of fresh
+  POST requests. That is how scenarios can accidentally share the same WTID.
+*/
+const isPatScenario = Boolean(expectedPatScenarioId);
+
+const existingWasteTrackingId = isPatScenario
+  ? undefined
+  : cleanString(input.wasteTrackingId) ??
     cleanString(latestSubmission?.wasteTrackingId);
 
-  const method = getReceiveMovementMethod(existingWasteTrackingId);
-  const endpoint = getReceiveMovementEndpoint(existingWasteTrackingId);
+const method = getReceiveMovementMethod(existingWasteTrackingId);
+const endpoint = getReceiveMovementEndpoint(existingWasteTrackingId);
 
   const draftSubmission = await createWasteTrackingSubmission({
     organisationId,
