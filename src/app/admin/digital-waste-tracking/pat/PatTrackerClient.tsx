@@ -37,6 +37,13 @@ export type EvidencePartySummary = {
   phoneNumber: string | null;
 };
 
+export type EvidenceValidation = {
+  valid: boolean;
+  scenarioReference: string | null;
+  message: string | null;
+  warnings: string[];
+};
+
 export type EvidenceSummary = {
   wasteItemCount: number;
   ewcCodes: string[];
@@ -77,6 +84,7 @@ export type PatResult = {
   testedAt: string | null;
 
   evidenceSummary: EvidenceSummary | null;
+  evidenceValidation: EvidenceValidation | null;
 
   defraStatus:
     | "not_started"
@@ -119,6 +127,7 @@ export type DwtEvidenceSuggestion = {
   reason: string;
   errorMessage: string | null;
   evidenceSummary: EvidenceSummary | null;
+  payloadScenarioId: string | null;
 
   confidence: "high" | "medium" | "low";
   matchReasons: string[];
@@ -167,6 +176,10 @@ export default function PatTrackerClient({
 
   const attachedCount = results.filter(
     (result) => result.wasteTrackingId || result.dwtSubmissionId || result.errorMessage,
+  ).length;
+
+  const evidenceNeedsReviewCount = results.filter(
+    (result) => result.evidenceValidation && !result.evidenceValidation.valid,
   ).length;
 
   const suggestedCount = rows.filter(
@@ -232,16 +245,16 @@ export default function PatTrackerClient({
 
             <p className="mt-2 max-w-4xl text-sm leading-6 text-gray-500">
               Instead of manually filling 14 scenario forms, Waste X checks your
-              existing DWT submissions and suggests which WTIDs or expected-error
-              records can satisfy each DEFRA PAT scenario. Attach a suggestion
-              where one exists, then only run the missing tests.
+              existing DWT submissions and suggests only records that are labelled
+              for the correct PAT scenario. One DWT submission should not be reused
+              across different scenarios.
             </p>
           </div>
 
           <SeedForm />
         </div>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <ScannerStat
             label="Submissions scanned"
             value={scannedSubmissionCount}
@@ -252,6 +265,13 @@ export default function PatTrackerClient({
             label="Evidence attached"
             value={attachedCount}
             helper="Scenarios with WTID/error evidence"
+          />
+
+          <ScannerStat
+            label="Needs review"
+            value={evidenceNeedsReviewCount}
+            helper="Attached evidence mismatch"
+            tone={evidenceNeedsReviewCount > 0 ? "danger" : "default"}
           />
 
           <ScannerStat
@@ -446,9 +466,17 @@ function ScenarioScannerCard({
             </span>
 
             {hasEvidence ? (
-              <span className="rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
-                Evidence attached
-              </span>
+              <>
+                <span className="rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
+                  Evidence attached
+                </span>
+
+                {result.evidenceValidation && !result.evidenceValidation.valid && (
+                  <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-red-700">
+                    Evidence needs review
+                  </span>
+                )}
+              </>
             ) : suggestions.length > 0 ? (
               <span className="rounded-full border border-gray-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-700">
                 {suggestions.length} suggestion{suggestions.length === 1 ? "" : "s"}
@@ -525,6 +553,16 @@ function AttachedEvidencePanel({ result }: { result: PatResult }) {
         Attached Evidence
       </p>
 
+      {result.evidenceValidation && !result.evidenceValidation.valid && (
+        <EvidenceValidationWarning validation={result.evidenceValidation} />
+      )}
+
+      {result.evidenceValidation?.valid && (
+        <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
+          {result.evidenceValidation.message}
+        </div>
+      )}
+
       <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <EvidenceItem
           label="WTID / expected error"
@@ -565,6 +603,37 @@ function AttachedEvidencePanel({ result }: { result: PatResult }) {
   );
 }
 
+
+
+function EvidenceValidationWarning({
+  validation,
+}: {
+  validation: EvidenceValidation;
+}) {
+  return (
+    <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-700">
+        Evidence mismatch warning
+      </p>
+
+      <p className="mt-2 text-sm font-semibold text-red-900">
+        {validation.message ?? "Attached evidence needs review."}
+      </p>
+
+      <div className="mt-3 space-y-1 text-sm leading-6 text-red-800">
+        {validation.scenarioReference && (
+          <p>
+            Payload scenario reference: <strong>{validation.scenarioReference}</strong>
+          </p>
+        )}
+
+        {validation.warnings.map((warning) => (
+          <p key={warning}>• {warning}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function SuggestedEvidencePanel({
   suggestions,
@@ -629,6 +698,12 @@ function SuggestionCard({ suggestion }: { suggestion: DwtEvidenceSuggestion }) {
             Submission: {shortId(suggestion.dwtSubmissionId)} · Tested{" "}
             {formatDateTime(suggestion.testedAt)}
           </p>
+
+          {suggestion.payloadScenarioId && (
+            <p className="mt-1 text-xs font-semibold text-gray-700">
+              Payload PAT reference: {suggestion.payloadScenarioId}
+            </p>
+          )}
 
           <ul className="mt-3 space-y-1 text-xs leading-5 text-gray-600">
             {suggestion.matchReasons.map((reason) => (
@@ -1475,8 +1550,22 @@ function buildDefraEmailTable(results: PatResult[]) {
 
   const body = rows
     .map((result) => {
-      const wtid =
-        result.expectedResult === "error"
+      const evidenceNeedsReview = Boolean(
+        result.evidenceValidation && !result.evidenceValidation.valid,
+      );
+
+      const evidenceReviewText = evidenceNeedsReview
+        ? `CHECK EVIDENCE: ${
+            result.evidenceValidation?.warnings.join(" ") ??
+            "Attached evidence needs review."
+          }`
+        : null;
+
+      const wtid = evidenceNeedsReview
+        ? `CHECK EVIDENCE - ${
+            result.wasteTrackingId ?? result.errorMessage ?? result.dwtSubmissionId ?? "attached record"
+          }`
+        : result.expectedResult === "error"
           ? result.errorMessage
             ? `No WTID - expected error. Tested at ${formatDateTime(
                 result.testedAt,
@@ -1487,6 +1576,7 @@ function buildDefraEmailTable(results: PatResult[]) {
           : result.wasteTrackingId || "Pending";
 
       const details = [
+        evidenceReviewText,
         result.reason,
         result.evidenceSummary
           ? buildEmailEvidenceSummary(result.evidenceSummary)

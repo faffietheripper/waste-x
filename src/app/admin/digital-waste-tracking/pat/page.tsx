@@ -11,6 +11,7 @@ import PatTrackerClient, {
   type DwtEvidenceSuggestion,
   type EvidencePartySummary,
   type EvidenceSummary,
+  type EvidenceValidation,
   type EvidenceWasteItemSummary,
   type PatResult,
 } from "./PatTrackerClient";
@@ -47,6 +48,7 @@ export default async function DigitalWasteTrackingPatPage() {
     testedAt: toIso(result.testedAt),
 
     evidenceSummary: null,
+    evidenceValidation: null,
 
     defraStatus: result.defraStatus,
     defraSentAt: toIso(result.defraSentAt),
@@ -63,6 +65,7 @@ export default async function DigitalWasteTrackingPatPage() {
   const safeResults = baseResults.map((result) => ({
     ...result,
     evidenceSummary: buildAttachedEvidenceSummary(result, submissions),
+    evidenceValidation: buildAttachedEvidenceValidation(result, submissions),
   }));
 
   const suggestions = buildEvidenceSuggestions(safeResults, submissions);
@@ -126,10 +129,28 @@ function buildEvidenceSuggestions(
 ): DwtEvidenceSuggestion[] {
   const suggestions: DwtEvidenceSuggestion[] = [];
 
+  const attachedSubmissionIds = new Set(
+    patResults
+      .map((result) => result.dwtSubmissionId)
+      .filter((value): value is string => Boolean(value)),
+  );
+
   for (const result of patResults) {
+    if (result.dwtSubmissionId) continue;
+
     const scenarioSuggestions = submissions
       .map((submission) => matchSubmissionToScenario(result, submission))
-      .filter(Boolean) as DwtEvidenceSuggestion[];
+      .filter((suggestion): suggestion is DwtEvidenceSuggestion => {
+        if (!suggestion) return false;
+
+        /*
+          Important PAT safety rule:
+          one DWT submission should not be offered as evidence for multiple
+          PAT scenarios. If it has already been attached to a scenario, do not
+          suggest it anywhere else.
+        */
+        return !attachedSubmissionIds.has(suggestion.dwtSubmissionId);
+      });
 
     const sorted = scenarioSuggestions.sort((first, second) => {
       const confidenceDiff =
@@ -160,10 +181,100 @@ function matchSubmissionToScenario(
 
   if (!isRecord(payload)) return null;
 
+  const declaredScenarioId = getPatScenarioIdFromPayload(payload);
+
+  /*
+    Strict PAT evidence matching:
+    The old scanner matched by broad payload features, so one successful
+    payload could appear suitable for several scenarios. DEFRA PAT evidence
+    needs to prove the specific scenario that was run, so automatic suggestions
+    now require the payload reference to say WX-PAT-<scenarioId>.
+  */
+  if (declaredScenarioId !== result.scenarioId) return null;
+
   const evidenceSummary = buildEvidenceSummaryFromPayload(payload);
   const status = getString(getField(submission, "status"));
   const httpStatus = getResponseStatusCode(response);
 
+  const evaluation = evaluateScenarioRequirement({
+    result,
+    payload,
+    evidenceSummary,
+    status,
+    httpStatus,
+  });
+
+  if (!evaluation.matched) return null;
+
+  const responseError = getErrorMessageFromResponse(response);
+  const submissionId = getString(getField(submission, "id"));
+  const wasteTrackingId = getString(getField(submission, "wasteTrackingId"));
+
+  const confidence =
+    result.expectedResult === "error"
+      ? evaluation.isRejected
+        ? "high"
+        : "medium"
+      : evaluation.isAccepted && wasteTrackingId
+        ? "high"
+        : "medium";
+
+  const matchReasons = [
+    `Payload reference ${declaredScenarioId}`,
+    ...evaluation.matchReasons,
+  ];
+
+  return {
+    scenarioId: result.scenarioId,
+    patResultId: result.id,
+
+    dwtSubmissionId: submissionId,
+    wasteTrackingId: result.expectedResult === "error" ? null : wasteTrackingId,
+
+    assignmentId: getString(getField(submission, "assignmentId")) || null,
+    listingId: getNumberOrNull(getField(submission, "listingId")),
+    receiptId: getString(getField(submission, "receiptId")) || null,
+
+    status,
+    httpStatus: typeof httpStatus === "number" ? httpStatus : null,
+    endpoint: getString(getField(submission, "endpoint")),
+    method: getString(getField(submission, "method")),
+    testedAt:
+      toIso(getField(submission, "submittedAt")) ??
+      toIso(getField(submission, "lastAttemptedAt")) ??
+      toIso(getField(submission, "createdAt")),
+
+    ewcCodes: evidenceSummary.ewcCodes.join(", "),
+    reason: buildSuggestionReason(result.scenarioId, matchReasons),
+    errorMessage: result.expectedResult === "error" ? responseError : null,
+    evidenceSummary,
+    payloadScenarioId: declaredScenarioId,
+
+    confidence,
+    matchReasons,
+  };
+}
+
+type ScenarioRequirementEvaluation = {
+  matched: boolean;
+  matchReasons: string[];
+  isAccepted: boolean;
+  isRejected: boolean;
+};
+
+function evaluateScenarioRequirement({
+  result,
+  payload,
+  evidenceSummary,
+  status,
+  httpStatus,
+}: {
+  result: PatResult;
+  payload: Record<string, unknown>;
+  evidenceSummary: EvidenceSummary;
+  status: string;
+  httpStatus: number | null;
+}): ScenarioRequirementEvaluation {
   const isAccepted =
     status === "accepted" ||
     status === "accepted_with_warnings" ||
@@ -394,48 +505,84 @@ function matchSubmissionToScenario(
       matched = false;
   }
 
-  if (!matched) return null;
+  return {
+    matched,
+    matchReasons,
+    isAccepted,
+    isRejected,
+  };
+}
 
-  const responseError = getErrorMessageFromResponse(response);
-  const submissionId = getString(getField(submission, "id"));
-  const wasteTrackingId = getString(getField(submission, "wasteTrackingId"));
+function buildAttachedEvidenceValidation(
+  result: PatResult,
+  submissions: unknown[],
+): EvidenceValidation | null {
+  if (!result.dwtSubmissionId) return null;
 
-  const confidence =
-    result.expectedResult === "error"
-      ? isRejected
-        ? "high"
-        : "medium"
-      : isAccepted && wasteTrackingId
-        ? "high"
-        : "medium";
+  const matchingSubmission = submissions.find((submission) => {
+    return getString(getField(submission, "id")) === result.dwtSubmissionId;
+  });
+
+  if (!matchingSubmission) {
+    return {
+      valid: false,
+      scenarioReference: null,
+      message: "Attached evidence needs review.",
+      warnings: ["The attached DWT submission could not be found in the scanned submissions."],
+    };
+  }
+
+  const payload = parseJsonValue(getField(matchingSubmission, "payloadSnapshot"));
+  const response = parseJsonValue(getField(matchingSubmission, "responseSnapshot"));
+
+  if (!isRecord(payload)) {
+    return {
+      valid: false,
+      scenarioReference: null,
+      message: "Attached evidence needs review.",
+      warnings: ["The attached DWT submission does not have a readable payload snapshot."],
+    };
+  }
+
+  const scenarioReference = getPatScenarioIdFromPayload(payload);
+  const evidenceSummary = buildEvidenceSummaryFromPayload(payload);
+  const status = getString(getField(matchingSubmission, "status"));
+  const httpStatus = getResponseStatusCode(response);
+
+  const evaluation = evaluateScenarioRequirement({
+    result,
+    payload,
+    evidenceSummary,
+    status,
+    httpStatus,
+  });
+
+  const warnings: string[] = [];
+
+  if (!scenarioReference) {
+    warnings.push(
+      "The payload does not include a WX-PAT scenario reference, so it should be checked manually.",
+    );
+  } else if (scenarioReference !== result.scenarioId) {
+    warnings.push(
+      `The attached payload is labelled ${scenarioReference}, not ${result.scenarioId}. Do not send this row to DEFRA until corrected.`,
+    );
+  }
+
+  if (!evaluation.matched) {
+    warnings.push(
+      `The attached payload contents do not satisfy the ${result.scenarioId} scenario rules.`,
+    );
+  }
 
   return {
-    scenarioId: result.scenarioId,
-    patResultId: result.id,
-
-    dwtSubmissionId: submissionId,
-    wasteTrackingId: result.expectedResult === "error" ? null : wasteTrackingId,
-
-    assignmentId: getString(getField(submission, "assignmentId")) || null,
-    listingId: getNumberOrNull(getField(submission, "listingId")),
-    receiptId: getString(getField(submission, "receiptId")) || null,
-
-    status,
-    httpStatus: typeof httpStatus === "number" ? httpStatus : null,
-    endpoint: getString(getField(submission, "endpoint")),
-    method: getString(getField(submission, "method")),
-    testedAt:
-      toIso(getField(submission, "submittedAt")) ??
-      toIso(getField(submission, "lastAttemptedAt")) ??
-      toIso(getField(submission, "createdAt")),
-
-    ewcCodes: evidenceSummary.ewcCodes.join(", "),
-    reason: buildSuggestionReason(result.scenarioId, matchReasons),
-    errorMessage: result.expectedResult === "error" ? responseError : null,
-    evidenceSummary,
-
-    confidence,
-    matchReasons,
+    valid: warnings.length === 0,
+    scenarioReference,
+    message:
+      warnings.length > 0
+        ? "Attached evidence needs review."
+        : "Attached evidence matches the scenario reference and payload rules.",
+    warnings,
   };
 }
 
@@ -650,6 +797,50 @@ function getBrokerOrDealer(
 /* =========================================================
    SCANNER HELPERS
 ========================================================= */
+
+const PAT_SCENARIO_PATTERN =
+  /\b(R01|R02|R03|R04|R05|R07|C01|C02|B01|P01|H01|H02|H03|X01)\b/i;
+
+function getPatScenarioIdFromPayload(payload: Record<string, unknown>) {
+  const directCandidates = [
+    payload.scenarioId,
+    payload.patScenarioId,
+    payload.patScenario,
+    payload.yourUniqueReference,
+  ];
+
+  for (const candidate of directCandidates) {
+    const scenarioId = extractPatScenarioId(candidate);
+
+    if (scenarioId) return scenarioId;
+  }
+
+  for (const reference of getRecordArray(payload.otherReferencesForMovement)) {
+    const fromLabel = extractPatScenarioId(reference.label);
+    const fromReference = extractPatScenarioId(reference.reference);
+
+    if (fromLabel) return fromLabel;
+    if (fromReference) return fromReference;
+  }
+
+  return null;
+}
+
+function extractPatScenarioId(value: unknown) {
+  const text = getString(value).toUpperCase();
+
+  if (!text) return null;
+
+  const explicitMatch = text.match(
+    /WX[-_\s]?PAT[-_\s]?(R01|R02|R03|R04|R05|R07|C01|C02|B01|P01|H01|H02|H03|X01)/i,
+  );
+
+  if (explicitMatch?.[1]) return explicitMatch[1].toUpperCase();
+
+  const looseMatch = text.match(PAT_SCENARIO_PATTERN);
+
+  return looseMatch?.[1] ? looseMatch[1].toUpperCase() : null;
+}
 
 function buildSuggestionReason(scenarioId: string, reasons: string[]) {
   return `Waste X matched this DWT submission to PAT scenario ${scenarioId}. ${reasons.join(
