@@ -145,7 +145,7 @@ export default function PatTrackerClient({
   const [results, setResults] = useState(initialResults);
   const [suggestions, setSuggestions] = useState(initialSuggestions);
   const [filter, setFilter] = useState<
-    "all" | "missing" | "suggested" | "attached" | "confirmed"
+    "all" | "missing" | "review" | "suggested" | "attached" | "confirmed"
   >("all");
 
   useEffect(() => {
@@ -179,7 +179,7 @@ export default function PatTrackerClient({
   ).length;
 
   const evidenceNeedsReviewCount = results.filter(
-    (result) => result.evidenceValidation && !result.evidenceValidation.valid,
+    (result) => Boolean(result.evidenceValidation && !result.evidenceValidation.valid),
   ).length;
 
   const suggestedCount = rows.filter(
@@ -218,6 +218,11 @@ export default function PatTrackerClient({
       Boolean(row.result.errorMessage);
 
     if (filter === "missing") return !hasEvidence && row.suggestions.length === 0;
+    if (filter === "review") {
+      return Boolean(
+        row.result.evidenceValidation && !row.result.evidenceValidation.valid,
+      );
+    }
     if (filter === "suggested") return !hasEvidence && row.suggestions.length > 0;
     if (filter === "attached") return hasEvidence;
     if (filter === "confirmed") {
@@ -341,6 +346,13 @@ export default function PatTrackerClient({
             </FilterButton>
 
             <FilterButton
+              active={filter === "review"}
+              onClick={() => setFilter("review")}
+            >
+              Needs review
+            </FilterButton>
+
+            <FilterButton
               active={filter === "missing"}
               onClick={() => setFilter("missing")}
             >
@@ -443,6 +455,9 @@ function ScenarioScannerCard({
     Boolean(result.errorMessage);
 
   const expectedError = result.expectedResult === "error";
+  const evidenceNeedsReview = Boolean(
+    result.evidenceValidation && !result.evidenceValidation.valid,
+  );
 
   return (
     <article className="rounded-[1.5rem] border border-gray-200 bg-gray-50 p-5">
@@ -471,7 +486,7 @@ function ScenarioScannerCard({
                   Evidence attached
                 </span>
 
-                {result.evidenceValidation && !result.evidenceValidation.valid && (
+                {evidenceNeedsReview && (
                   <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-red-700">
                     Evidence needs review
                   </span>
@@ -523,16 +538,25 @@ function ScenarioScannerCard({
       </div>
 
       {hasEvidence ? (
-        <AttachedEvidencePanel result={result} />
+        <>
+          <AttachedEvidencePanel result={result} />
+
+          {evidenceNeedsReview && suggestions.length > 0 && (
+            <SuggestedEvidencePanel suggestions={suggestions} />
+          )}
+        </>
       ) : suggestions.length > 0 ? (
         <SuggestedEvidencePanel suggestions={suggestions} />
       ) : (
         <MissingScenarioPanel result={result} />
       )}
 
-      <details className="mt-5 rounded-2xl border border-gray-200 bg-white p-5">
+      <details
+        open={evidenceNeedsReview}
+        className="mt-5 rounded-2xl border border-gray-200 bg-white p-5"
+      >
         <summary className="cursor-pointer text-sm font-bold text-gray-950">
-          Manual evidence override
+          {evidenceNeedsReview ? "Fix / replace evidence" : "Manual evidence override"}
         </summary>
 
         <p className="mt-2 text-sm leading-6 text-gray-500">
@@ -547,21 +571,36 @@ function ScenarioScannerCard({
 }
 
 function AttachedEvidencePanel({ result }: { result: PatResult }) {
+  const evidenceValidation = result.evidenceValidation;
+  const evidenceNeedsReview = Boolean(
+    evidenceValidation && !evidenceValidation.valid,
+  );
+
   return (
     <section className="mt-5 rounded-[1.35rem] border border-gray-200 bg-white p-5">
       <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
         Attached Evidence
       </p>
 
-      {result.evidenceValidation && !result.evidenceValidation.valid && (
-        <EvidenceValidationWarning validation={result.evidenceValidation} />
+      {evidenceNeedsReview && evidenceValidation && (
+        <EvidenceValidationWarning validation={evidenceValidation} />
       )}
 
-      {result.evidenceValidation?.valid && (
+      {evidenceValidation?.valid && (
         <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
-          {result.evidenceValidation.message}
+          {evidenceValidation.message}
         </div>
       )}
+
+      <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 md:flex-row md:items-center md:justify-between">
+        <p className="text-sm leading-6 text-gray-600">
+          Remove this linked submission if it was attached to the wrong PAT
+          scenario, then attach a correct suggestion or save corrected manual
+          evidence below.
+        </p>
+
+        <ClearEvidenceForm result={result} />
+      </div>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <EvidenceItem
@@ -602,7 +641,6 @@ function AttachedEvidencePanel({ result }: { result: PatResult }) {
     </section>
   );
 }
-
 
 
 function EvidenceValidationWarning({
@@ -1028,6 +1066,26 @@ function AttachSuggestionForm({
   );
 }
 
+function ClearEvidenceForm({ result }: { result: PatResult }) {
+  const [state, formAction] = useFormState(
+    patTrackerAction,
+    initialPatActionState,
+  );
+
+  useRefreshAfterAction(state);
+
+  return (
+    <form action={formAction} className="shrink-0 space-y-2">
+      <input type="hidden" name="intent" value="clear_evidence" />
+      <input type="hidden" name="id" value={result.id} />
+
+      <MiniSubmitButton variant="danger">Remove wrong evidence</MiniSubmitButton>
+
+      <ActionFeedback state={state} compact />
+    </form>
+  );
+}
+
 function ManualEvidenceForm({ result }: { result: PatResult }) {
   const [state, formAction] = useFormState(
     patTrackerAction,
@@ -1387,14 +1445,16 @@ function MiniSubmitButton({
   variant = "secondary",
 }: {
   children: React.ReactNode;
-  variant?: "secondary" | "primary";
+  variant?: "secondary" | "primary" | "danger";
 }) {
   const { pending } = useFormStatus();
 
   const className =
     variant === "primary"
       ? "border-gray-900 bg-gray-950 text-white hover:bg-gray-800"
-      : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50";
+      : variant === "danger"
+        ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50";
 
   return (
     <button

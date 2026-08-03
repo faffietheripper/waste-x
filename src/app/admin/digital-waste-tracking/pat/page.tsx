@@ -85,10 +85,9 @@ export default async function DigitalWasteTrackingPatPage() {
             </h1>
 
             <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-              Waste X scans existing DWT submissions, suggests which records
-              satisfy DEFRA PAT scenarios, and now shows the payload-level
-              evidence for multiple waste items, disposal/recovery codes, POPs,
-              hazardous components and broker/dealer details.
+              Waste X scans existing DWT submissions, suggests only records labelled
+              for the correct PAT scenario, and highlights attached evidence
+              that needs review before it is sent back to DEFRA.
             </p>
           </div>
 
@@ -129,14 +128,28 @@ function buildEvidenceSuggestions(
 ): DwtEvidenceSuggestion[] {
   const suggestions: DwtEvidenceSuggestion[] = [];
 
-  const attachedSubmissionIds = new Set(
+  const protectedAttachedSubmissionIds = new Set(
     patResults
+      .filter((result) => {
+        if (!result.dwtSubmissionId) return false;
+
+        /*
+          Only valid attached evidence should reserve a DWT submission.
+          If a row has a mismatch warning, the same submission can still be
+          suggested to the correct scenario instead of being trapped forever.
+        */
+        return result.evidenceValidation?.valid !== false;
+      })
       .map((result) => result.dwtSubmissionId)
       .filter((value): value is string => Boolean(value)),
   );
 
   for (const result of patResults) {
-    if (result.dwtSubmissionId) continue;
+    const hasValidAttachedEvidence = Boolean(
+      result.dwtSubmissionId && result.evidenceValidation?.valid !== false,
+    );
+
+    if (hasValidAttachedEvidence) continue;
 
     const scenarioSuggestions = submissions
       .map((submission) => matchSubmissionToScenario(result, submission))
@@ -145,11 +158,10 @@ function buildEvidenceSuggestions(
 
         /*
           Important PAT safety rule:
-          one DWT submission should not be offered as evidence for multiple
-          PAT scenarios. If it has already been attached to a scenario, do not
-          suggest it anywhere else.
+          one valid DWT submission should not be offered as evidence for
+          multiple PAT scenarios.
         */
-        return !attachedSubmissionIds.has(suggestion.dwtSubmissionId);
+        return !protectedAttachedSubmissionIds.has(suggestion.dwtSubmissionId);
       });
 
     const sorted = scenarioSuggestions.sort((first, second) => {
