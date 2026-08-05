@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import Image from "next/image";
+import Link from "next/link";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 40 },
@@ -186,14 +187,20 @@ export default function FullHomePage() {
             </p>
 
             <div className="mb-10 flex flex-col gap-4 sm:flex-row">
-              <button className="bg-orange-500 px-8 py-4 font-semibold text-white transition hover:bg-orange-600">
-                Create Organisation
-              </button>
+  <Link
+    href="/login"
+    className="inline-flex items-center justify-center border border-white/30 px-8 py-4 font-semibold text-white transition hover:bg-white/10"
+  >
+    Login
+  </Link>
 
-              <button className="border border-white/30 px-8 py-4 transition hover:bg-white/10">
-                View Platform Overview
-              </button>
-            </div>
+  <Link
+    href="/register"
+    className="inline-flex items-center justify-center bg-orange-500 px-8 py-4 font-semibold text-white transition hover:bg-orange-600"
+  >
+    Register Organisation
+  </Link>
+</div>
 
             <div className="grid gap-3 sm:grid-cols-3">
               {trustMarkers.map((item) => (
