@@ -90,7 +90,7 @@ export default function Navigation() {
               Login
             </Link>
             <Link
-              href="/pilot"
+              href="/register"
               className="bg-orange-500 text-black px-6 py-3 text-center font-semibold uppercase tracking-wide"
             >
               Request Pilot Access
