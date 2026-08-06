@@ -195,10 +195,10 @@ export default function FullHomePage() {
   </Link>
 
   <Link
-    href="/register"
+    href="/book-demo"
     className="inline-flex items-center justify-center bg-orange-500 px-8 py-4 font-semibold text-white transition hover:bg-orange-600"
   >
-    Register Organisation
+    Book Demo
   </Link>
 </div>
 
