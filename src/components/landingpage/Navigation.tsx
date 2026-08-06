@@ -51,10 +51,10 @@ export default function Navigation() {
           </Link>
 
           <Link
-            href="/pilot"
+            href="/book-demo"
             className="bg-orange-500 hover:bg-orange-600 text-black text-sm px-6 py-2 font-semibold uppercase tracking-wide transition"
           >
-            Request Pilot Access
+            Book Demo
           </Link>
         </div>
 
@@ -90,10 +90,10 @@ export default function Navigation() {
               Login
             </Link>
             <Link
-              href="/register"
+              href="/book-demo"
               className="bg-orange-500 text-black px-6 py-3 text-center font-semibold uppercase tracking-wide"
             >
-              Request Pilot Access
+              Book Demo
             </Link>
           </div>
         </div>
