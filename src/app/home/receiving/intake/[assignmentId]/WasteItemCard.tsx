@@ -33,6 +33,13 @@ type Props = {
   inputClassFor: (keys: string[]) => string;
 };
 
+const SOURCE_LABELS: Record<SourceOfComponents, string> = {
+  NOT_PROVIDED: "Not provided",
+  PROVIDED_WITH_WASTE: "Provided with the waste",
+  GUIDANCE: "Based on guidance",
+  OWN_TESTING: "From own testing or lab results",
+};
+
 export default function WasteItemCard({
   item,
   index,
@@ -132,16 +139,16 @@ export default function WasteItemCard({
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <Field
-          label="EWC codes"
+          label="Waste code / EWC code"
           required
-          helper="Separate multiple EWC codes with commas. Example: 170904, 170802"
+          helper="Separate multiple codes with commas. Example: 170904, 170802"
           error={issueMessagesFor([`${prefix}.ewcCodes`])}
         >
           <input
             value={item.ewcCodes}
             onChange={(event) => update({ ewcCodes: event.target.value })}
             className={inputClassFor([`${prefix}.ewcCodes`])}
-            placeholder="170904"
+            placeholder="Example: 170904"
           />
         </Field>
 
@@ -185,7 +192,7 @@ export default function WasteItemCard({
         <Field
           label="Container type"
           required
-          helper="Example: SKI, BAG"
+          helper="Use the container type recorded for the received waste. Example: SKI for skip, BAG for bag."
           error={issueMessagesFor([`${prefix}.typeOfContainers`])}
         >
           <input
@@ -194,7 +201,7 @@ export default function WasteItemCard({
               update({ typeOfContainers: event.target.value })
             }
             className={inputClassFor([`${prefix}.typeOfContainers`])}
-            placeholder="SKI"
+            placeholder="Example: SKI"
           />
         </Field>
 
@@ -226,7 +233,7 @@ export default function WasteItemCard({
             value={item.weightAmount}
             onChange={(event) => update({ weightAmount: event.target.value })}
             className={inputClassFor([`${prefix}.weight.amount`])}
-            placeholder="1.250"
+            placeholder="Example: 1.250"
           />
         </Field>
 
@@ -251,7 +258,7 @@ export default function WasteItemCard({
         </Field>
 
         <ToggleField
-          label="Weight is estimated"
+          label="Is this weight estimated?"
           checked={item.weightIsEstimate}
           onChange={(value) => update({ weightIsEstimate: value })}
         />
@@ -259,7 +266,7 @@ export default function WasteItemCard({
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <ToggleField
-          label="Contains POPs"
+          label="Does this waste contain POPs?"
           checked={item.containsPops}
           onChange={(value) => {
             update({
@@ -277,7 +284,7 @@ export default function WasteItemCard({
         />
 
         <ToggleField
-          label="Contains hazardous properties"
+          label="Is this hazardous waste?"
           checked={item.containsHazardous}
           onChange={(value) => {
             update({
@@ -301,10 +308,10 @@ export default function WasteItemCard({
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h5 className="text-sm font-semibold text-orange-900">
-                POPs components
+                POPs details
               </h5>
               <p className="mt-1 text-sm leading-6 text-orange-800/70">
-                Add one or more POP components for this waste item.
+                Add the POP components known for this waste item.
               </p>
             </div>
 
@@ -326,7 +333,7 @@ export default function WasteItemCard({
 
           <div className="mt-4 grid gap-4">
             <Field
-              label="POPs source of components"
+              label="How were the POPs identified?"
               required
               error={issueMessagesFor([`${prefix}.pops.sourceOfComponents`])}
             >
@@ -342,7 +349,7 @@ export default function WasteItemCard({
               >
                 {SOURCE_OF_COMPONENTS.map((source) => (
                   <option key={source} value={source}>
-                    {source}
+                    {SOURCE_LABELS[source]}
                   </option>
                 ))}
               </select>
@@ -369,12 +376,13 @@ export default function WasteItemCard({
                         })
                       }
                       className={inputClassFor([`${componentPrefix}.code`])}
-                      placeholder="PFHXS"
+                      placeholder="Example: PFHXS"
                     />
                   </Field>
 
                   <Field
                     label="Concentration"
+                    helper="Optional. Add concentration if known."
                     error={issueMessagesFor([
                       `${componentPrefix}.concentration`,
                     ])}
@@ -391,7 +399,7 @@ export default function WasteItemCard({
                       className={inputClassFor([
                         `${componentPrefix}.concentration`,
                       ])}
-                      placeholder="12.500"
+                      placeholder="Example: 12.500"
                     />
                   </Field>
 
@@ -414,11 +422,11 @@ export default function WasteItemCard({
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h5 className="text-sm font-semibold text-red-900">
-                Hazardous components
+                Hazardous waste details
               </h5>
               <p className="mt-1 text-sm leading-6 text-red-800/70">
-                Add hazardous property codes and one or more hazardous
-                components.
+                Add the hazardous property codes and components recorded for
+                this waste item.
               </p>
             </div>
 
@@ -440,7 +448,7 @@ export default function WasteItemCard({
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field
-              label="Hazardous source of components"
+              label="How were the hazardous details identified?"
               required
               error={issueMessagesFor([
                 `${prefix}.hazardous.sourceOfComponents`,
@@ -460,7 +468,7 @@ export default function WasteItemCard({
               >
                 {SOURCE_OF_COMPONENTS.map((source) => (
                   <option key={source} value={source}>
-                    {source}
+                    {SOURCE_LABELS[source]}
                   </option>
                 ))}
               </select>
@@ -476,7 +484,7 @@ export default function WasteItemCard({
                 value={item.hazCodes}
                 onChange={(event) => update({ hazCodes: event.target.value })}
                 className={inputClassFor([`${prefix}.hazardous.hazCodes`])}
-                placeholder="HP_5, HP_14"
+                placeholder="Example: HP_5, HP_14"
               />
             </Field>
           </div>
@@ -503,12 +511,13 @@ export default function WasteItemCard({
                         })
                       }
                       className={inputClassFor([`${componentPrefix}.name`])}
-                      placeholder="Mineral fibres"
+                      placeholder="Example: mineral fibres"
                     />
                   </Field>
 
                   <Field
                     label="Concentration"
+                    helper="Optional. Add concentration if known."
                     error={issueMessagesFor([
                       `${componentPrefix}.concentration`,
                     ])}
@@ -525,7 +534,7 @@ export default function WasteItemCard({
                       className={inputClassFor([
                         `${componentPrefix}.concentration`,
                       ])}
-                      placeholder="18.500"
+                      placeholder="Example: 18.500"
                     />
                   </Field>
 
@@ -547,11 +556,13 @@ export default function WasteItemCard({
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h5 className="text-sm font-semibold text-black">
-              Disposal or recovery codes
+              Treatment, disposal or recovery codes
             </h5>
+
             <p className="mt-1 text-sm leading-6 text-black/50">
-              Add none, one, or multiple disposal/recovery codes for this waste
-              item.
+              Add these codes if they are known or required for this received
+              waste. Leave blank if no treatment, disposal or recovery code is
+              being recorded for this item.
             </p>
           </div>
 
@@ -574,7 +585,7 @@ export default function WasteItemCard({
         <div className="mt-4 grid gap-4">
           {item.disposalOrRecoveryCodes.length === 0 && (
             <div className="rounded-2xl border border-dashed border-black/15 bg-white px-4 py-5 text-sm text-black/45">
-              No disposal or recovery codes added. This is valid for PAT R04.
+              No treatment, disposal or recovery codes added.
             </div>
           )}
 
@@ -598,7 +609,7 @@ export default function WasteItemCard({
                       })
                     }
                     className={inputClassFor([`${rowPrefix}.code`])}
-                    placeholder="R5"
+                    placeholder="Example: R5"
                   />
                 </Field>
 
@@ -616,7 +627,7 @@ export default function WasteItemCard({
                       })
                     }
                     className={inputClassFor([`${rowPrefix}.weight.amount`])}
-                    placeholder="0.900"
+                    placeholder="Example: 0.900"
                   />
                 </Field>
 
