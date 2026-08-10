@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { Inter as FontSans } from "next/font/google";
+
 import "./globals.css";
+
 import { cn } from "@/lib/utils";
 import Providers from "@/components/Providers";
 import { ErrorProvider } from "@/components/providers/error-provider";
 import { GlobalError } from "@/components/ui/global-error";
+import DemoEnvironmentBanner from "@/components/system/DemoEnvironmentBanner";
 
 const fontSans = FontSans({
   subsets: ["latin"],
@@ -70,11 +74,13 @@ export const metadata: Metadata = {
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <html lang="en">
       <body className={cn("font-sans antialiased", fontSans.variable)}>
+        <DemoEnvironmentBanner />
+
         <Providers>
           <ErrorProvider>
             {children}

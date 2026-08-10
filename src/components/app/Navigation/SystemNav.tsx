@@ -357,10 +357,26 @@ function OperationalNav({
     canViewDwtReferenceData ||
     canSyncDwtReferenceData;
 
-  /* Incidents and compliance */
+  /* Incidents, compliance and reports */
   const canViewIncidents = can("incident:view");
   const canViewComplianceReports = can("compliance:reports");
   const canViewComplianceAudit = can("compliance:audit");
+
+  /*
+    Reports Centre is wider than the old compliance reports page.
+    It should be available to organisation users who can view operational,
+    compliance, receiving or DWT areas. The reports page itself still performs
+    server-side permission checks before generating anything.
+  */
+  const canViewReportsCentre =
+    hasOrganisation &&
+    (canViewListings ||
+      canViewAssignments ||
+      canViewReceiving ||
+      canAccessDwtArea ||
+      canViewIncidents ||
+      canViewComplianceReports ||
+      canViewComplianceAudit);
 
   /* Shared workspace */
   const canViewTeam = can("team:view") || hasOrganisation;
@@ -453,9 +469,9 @@ function OperationalNav({
           show: canViewIncidents,
         },
         {
-          label: "Compliance Reports",
-          href: "/home/compliance/reports",
-          show: canViewComplianceReports,
+          label: "Reports Centre",
+          href: "/home/reports",
+          show: canViewReportsCentre,
         },
         {
           label: "Audit Trail",
