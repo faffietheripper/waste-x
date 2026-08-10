@@ -186,6 +186,10 @@ export default function AdminNav({ unreadCount }: { unreadCount: number }) {
             <Link href="/admin/reviews" className={linkClass("/admin/reviews")}>
               Reviews
             </Link>
+
+            <Link href="/admin/reports" className={linkClass("/admin/reports")}>
+              Report Exports
+            </Link>
           </div>
         </section>
 

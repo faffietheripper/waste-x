@@ -1656,6 +1656,76 @@ export const errorLogs = pgTable(
 );
 
 /* =========================================================
+REPORTS EXPORTS
+========================================================= */
+export const reportExports = pgTable(
+  "bb_report_export",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    requestedByUserId: text("requestedByUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    departmentId: text("departmentId"),
+
+    reportType: text("reportType")
+      .$type<
+        | "assignment_summary"
+        | "chain_of_custody"
+        | "incident_log"
+        | "dwt_submissions"
+        | "waste_receipts"
+        | "listing_activity"
+        | "carrier_performance"
+        | "user_access_audit"
+        | "compliance_audit_pack"
+      >()
+      .notNull(),
+
+    format: text("format").$type<"csv" | "pdf" | "json">().notNull(),
+
+    status: text("status")
+      .$type<"pending" | "generating" | "completed" | "failed">()
+      .notNull()
+      .default("pending"),
+
+    title: text("title").notNull(),
+
+    filtersJson: text("filtersJson"),
+
+    fileKey: text("fileKey"),
+    fileName: text("fileName"),
+    mimeType: text("mimeType"),
+
+    rowCount: integer("rowCount").default(0),
+
+    generatedAt: timestamp("generatedAt", { mode: "date" }),
+    downloadedAt: timestamp("downloadedAt", { mode: "date" }),
+    expiresAt: timestamp("expiresAt", { mode: "date" }),
+
+    errorMessage: text("errorMessage"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("report_export_org_idx").on(table.organisationId),
+    userIdx: index("report_export_user_idx").on(table.requestedByUserId),
+    typeIdx: index("report_export_type_idx").on(table.reportType),
+    statusIdx: index("report_export_status_idx").on(table.status),
+    createdIdx: index("report_export_created_idx").on(table.createdAt),
+  }),
+);
+
+
+/* =========================================================
    RELATIONS
 ========================================================= */
 
@@ -2218,3 +2288,23 @@ export const wasteTrackingSubmissionsRelations = relations(
     }),
   }),
 );
+
+/* ================= REPORT EXPORTS ================= */
+
+
+export const reportExportsRelations = relations(reportExports, ({ one }) => ({
+  organisation: one(organisations, {
+    fields: [reportExports.organisationId],
+    references: [organisations.id],
+  }),
+
+  requestedBy: one(users, {
+    fields: [reportExports.requestedByUserId],
+    references: [users.id],
+  }),
+
+  department: one(departments, {
+    fields: [reportExports.departmentId],
+    references: [departments.id],
+  }),
+}));
