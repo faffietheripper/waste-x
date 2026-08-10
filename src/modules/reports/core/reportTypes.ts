@@ -97,6 +97,7 @@ export function getReportFormatMeta(format: ReportFormat) {
 
 export function normaliseReportFormat(value: unknown): ReportFormat {
   if (isReportFormat(value)) return value;
+
   return "csv";
 }
 
@@ -112,7 +113,9 @@ export function parseReportFiltersFromForm(formData: FormData): ReportFilters {
   };
 }
 
-export function parseReportFiltersJson(value: string | null | undefined) {
+export function parseReportFiltersJson(
+  value: string | null | undefined,
+): ReportFilters {
   if (!value) return {};
 
   try {
@@ -177,6 +180,40 @@ export function buildReportFileName({
     : date.toISOString().slice(0, 10);
 
   return `waste-x-${safeName}-${dateStamp}.${formatMeta?.extension ?? format}`;
+}
+
+export function getNoDataReportMessage(reportType: ReportType) {
+  switch (reportType) {
+    case "incident_log":
+      return "No incidents were found for the selected filters. Try a different date range or status.";
+
+    case "assignment_summary":
+      return "No assignments were found for the selected filters. Try a different date range or status.";
+
+    case "chain_of_custody":
+      return "No chain of custody records were found for the selected filters.";
+
+    case "dwt_submissions":
+      return "No Digital Waste Tracking submissions were found for the selected filters.";
+
+    case "waste_receipts":
+      return "No waste receipts were found for the selected filters.";
+
+    case "listing_activity":
+      return "No listing activity was found for the selected filters.";
+
+    case "carrier_performance":
+      return "No carrier performance records were found for the selected filters.";
+
+    case "user_access_audit":
+      return "No user access records were found for the selected filters.";
+
+    case "compliance_audit_pack":
+      return "No compliance audit records were found for the selected filters.";
+
+    default:
+      return "No records were found for the selected filters.";
+  }
 }
 
 function cleanOptionalString(value: unknown) {
