@@ -2,6 +2,8 @@
 
 "use client";
 
+import type { ReactNode } from "react";
+
 import type { BrokerDealerFormState } from "./receiveMovementFormTypes";
 
 type Props = {
@@ -33,15 +35,15 @@ export default function BrokerDealerPanel({
       id="broker-dealer-details"
       className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
     >
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h3 className="text-lg font-semibold text-black">
-            Broker / dealer details
+            4. Broker or dealer, if involved
           </h3>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
-            Enable this when a broker or dealer is involved in the waste
-            movement. This is required for DEFRA PAT scenario B01.
+            Only add this section if a broker or dealer was involved in
+            arranging this waste movement.
           </p>
         </div>
 
@@ -54,9 +56,22 @@ export default function BrokerDealerPanel({
               : "border border-black/10 bg-white text-black/60 hover:border-orange-300"
           }`}
         >
-          {enabled ? "Broker enabled" : "Add broker/dealer"}
+          {enabled ? "Broker/dealer added" : "Add broker/dealer"}
         </button>
       </div>
+
+      {!enabled && (
+        <div className="mt-5 rounded-3xl border border-dashed border-black/15 bg-white p-5">
+          <p className="text-sm font-semibold text-black">
+            No broker or dealer added
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-black/45">
+            Leave this section off when the movement was arranged directly
+            between the waste holder, carrier and receiving site.
+          </p>
+        </div>
+      )}
 
       {enabled && (
         <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -71,12 +86,13 @@ export default function BrokerDealerPanel({
                 update({ organisationName: event.target.value })
               }
               className={inputClassFor(["brokerOrDealer.organisationName"])}
-              placeholder="East Anglia Waste Brokerage Test Ltd"
+              placeholder="Organisation name"
             />
           </Field>
 
           <Field
             label="Registration number"
+            helper="Add this if the broker or dealer has a registration number."
             error={issueMessagesFor(["brokerOrDealer.registrationNumber"])}
           >
             <input
@@ -85,7 +101,7 @@ export default function BrokerDealerPanel({
                 update({ registrationNumber: event.target.value })
               }
               className={inputClassFor(["brokerOrDealer.registrationNumber"])}
-              placeholder="CBDU123456"
+              placeholder="Example: CBDU123456"
             />
           </Field>
 
@@ -94,7 +110,7 @@ export default function BrokerDealerPanel({
               value={brokerOrDealer.fullAddress}
               onChange={(event) => update({ fullAddress: event.target.value })}
               className={inputClassFor(["brokerOrDealer.address.fullAddress"])}
-              placeholder="1 Broker Test Road, Ipswich, Suffolk"
+              placeholder="Full address"
             />
           </Field>
 
@@ -107,7 +123,7 @@ export default function BrokerDealerPanel({
               value={brokerOrDealer.postcode}
               onChange={(event) => update({ postcode: event.target.value })}
               className={inputClassFor(["brokerOrDealer.address.postcode"])}
-              placeholder="IP1 5SW"
+              placeholder="Postcode"
             />
           </Field>
 
@@ -119,7 +135,7 @@ export default function BrokerDealerPanel({
               value={brokerOrDealer.emailAddress}
               onChange={(event) => update({ emailAddress: event.target.value })}
               className={inputClassFor(["brokerOrDealer.emailAddress"])}
-              placeholder="broker.test@wastextracking.com"
+              placeholder="Email address"
             />
           </Field>
 
@@ -128,7 +144,7 @@ export default function BrokerDealerPanel({
               value={brokerOrDealer.phoneNumber}
               onChange={(event) => update({ phoneNumber: event.target.value })}
               className={inputClassFor(["brokerOrDealer.phoneNumber"])}
-              placeholder="01473 333333"
+              placeholder="Phone number"
             />
           </Field>
         </div>
@@ -140,13 +156,15 @@ export default function BrokerDealerPanel({
 function Field({
   label,
   required = false,
+  helper,
   error,
   children,
 }: {
   label: string;
   required?: boolean;
+  helper?: string;
   error?: string[];
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const errors = error?.filter(Boolean) ?? [];
 
@@ -158,6 +176,12 @@ function Field({
       </span>
 
       {children}
+
+      {helper && errors.length === 0 && (
+        <span className="mt-2 block text-xs leading-5 text-black/35">
+          {helper}
+        </span>
+      )}
 
       {errors.length > 0 && (
         <div className="mt-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2">

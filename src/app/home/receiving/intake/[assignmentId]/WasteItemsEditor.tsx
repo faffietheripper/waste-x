@@ -48,12 +48,12 @@ export default function WasteItemsEditor({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h3 className="text-lg font-semibold text-black">
-            2. Waste items received
+            2. Waste received
           </h3>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
-            Add one or more waste items. This supports DEFRA PAT scenarios such
-            as R02, R05, R07, P01, H01 and X01.
+            Add the waste that was received. Include the correct EWC code,
+            description, container details and weight for each item.
           </p>
         </div>
 

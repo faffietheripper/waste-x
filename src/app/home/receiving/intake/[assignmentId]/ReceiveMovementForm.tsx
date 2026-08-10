@@ -45,13 +45,29 @@ import {
 } from "./receiveMovementPatScenarios";
 
 /* =========================================================
-   PAT HELPERS
+   PAT / TESTING SETTINGS
 ========================================================= */
+
+/*
+  This user-facing receiving form must not show PAT quick-fill tools.
+
+  The PAT helpers remain in the file for now so we can re-enable them later
+  from a dedicated admin/PAT testing route without rebuilding the payload logic.
+
+  Real users manually complete the same fields that PAT quick-fill used to fill:
+  waste items, broker/dealer, hazardous details, POPs, carrier details and
+  receiving site details.
+*/
+const SHOW_PAT_TOOLS_IN_USER_FORM = false;
 
 const EXPECTED_DEFRA_ERROR_PAT_SCENARIOS = new Set<PatScenarioId>([
   "C01",
   "H02",
 ]);
+
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function detectPatScenarioId(
   ...values: Array<string | null | undefined>
@@ -66,10 +82,6 @@ function detectPatScenarioId(
 
   return match[1].toUpperCase() as PatScenarioId;
 }
-
-/* =========================================================
-   HELPERS
-========================================================= */
 
 function splitCodeList(value: string): string[] {
   return value
@@ -102,6 +114,7 @@ function numberFromText(value: string): number {
 function nowAsIsoLocalInputValue() {
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+
   return now.toISOString().slice(0, 16);
 }
 
@@ -126,6 +139,26 @@ function formatStatus(value: string | null | undefined) {
     .join(" ");
 }
 
+function formatReasonLabel(value: string) {
+  const labels: Record<string, string> = {
+    NON_HAZ_WASTE_TRANSFER: "Non-hazardous waste transfer",
+    NO_DOC_WITH_WASTE: "No document came with the waste",
+    HWRC_RECEIPT: "Household waste recycling centre receipt",
+    ON_SITE: "Moved on site",
+    HOUSEHOLD: "Household waste",
+    ONE_OFF: "One-off movement",
+    MARINE: "Marine movement",
+  };
+
+  return (
+    labels[value] ??
+    value
+      .toLowerCase()
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase())
+  );
+}
+
 function issueMatchesKey(issueKey: string, fieldKey: string) {
   return (
     issueKey === fieldKey ||
@@ -144,23 +177,23 @@ function sectionForKey(key: string) {
     key === "yourUniqueReference" ||
     key === "specialHandlingRequirements"
   ) {
-    return "Movement details";
+    return "Movement received";
   }
 
   if (key.startsWith("wasteItems")) {
-    return "Waste items";
+    return "Waste received";
   }
 
   if (key.startsWith("carrier")) {
-    return "Carrier details";
+    return "Carrier used";
   }
 
   if (key.startsWith("brokerOrDealer")) {
-    return "Broker / dealer details";
+    return "Broker / dealer";
   }
 
   if (key.startsWith("receiver") || key.startsWith("receipt")) {
-    return "Receiver and receipt site";
+    return "Receiving site";
   }
 
   if (key.startsWith("assignment")) {
@@ -175,11 +208,11 @@ function sectionForKey(key: string) {
 }
 
 function sectionIdForIssue(section: string) {
-  if (section === "Movement details") return "movement-details";
-  if (section === "Waste items") return "waste-items";
-  if (section === "Carrier details") return "carrier-details";
-  if (section === "Broker / dealer details") return "broker-dealer-details";
-  if (section === "Receiver and receipt site") return "receiver-details";
+  if (section === "Movement received") return "movement-details";
+  if (section === "Waste received") return "waste-items";
+  if (section === "Carrier used") return "carrier-details";
+  if (section === "Broker / dealer") return "broker-dealer-details";
+  if (section === "Receiving site") return "receiver-details";
 
   return "submit-feedback";
 }
@@ -234,6 +267,8 @@ export default function ReceiveMovementForm({
 
   const feedbackRef = useRef<HTMLDivElement | null>(null);
 
+  const showPatTools = SHOW_PAT_TOOLS_IN_USER_FORM;
+
   const [submitFeedback, setSubmitFeedback] =
     useState<SubmitFeedback | null>(null);
 
@@ -260,16 +295,21 @@ export default function ReceiveMovementForm({
   const [receiverApiCode, setReceiverApiCode] = useState(
     defaultReceiverApiCode,
   );
+
   const [dateTimeReceived, setDateTimeReceived] = useState(
     nowAsIsoLocalInputValue(),
   );
+
   const [hazardousWasteConsignmentCode, setHazardousWasteConsignmentCode] =
     useState("");
+
   const [reasonForNoConsignmentCode, setReasonForNoConsignmentCode] =
     useState<ReasonForNoConsignmentCode | "">("");
+
   const [yourUniqueReference, setYourUniqueReference] = useState(
     `WX-${assignmentId.slice(0, 8)}`,
   );
+
   const [specialHandlingRequirements, setSpecialHandlingRequirements] =
     useState("");
 
@@ -281,32 +321,41 @@ export default function ReceiveMovementForm({
   /* Carrier */
   const [carrierRegistrationNumber, setCarrierRegistrationNumber] =
     useState("");
+
   const [
     carrierReasonForNoRegistrationNumber,
     setCarrierReasonForNoRegistrationNumber,
   ] = useState<ReasonForNoRegistrationNumber | "">("");
+
   const [carrierOrganisationName, setCarrierOrganisationName] = useState(
     defaultCarrier.organisationName,
   );
+
   const [carrierFullAddress, setCarrierFullAddress] = useState(
     defaultCarrier.fullAddress,
   );
+
   const [carrierPostcode, setCarrierPostcode] = useState(
     defaultCarrier.postcode,
   );
+
   const [carrierEmailAddress, setCarrierEmailAddress] = useState(
     defaultCarrier.emailAddress,
   );
+
   const [carrierPhoneNumber, setCarrierPhoneNumber] = useState(
     defaultCarrier.phoneNumber,
   );
+
   const [carrierMeansOfTransport, setCarrierMeansOfTransport] =
     useState<MeansOfTransport>("Road");
+
   const [carrierVehicleRegistration, setCarrierVehicleRegistration] =
     useState("");
 
   /* Broker / dealer */
   const [brokerDealerEnabled, setBrokerDealerEnabled] = useState(false);
+
   const [brokerOrDealer, setBrokerOrDealer] = useState<BrokerDealerFormState>(
     createDefaultBrokerDealer(),
   );
@@ -315,20 +364,25 @@ export default function ReceiveMovementForm({
   const [receiverSiteName, setReceiverSiteName] = useState(
     defaultReceiver.siteName,
   );
+
   const [receiverEmailAddress, setReceiverEmailAddress] = useState(
     defaultReceiver.emailAddress,
   );
+
   const [receiverPhoneNumber, setReceiverPhoneNumber] = useState(
     defaultReceiver.phoneNumber,
   );
+
   const [receiverAuthorisationNumber, setReceiverAuthorisationNumber] =
     useState("");
+
   const [receiverRpsNumbers, setReceiverRpsNumbers] = useState("");
 
   /* Receipt */
   const [receiptFullAddress, setReceiptFullAddress] = useState(
     defaultReceiver.fullAddress || listingLocation,
   );
+
   const [receiptPostcode, setReceiptPostcode] = useState(
     defaultReceiver.postcode,
   );
@@ -340,18 +394,22 @@ export default function ReceiveMovementForm({
   }, [defaultReceiverApiCode]);
 
   const detectedPatScenarioId = useMemo(() => {
+    if (!showPatTools) return null;
+
     return detectPatScenarioId(
       listingName,
       yourUniqueReference,
       specialHandlingRequirements,
     );
-  }, [listingName, yourUniqueReference, specialHandlingRequirements]);
+  }, [showPatTools, listingName, yourUniqueReference, specialHandlingRequirements]);
 
   const activePatScenarioId = useMemo<PatScenarioId | null>(() => {
+    if (!showPatTools) return null;
+
     if (patExpectedErrorOverride) return patExpectedErrorOverride;
 
     return detectedPatScenarioId;
-  }, [patExpectedErrorOverride, detectedPatScenarioId]);
+  }, [showPatTools, patExpectedErrorOverride, detectedPatScenarioId]);
 
   const isExpectedDefraErrorPatTest = useMemo(() => {
     return activePatScenarioId
@@ -359,8 +417,11 @@ export default function ReceiveMovementForm({
       : false;
   }, [activePatScenarioId]);
 
-  const allowMissingCarrierRegistrationForPat = activePatScenarioId === "C01";
-  const allowMissingHazardousConsignmentForPat = activePatScenarioId === "H02";
+  const allowMissingCarrierRegistrationForPat =
+    showPatTools && activePatScenarioId === "C01";
+
+  const allowMissingHazardousConsignmentForPat =
+    showPatTools && activePatScenarioId === "H02";
 
   function issueMessagesFor(keys: string[]) {
     return issues
@@ -553,7 +614,7 @@ export default function ReceiveMovementForm({
       yourUniqueReference: yourUniqueReference.trim() || null,
 
       otherReferencesForMovement: [
-        ...(activePatScenarioId
+        ...(showPatTools && activePatScenarioId
           ? [
               {
                 label: "DEFRA PAT Scenario",
@@ -637,14 +698,14 @@ export default function ReceiveMovementForm({
     if (!canSubmit) {
       addIssue(
         "submission.permission",
-        "Submission is currently locked. Check assignment stage, incidents and department permissions.",
+        "Submission is currently locked. Check the assignment stage, incidents and your department permissions.",
       );
     }
 
     if (!receiverApiCode.trim()) {
       addIssue(
         "apiCode",
-        "Receiver API Code is required. Add it in settings or enter it here.",
+        "Waste Tracking Service code is required. Add it in settings or enter it here.",
       );
     }
 
@@ -724,7 +785,7 @@ export default function ReceiveMovementForm({
         if (!item.popsSourceOfComponents) {
           addIssue(
             `${prefix}.pops.sourceOfComponents`,
-            `Waste item ${index + 1}: POP source is required.`,
+            `Waste item ${index + 1}: choose how the POPs information was identified.`,
           );
         }
 
@@ -739,7 +800,7 @@ export default function ReceiveMovementForm({
         ) {
           addIssue(
             `${prefix}.pops.components`,
-            `Waste item ${index + 1}: at least one POP component is required.`,
+            `Waste item ${index + 1}: add at least one POP component.`,
           );
         }
       }
@@ -748,7 +809,7 @@ export default function ReceiveMovementForm({
         if (!item.hazardousSourceOfComponents) {
           addIssue(
             `${prefix}.hazardous.sourceOfComponents`,
-            `Waste item ${index + 1}: hazardous source is required.`,
+            `Waste item ${index + 1}: choose how the hazardous information was identified.`,
           );
         }
 
@@ -770,7 +831,7 @@ export default function ReceiveMovementForm({
         ) {
           addIssue(
             `${prefix}.hazardous.components`,
-            `Waste item ${index + 1}: at least one hazardous component is required.`,
+            `Waste item ${index + 1}: add at least one hazardous component.`,
           );
         }
       }
@@ -843,25 +904,25 @@ export default function ReceiveMovementForm({
     }
 
     if (!receiverSiteName.trim()) {
-      addIssue("receiver.siteName", "Receiver site name is required.");
+      addIssue("receiver.siteName", "Receiving site name is required.");
     }
 
     if (!receiverAuthorisationNumber.trim()) {
       addIssue(
         "receiver.authorisationNumber",
-        "Receiver authorisation number is required.",
+        "Receiving site authorisation or permit number is required.",
       );
     }
 
     if (!receiptFullAddress.trim()) {
       addIssue(
         "receipt.address.fullAddress",
-        "Receipt full address is required.",
+        "Receipt site full address is required.",
       );
     }
 
     if (!receiptPostcode.trim()) {
-      addIssue("receipt.address.postcode", "Receipt postcode is required.");
+      addIssue("receipt.address.postcode", "Receipt site postcode is required.");
     }
 
     return nextIssues;
@@ -885,7 +946,7 @@ export default function ReceiveMovementForm({
           clientIssues.length === 1 ? "" : "s"
         } before contacting the Waste Tracking Service.`,
         details: [
-          "Nothing has been sent to the government service yet.",
+          "Nothing has been sent yet.",
           "Fix the marked fields and submit again.",
         ],
       });
@@ -896,9 +957,9 @@ export default function ReceiveMovementForm({
 
     setSubmitFeedback({
       type: "info",
-      title: "Submitting receive movement",
+      title: "Submitting received movement",
       message:
-        "Waste X is validating the record, creating a submission log and contacting the Waste Tracking Service.",
+        "Waste X is checking the record, sending it to the Waste Tracking Service and saving the response for your audit trail.",
     });
 
     jumpToFeedback();
@@ -908,6 +969,7 @@ export default function ReceiveMovementForm({
         assignmentId,
         wasteTrackingId: wasteTrackingId || null,
         patExpectedErrorScenarioId:
+          showPatTools &&
           isExpectedDefraErrorPatTest &&
           (activePatScenarioId === "C01" || activePatScenarioId === "H02")
             ? activePatScenarioId
@@ -924,7 +986,7 @@ export default function ReceiveMovementForm({
         const serverWarnings = result.warnings?.map(mapDefraIssue) ?? [];
 
         const isExpectedPatRejection =
-          isExpectedDefraErrorPatTest && serverIssues.length > 0;
+          showPatTools && isExpectedDefraErrorPatTest && serverIssues.length > 0;
 
         setLastSubmissionId(result.submissionId ?? null);
         setLastSubmissionStatus(result.status ?? null);
@@ -983,8 +1045,8 @@ export default function ReceiveMovementForm({
             : "Submission successful",
         message:
           result.status === "accepted_with_warnings"
-            ? "The receive movement was accepted, but the Waste Tracking Service returned warnings."
-            : "The receive movement was accepted successfully. Waste X saved the submission record and response.",
+            ? "The received movement was accepted, but the Waste Tracking Service returned warnings."
+            : "The received movement was accepted successfully. Waste X saved the submission record and response.",
         details: [
           `Status: ${formatStatus(result.status)}`,
           result.wasteTrackingId
@@ -1003,16 +1065,17 @@ export default function ReceiveMovementForm({
       <div className="flex flex-col gap-4 border-b border-black/10 pb-6 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-            Receive Movement
+            Digital Waste Tracking
           </p>
 
           <h2 className="mt-2 text-2xl font-semibold text-black">
-            Waste Tracking Service submission
+            Submit received waste movement
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
-            Submit one or more waste items to the DEFRA receive movement
-            endpoint. This form now supports the full PAT scenario set.
+            Confirm the waste received, carrier details, receiving site and
+            compliance information before submitting to the Waste Tracking
+            Service.
           </p>
         </div>
 
@@ -1031,29 +1094,30 @@ export default function ReceiveMovementForm({
         </div>
       </div>
 
-      <ReceiverApiCodeNotice
-        hasSavedReceiverApiCode={hasSavedReceiverApiCode}
-        receiverApiCode={receiverApiCode}
-      />
+      <ReceiverApiCodeNotice hasSavedReceiverApiCode={hasSavedReceiverApiCode} />
 
-      <PatQuickFillPanel
-        selectedPatScenarioId={selectedPatScenarioId}
-        onSelectedPatScenarioIdChange={setSelectedPatScenarioId}
-        onApply={() => {
-          if (!selectedPatScenarioId) return;
-          applyPatScenario(selectedPatScenarioId);
-        }}
-      />
+      {showPatTools && (
+        <>
+          <PatQuickFillPanel
+            selectedPatScenarioId={selectedPatScenarioId}
+            onSelectedPatScenarioIdChange={setSelectedPatScenarioId}
+            onApply={() => {
+              if (!selectedPatScenarioId) return;
+              applyPatScenario(selectedPatScenarioId);
+            }}
+          />
 
-      <PatExpectedErrorOverridePanel
-        detectedScenarioId={detectedPatScenarioId}
-        activeScenarioId={activePatScenarioId}
-        override={patExpectedErrorOverride}
-        onOverrideChange={setPatExpectedErrorOverride}
-      />
+          <PatExpectedErrorOverridePanel
+            detectedScenarioId={detectedPatScenarioId}
+            activeScenarioId={activePatScenarioId}
+            override={patExpectedErrorOverride}
+            onOverrideChange={setPatExpectedErrorOverride}
+          />
 
-      {isExpectedDefraErrorPatTest && (
-        <PatExpectedErrorNotice scenarioId={activePatScenarioId} />
+          {isExpectedDefraErrorPatTest && (
+            <PatExpectedErrorNotice scenarioId={activePatScenarioId} />
+          )}
+        </>
       )}
 
       <div className="mt-8 space-y-8">
@@ -1062,22 +1126,31 @@ export default function ReceiveMovementForm({
           className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
         >
           <h3 className="text-lg font-semibold text-black">
-            1. Movement details
+            1. Movement received
           </h3>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+            Confirm when the waste was received and add any hazardous waste
+            consignment details if they apply.
+          </p>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Field
-              label="Receiver API Code"
+              label="Waste Tracking Service code"
               required
               helper={
                 hasSavedReceiverApiCode
-                  ? "Loaded from organisation settings."
-                  : "Enter the test receiver API code or save it in settings."
+                  ? "Loaded securely from organisation settings."
+                  : "Enter the receiver code provided for your receiving site."
               }
               error={issueMessagesFor(["apiCode", "receiverApiCode"])}
             >
               <input
-                value={receiverApiCode}
+                value={
+                  hasSavedReceiverApiCode
+                    ? "Configured in organisation settings"
+                    : receiverApiCode
+                }
                 readOnly={hasSavedReceiverApiCode}
                 onChange={(event) => setReceiverApiCode(event.target.value)}
                 className={`${inputClassFor([
@@ -1088,12 +1161,12 @@ export default function ReceiveMovementForm({
                     ? "cursor-not-allowed bg-black/5 text-black/55"
                     : ""
                 }`}
-                placeholder="1f83215e-4b90-4785-9ab2-2614839aa2e9"
+                placeholder="Enter receiving site code"
               />
             </Field>
 
             <Field
-              label="Date/time received"
+              label="Date and time received"
               required
               error={issueMessagesFor(["dateTimeReceived"])}
             >
@@ -1112,11 +1185,7 @@ export default function ReceiveMovementForm({
                 !reasonForNoConsignmentCode &&
                 !allowMissingHazardousConsignmentForPat
               }
-              helper={
-                allowMissingHazardousConsignmentForPat
-                  ? "PAT H02: leave blank so DEFRA rejects the payload."
-                  : "Required for hazardous waste unless a valid reason is selected."
-              }
+              helper="Only required for hazardous waste unless a valid reason is selected."
               error={issueMessagesFor(["hazardousWasteConsignmentCode"])}
             >
               <input
@@ -1125,22 +1194,18 @@ export default function ReceiveMovementForm({
                   setHazardousWasteConsignmentCode(event.target.value)
                 }
                 className={inputClassFor(["hazardousWasteConsignmentCode"])}
-                placeholder="H01206/HW001"
+                placeholder="Example: H01206/HW001"
               />
             </Field>
 
             <Field
-              label="Reason for no consignment code"
+              label="Reason if there is no consignment code"
               required={
                 wasteItems.some((item) => item.containsHazardous) &&
                 !hazardousWasteConsignmentCode.trim() &&
                 !allowMissingHazardousConsignmentForPat
               }
-              helper={
-                allowMissingHazardousConsignmentForPat
-                  ? "PAT H02: leave as Not applicable."
-                  : "Only needed when hazardous waste has no consignment code."
-              }
+              helper="Only choose this when hazardous waste has no consignment code."
               error={issueMessagesFor(["reasonForNoConsignmentCode"])}
             >
               <select
@@ -1155,14 +1220,15 @@ export default function ReceiveMovementForm({
                 <option value="">Not applicable</option>
                 {REASON_FOR_NO_CONSIGNMENT_CODE.map((reason) => (
                   <option key={reason} value={reason}>
-                    {reason}
+                    {formatReasonLabel(reason)}
                   </option>
                 ))}
               </select>
             </Field>
 
             <Field
-              label="Your unique reference"
+              label="Your reference"
+              helper="Use your job number, ticket number or internal movement reference."
               error={issueMessagesFor(["yourUniqueReference"])}
             >
               <input
@@ -1175,7 +1241,8 @@ export default function ReceiveMovementForm({
             </Field>
 
             <Field
-              label="Special handling requirements"
+              label="Special handling notes"
+              helper="Optional. Add handling instructions, site notes or compliance notes."
               error={issueMessagesFor(["specialHandlingRequirements"])}
             >
               <textarea
@@ -1205,8 +1272,13 @@ export default function ReceiveMovementForm({
           className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
         >
           <h3 className="text-lg font-semibold text-black">
-            3. Carrier details
+            3. Carrier used
           </h3>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+            Confirm the carrier who transported the waste and how the waste was
+            moved.
+          </p>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Field
@@ -1215,11 +1287,7 @@ export default function ReceiveMovementForm({
                 !carrierReasonForNoRegistrationNumber &&
                 !allowMissingCarrierRegistrationForPat
               }
-              helper={
-                allowMissingCarrierRegistrationForPat
-                  ? "PAT C01: leave blank so DEFRA rejects the payload."
-                  : "Add the registration number or select a reason."
-              }
+              helper="Add the carrier registration number, or choose a reason if there is no registration number."
               error={issueMessagesFor(["carrier.registrationNumber"])}
             >
               <input
@@ -1228,12 +1296,12 @@ export default function ReceiveMovementForm({
                   setCarrierRegistrationNumber(event.target.value)
                 }
                 className={inputClassFor(["carrier.registrationNumber"])}
-                placeholder="CBDL999999"
+                placeholder="Example: CBDL999999"
               />
             </Field>
 
             <Field
-              label="Reason for no registration number"
+              label="Reason if there is no registration number"
               required={
                 !carrierRegistrationNumber.trim() &&
                 !allowMissingCarrierRegistrationForPat
@@ -1256,7 +1324,7 @@ export default function ReceiveMovementForm({
                 <option value="">Not applicable</option>
                 {REASON_FOR_NO_REGISTRATION_NUMBER.map((reason) => (
                   <option key={reason} value={reason}>
-                    {reason}
+                    {formatReasonLabel(reason)}
                   </option>
                 ))}
               </select>
@@ -1344,6 +1412,7 @@ export default function ReceiveMovementForm({
             <Field
               label="Vehicle registration"
               required={carrierMeansOfTransport === "Road"}
+              helper="Required when the waste was transported by road."
               error={issueMessagesFor(["carrier.vehicleRegistration"])}
             >
               <input
@@ -1372,12 +1441,17 @@ export default function ReceiveMovementForm({
           className="scroll-mt-32 rounded-3xl border border-black/10 bg-[#f7f3ed] p-6"
         >
           <h3 className="text-lg font-semibold text-black">
-            5. Receiver and receipt site
+            5. Receiving site
           </h3>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+            Confirm the site that received the waste and the permit,
+            authorisation or exemption details for the site.
+          </p>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Field
-              label="Receiver site name"
+              label="Receiving site name"
               required
               error={issueMessagesFor(["receiver.siteName"])}
             >
@@ -1389,8 +1463,9 @@ export default function ReceiveMovementForm({
             </Field>
 
             <Field
-              label="Receiver authorisation number"
+              label="Permit, authorisation or exemption number"
               required
+              helper="Use the permit, authorisation or relevant site reference for the receiving site."
               error={issueMessagesFor(["receiver.authorisationNumber"])}
             >
               <input
@@ -1399,12 +1474,12 @@ export default function ReceiveMovementForm({
                   setReceiverAuthorisationNumber(event.target.value)
                 }
                 className={inputClassFor(["receiver.authorisationNumber"])}
-                placeholder="PPC/A/9999999"
+                placeholder="Example: PPC/A/9999999"
               />
             </Field>
 
             <Field
-              label="Receiver email"
+              label="Receiving site email"
               error={issueMessagesFor(["receiver.emailAddress"])}
             >
               <input
@@ -1416,7 +1491,7 @@ export default function ReceiveMovementForm({
               />
             </Field>
 
-            <Field label="Receiver phone">
+            <Field label="Receiving site phone">
               <input
                 value={receiverPhoneNumber}
                 onChange={(event) =>
@@ -1426,17 +1501,20 @@ export default function ReceiveMovementForm({
               />
             </Field>
 
-            <Field label="RPS numbers">
+            <Field
+              label="Regulatory position statement numbers"
+              helper="Optional. Separate multiple numbers with commas."
+            >
               <input
                 value={receiverRpsNumbers}
                 onChange={(event) => setReceiverRpsNumbers(event.target.value)}
                 className={inputClass}
-                placeholder="343, 456"
+                placeholder="Example: 343, 456"
               />
             </Field>
 
             <Field
-              label="Receipt full address"
+              label="Receipt site full address"
               required
               error={issueMessagesFor(["receipt.address.fullAddress"])}
             >
@@ -1448,7 +1526,7 @@ export default function ReceiveMovementForm({
             </Field>
 
             <Field
-              label="Receipt postcode"
+              label="Receipt site postcode"
               required
               error={issueMessagesFor(["receipt.address.postcode"])}
             >
@@ -1478,15 +1556,15 @@ export default function ReceiveMovementForm({
         <section className="sticky bottom-4 z-20 flex flex-col gap-4 rounded-3xl border border-black/10 bg-black p-6 text-white shadow-2xl md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm font-semibold">
-              Submit receive movement to Waste Tracking Service
+              Submit received movement
             </p>
 
             <p className="mt-2 max-w-2xl text-sm leading-6 text-white/50">
-              This submits the current payload to DEFRA test/sandbox and saves
-              the response in Waste X.
+              Waste X will validate the record, send it to the Waste Tracking
+              Service and save the response for your audit trail.
             </p>
 
-            {isExpectedDefraErrorPatTest && (
+            {showPatTools && isExpectedDefraErrorPatTest && (
               <p className="mt-3 rounded-2xl border border-orange-400/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
                 PAT {activePatScenarioId} is expected to fail. Submit this only
                 while using the DEFRA test/sandbox environment.
@@ -1504,9 +1582,7 @@ export default function ReceiveMovementForm({
               ? "Submitting..."
               : isUpdate
                 ? "Update movement"
-                : isExpectedDefraErrorPatTest
-                  ? "Submit expected-error PAT"
-                  : "Submit movement"}
+                : "Submit movement"}
           </button>
         </section>
       </div>
@@ -1523,10 +1599,8 @@ const inputClass =
 
 function ReceiverApiCodeNotice({
   hasSavedReceiverApiCode,
-  receiverApiCode,
 }: {
   hasSavedReceiverApiCode: boolean;
-  receiverApiCode: string;
 }) {
   return (
     <section
@@ -1539,19 +1613,19 @@ function ReceiverApiCodeNotice({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
-            Receiver API Code
+            Waste Tracking Service
           </p>
 
           <h3 className="mt-2 text-lg font-semibold">
             {hasSavedReceiverApiCode
-              ? "Organisation code is configured"
-              : "Organisation code is missing"}
+              ? "Your receiving site code is configured"
+              : "Receiving site code is missing"}
           </h3>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 opacity-80">
             {hasSavedReceiverApiCode
-              ? "Waste X loaded the Receiver API Code from organisation settings."
-              : "No Receiver API Code is saved for this organisation. Add one in settings or enter it here for testing."}
+              ? "Waste X will use the code saved in organisation settings. The full code is not shown here for normal users."
+              : "No receiving site code is saved for this organisation. Add one in settings before going live."}
           </p>
         </div>
 
@@ -1559,12 +1633,6 @@ function ReceiverApiCodeNotice({
           <span className="rounded-full border border-current/20 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]">
             {hasSavedReceiverApiCode ? "Configured" : "Missing"}
           </span>
-
-          {hasSavedReceiverApiCode && (
-            <span className="max-w-[16rem] break-all rounded-2xl border border-current/15 bg-white/40 px-4 py-3 text-xs font-semibold">
-              {receiverApiCode}
-            </span>
-          )}
 
           <Link
             href="/home/settings/digital-waste-tracking"
@@ -1832,7 +1900,7 @@ function FeedbackPanel({
 
         <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
           {canSubmit
-            ? "Complete the required fields or use PAT quick-fill, then submit."
+            ? "Complete the required fields, then submit the received movement."
             : "This assignment cannot be submitted yet."}
         </p>
       </section>
@@ -1898,7 +1966,7 @@ function FeedbackPanel({
               Waste tracking ID
             </p>
             <p className="mt-2 break-all text-sm font-semibold">
-              {wasteTrackingId || "Not issued / expected error"}
+              {wasteTrackingId || "Not issued"}
             </p>
           </div>
 
@@ -1932,7 +2000,7 @@ function FeedbackPanel({
               >
                 {feedback?.isExpectedPatRejection
                   ? "DEFRA returned the expected rejection"
-                  : "Why this did not work"}
+                  : "What needs fixing"}
               </p>
 
               <p
