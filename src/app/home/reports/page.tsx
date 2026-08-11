@@ -1,4 +1,4 @@
-import { desc, eq, and } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
@@ -12,8 +12,17 @@ import {
   getReportUserContextFromSession,
 } from "@/modules/reports/core/reportPermissions";
 import { REPORT_TYPES } from "@/modules/reports/core/reportTypes";
+import { resolveSiteFilterForOrganisation } from "@/modules/sites/data-access/resolveSiteFilterForOrganisation";
 
-export default async function OrganisationReportsPage() {
+type PageProps = {
+  searchParams?: {
+    siteId?: string;
+  };
+};
+
+export default async function OrganisationReportsPage({
+  searchParams,
+}: PageProps) {
   const session = await auth();
   const context = getReportUserContextFromSession(session);
 
@@ -29,17 +38,29 @@ export default async function OrganisationReportsPage() {
     redirect("/home");
   }
 
- const reports = await database
-  .select()
-  .from(reportExports)
-  .where(
-    and(
-      eq(reportExports.organisationId, context.organisationId),
-      eq(reportExports.status, "completed"),
-    ),
-  )
-  .orderBy(desc(reportExports.createdAt))
-  .limit(50);
+  const siteFilter = await resolveSiteFilterForOrganisation({
+    organisationId: context.organisationId,
+    requestedSiteId: searchParams?.siteId,
+    createDefaultIfMissing: true,
+  });
+
+  const reportsWhere = siteFilter.selectedSiteId
+    ? and(
+        eq(reportExports.organisationId, context.organisationId),
+        eq(reportExports.status, "completed"),
+        eq(reportExports.siteId, siteFilter.selectedSiteId),
+      )
+    : and(
+        eq(reportExports.organisationId, context.organisationId),
+        eq(reportExports.status, "completed"),
+      );
+
+  const reports = await database
+    .select()
+    .from(reportExports)
+    .where(reportsWhere)
+    .orderBy(desc(reportExports.createdAt))
+    .limit(50);
 
   const allowedReportTypes = REPORT_TYPES.filter((report) =>
     canGenerateReport({
@@ -55,135 +76,141 @@ export default async function OrganisationReportsPage() {
   const failedReports = reports.filter(
     (report) => report.status === "failed",
   ).length;
-  const downloadedReports = reports.filter(
-    (report) => Boolean(report.downloadedAt),
+  const downloadedReports = reports.filter((report) =>
+    Boolean(report.downloadedAt),
   ).length;
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] text-black">
-      <div className="ml-[20vw] min-h-screen px-8 pb-12 pt-[calc(13vh+2rem)]">
-        <div className="mx-auto max-w-7xl space-y-8">
-          {/* ================= HEADER ================= */}
-          <section className="overflow-hidden rounded-[2rem] border border-black/10 bg-black shadow-sm">
-            <div className="relative p-8 sm:p-10">
-              <div className="absolute right-0 top-0 h-40 w-40 rounded-bl-full bg-orange-500/20" />
-              <div className="absolute bottom-0 right-16 h-20 w-20 rounded-t-full bg-orange-400/10" />
+    <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[calc(13vh+2rem)] text-black">
+      <div className="mx-auto max-w-7xl space-y-8">
+        <section className="overflow-hidden rounded-[2rem] border border-black/10 bg-black shadow-sm">
+          <div className="relative p-8 text-white">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.22),transparent_35%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.08),transparent_35%)]" />
 
-              <div className="relative">
-                <p className="text-xs font-black uppercase tracking-[0.32em] text-orange-400">
-                  Waste X Reports
-                </p>
+            <div className="relative">
+              <p className="text-xs font-black uppercase tracking-[0.32em] text-orange-400">
+                Waste X Reports
+              </p>
 
-                <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                  <div>
-                    <h1 className="text-3xl font-black tracking-tight text-white sm:text-5xl">
-                      Reports Centre
-                    </h1>
+              <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <h1 className="text-3xl font-black tracking-tight text-white sm:text-5xl">
+                    Reports Centre
+                  </h1>
 
-                    <p className="mt-4 max-w-3xl text-sm leading-6 text-white/65">
-                      Generate audit-ready exports for assignments, incidents,
-                      receipts, Digital Waste Tracking submissions, listings and
-                      user access records.
-                    </p>
-                  </div>
+                  <p className="mt-4 max-w-3xl text-sm leading-6 text-white/65">
+                    Generate audit-ready exports for assignments, incidents,
+                    receipts, Digital Waste Tracking submissions, listings and
+                    user access records.
+                  </p>
 
-                  <div className="rounded-2xl border border-orange-400/20 bg-orange-500/10 px-5 py-4">
-                    <p className="text-[10px] font-black uppercase tracking-[0.24em] text-orange-300/80">
-                      Audit mode
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-white">
-                      Every export is logged
-                    </p>
-                  </div>
+                  <p className="mt-4 inline-flex rounded-full border border-orange-400/20 bg-orange-500/10 px-4 py-2 text-xs font-semibold text-orange-300">
+                    Showing: {siteFilter.label}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-orange-400/20 bg-orange-500/10 px-5 py-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.24em] text-orange-300/80">
+                    Audit mode
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-white">
+                    Every export is logged
+                  </p>
                 </div>
               </div>
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* ================= SUMMARY CARDS ================= */}
-          <section className="grid gap-4 md:grid-cols-4">
-            <ReportMetricCard
-              label="Total reports"
-              value={totalReports}
-              helper="Generated by your organisation"
-            />
+        <section className="grid gap-4 md:grid-cols-4">
+          <ReportMetricCard
+            label="Total reports"
+            value={totalReports}
+            helper="Generated by your organisation"
+          />
 
-            <ReportMetricCard
-              label="Completed"
-              value={completedReports}
-              helper="Ready for download"
-            />
+          <ReportMetricCard
+            label="Completed"
+            value={completedReports}
+            helper="Ready for download"
+          />
 
-            <ReportMetricCard
-              label="Downloaded"
-              value={downloadedReports}
-              helper="Exported for records"
-            />
+          <ReportMetricCard
+            label="Downloaded"
+            value={downloadedReports}
+            helper="Exported for records"
+          />
 
-            <ReportMetricCard
-              label="Failed"
-              value={failedReports}
-              helper="Needs review"
-              danger={failedReports > 0}
-            />
-          </section>
+          <ReportMetricCard
+            label="Failed"
+            value={failedReports}
+            helper="Needs review"
+            danger={failedReports > 0}
+          />
+        </section>
 
-          {/* ================= GENERATOR ================= */}
-          <section className="rounded-[2rem] border border-black/10 bg-white/70 p-2 shadow-sm backdrop-blur">
-            <div className="rounded-[1.5rem] border border-black/5 bg-white">
-              {allowedReportTypes.length > 0 ? (
-                <ReportGeneratorForm allowedReportTypes={allowedReportTypes} />
-              ) : (
-                <div className="p-8">
-                  <p className="text-xs font-black uppercase tracking-[0.25em] text-orange-600">
-                    Reports Centre
-                  </p>
+        <section className="rounded-[2rem] border border-black/10 bg-white/70 p-2 shadow-sm backdrop-blur">
+          <div className="rounded-[1.5rem] border border-black/5 bg-white">
+            {allowedReportTypes.length > 0 ? (
+            <ReportGeneratorForm
+  allowedReportTypes={allowedReportTypes}
+  selectedSiteId={siteFilter.selectedSiteId}
+  selectedSiteLabel={siteFilter.label}
+/>
 
-                  <h2 className="mt-3 text-2xl font-black tracking-tight text-black">
-                    No report access available
-                  </h2>
-
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-black/55">
-                    Your current role or active department does not have
-                    permission to generate reports.
-                  </p>
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* ================= HISTORY ================= */}
-          <section className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.25em] text-black/35">
-                  Export history
+            ) : (
+              <div className="p-8">
+                <p className="text-xs font-black uppercase tracking-[0.25em] text-orange-600">
+                  Reports Centre
                 </p>
 
-                <h2 className="mt-2 text-2xl font-black tracking-tight text-black">
-                  Recent reports
+                <h2 className="mt-3 text-2xl font-black tracking-tight text-black">
+                  No report access available
                 </h2>
 
-                <p className="mt-1 max-w-2xl text-sm text-black/55">
-                  These reports belong to your organisation and are tracked for
-                  audit purposes.
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-black/55">
+                  Your current role or active department does not have
+                  permission to generate reports.
                 </p>
               </div>
+            )}
+          </div>
+        </section>
 
-              <div className="rounded-2xl border border-black/10 bg-white px-4 py-3 text-xs font-semibold text-black/50">
-                Latest 50 exports
-              </div>
+        <section className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.25em] text-black/35">
+                Export history
+              </p>
+
+              <h2 className="mt-2 text-2xl font-black tracking-tight text-black">
+                Recent reports
+              </h2>
+
+              <p className="mt-1 max-w-2xl text-sm text-black/55">
+                These reports belong to your organisation and are tracked for
+                audit purposes. The current view is filtered by{" "}
+                <span className="font-semibold text-black">
+                  {siteFilter.label}
+                </span>
+                .
+              </p>
             </div>
 
-            <div className="rounded-[2rem] border border-black/10 bg-white/70 p-2 shadow-sm backdrop-blur">
-              <ReportHistoryTable
-                reports={reports}
-                showOrganisation={false}
-                showRequestedBy={false}
-              />
+            <div className="rounded-2xl border border-black/10 bg-white px-4 py-3 text-xs font-semibold text-black/50">
+              Latest 50 exports
             </div>
-          </section>
-        </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-black/10 bg-white/70 p-2 shadow-sm backdrop-blur">
+            <ReportHistoryTable
+              reports={reports}
+              showOrganisation={false}
+              showRequestedBy={false}
+            />
+          </div>
+        </section>
       </div>
     </main>
   );
@@ -201,10 +228,10 @@ function ReportMetricCard({
   danger?: boolean;
 }) {
   return (
-    <div className="rounded-[1.5rem] border border-black/10 bg-white p-5 shadow-sm">
+    <div className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-black/35">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-black/35">
             {label}
           </p>
 

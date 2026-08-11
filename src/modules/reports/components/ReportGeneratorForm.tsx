@@ -11,10 +11,14 @@ import { REPORT_FORMATS, REPORT_TYPES } from "../core/reportTypes";
 
 type ReportGeneratorFormProps = {
   allowedReportTypes?: string[];
+  selectedSiteId?: string | null;
+  selectedSiteLabel?: string;
 };
 
 export default function ReportGeneratorForm({
   allowedReportTypes,
+  selectedSiteId,
+  selectedSiteLabel = "All Sites",
 }: ReportGeneratorFormProps) {
   const router = useRouter();
 
@@ -52,6 +56,10 @@ export default function ReportGeneratorForm({
         });
       }}
     >
+      {selectedSiteId && (
+        <input type="hidden" name="siteId" value={selectedSiteId} />
+      )}
+
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.25em] text-orange-600">
           Reports Centre
@@ -64,6 +72,10 @@ export default function ReportGeneratorForm({
         <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
           Export operational and compliance data for your own records, audits or
           internal review.
+        </p>
+
+        <p className="mt-4 inline-flex rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-xs font-semibold text-orange-700">
+          Report scope: {selectedSiteLabel}
         </p>
       </div>
 

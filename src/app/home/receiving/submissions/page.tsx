@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { users, wasteTrackingSubmissions } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -12,10 +12,17 @@ import {
 } from "@/modules/auth/core/permissions";
 
 import type { DefraValidationResult } from "@/modules/digital-waste-tracking/types/receiveMovement.types";
+import { resolveSiteFilterForOrganisation } from "@/modules/sites/data-access/resolveSiteFilterForOrganisation";
 
 /* =========================================================
    TYPES
 ========================================================= */
+
+type PageProps = {
+  searchParams?: {
+    siteId?: string;
+  };
+};
 
 type StatusTone = "muted" | "success" | "warning" | "danger" | "info";
 
@@ -139,7 +146,9 @@ function getGroupKey(submission: {
   return `submission:${submission.id}`;
 }
 
-function countRejectedOrFailedAttempts(attempts: SubmissionAttemptForDisplay[]) {
+function countRejectedOrFailedAttempts(
+  attempts: SubmissionAttemptForDisplay[],
+) {
   return attempts.filter((attempt) =>
     ["rejected", "failed"].includes(attempt.status),
   ).length;
@@ -160,6 +169,10 @@ function getHttpStatus(submission: {
 
   return snapshot?.statusCode ?? "Not recorded";
 }
+
+/* =========================================================
+   UI HELPERS
+========================================================= */
 
 function StatusPill({
   label,
@@ -356,7 +369,9 @@ function AttemptHistory({
    PAGE
 ========================================================= */
 
-export default async function ReceivingSubmissionsPage() {
+export default async function ReceivingSubmissionsPage({
+  searchParams,
+}: PageProps) {
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -382,6 +397,19 @@ export default async function ReceivingSubmissionsPage() {
   const currentOrganisation = currentUser.organisation;
   const currentDepartment = currentUser.department;
   const organisationId = currentUser.organisationId;
+
+  const siteFilter = await resolveSiteFilterForOrganisation({
+    organisationId,
+    requestedSiteId: searchParams?.siteId,
+    createDefaultIfMissing: true,
+  });
+
+  const submissionsWhere = siteFilter.selectedSiteId
+    ? and(
+        eq(wasteTrackingSubmissions.organisationId, organisationId),
+        eq(wasteTrackingSubmissions.siteId, siteFilter.selectedSiteId),
+      )
+    : eq(wasteTrackingSubmissions.organisationId, organisationId);
 
   const capabilities =
     (currentOrganisation.capabilities as Capability[] | null) ?? [];
@@ -409,7 +437,7 @@ export default async function ReceivingSubmissionsPage() {
 
   if (!canViewReceiving && !canViewDwt && !canSubmitDwt) {
     return (
-      <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] pr-10 pt-[17vh] text-black">
+      <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[calc(13vh+2rem)] text-black">
         <section className="rounded-3xl border border-black/10 bg-white p-10 shadow-sm">
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
             DWT Submissions
@@ -430,7 +458,7 @@ export default async function ReceivingSubmissionsPage() {
 
   const submissions =
     await database.query.wasteTrackingSubmissions.findMany({
-      where: eq(wasteTrackingSubmissions.organisationId, organisationId),
+      where: submissionsWhere,
       with: {
         assignment: {
           with: {
@@ -508,357 +536,368 @@ export default async function ReceivingSubmissionsPage() {
   const latestGroup = submissionGroups[0] ?? null;
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] pr-10 pt-[17vh] pb-24 text-black">
-      {/* ================= HEADER ================= */}
-      <section className="rounded-[2rem] bg-black p-8 text-white shadow-sm">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-orange-400">
-          Receiving
-        </p>
+    <main className="min-h-screen bg-[#f7f3ed] pb-24 pl-[22vw] pr-8 pt-[calc(13vh+2rem)] text-black">
+      <div className="mx-auto max-w-7xl space-y-8">
+        {/* ================= HEADER ================= */}
+        <section className="rounded-[2rem] bg-black p-8 text-white shadow-sm">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-orange-400">
+            Receiving
+          </p>
 
-        <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h1 className="text-4xl font-semibold tracking-tight">
-              DWT Submissions
-            </h1>
-
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-              One card is shown per assignment or receive movement. Rejected
-              retries are kept in the attempt history so the page stays clear
-              while still preserving the audit trail.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/home/receiving/intake"
-              className="inline-flex rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-            >
-              Intake queue →
-            </Link>
-
-            <Link
-              href="/home/compliance/digital-waste-tracking"
-              className="inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-            >
-              Compliance dashboard
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* ================= METRICS ================= */}
-      <section className="mt-8 grid gap-4 md:grid-cols-4">
-        <MetricCard
-          label="Tracked movements"
-          value={movementCount}
-          helper="Grouped by assignment"
-        />
-
-        <MetricCard
-          label="Accepted"
-          value={acceptedCount}
-          helper="Latest status accepted"
-        />
-
-        <MetricCard
-          label="Warnings"
-          value={warningCount}
-          helper="Latest status has warnings"
-        />
-
-        <MetricCard
-          label="Needs attention"
-          value={needsAttentionCount}
-          helper={`${attemptCount} total API attempt${
-            attemptCount === 1 ? "" : "s"
-          }`}
-        />
-      </section>
-
-      {/* ================= LATEST SUMMARY ================= */}
-      {latestGroup && (
-        <section className="mt-8 rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-                Latest Movement
+              <h1 className="text-4xl font-semibold tracking-tight">
+                DWT Submissions
+              </h1>
+
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
+                One card is shown per assignment or receive movement. Rejected
+                retries are kept in the attempt history so the page stays clear
+                while still preserving the audit trail.
               </p>
 
-              <h2 className="mt-2 text-xl font-semibold text-black">
-                {latestGroup.latest.listing?.name ??
-                  latestGroup.latest.assignment?.listing?.name ??
-                  "Receive movement"}
-              </h2>
-
-              <p className="mt-2 text-sm leading-6 text-black/50">
-                {getStatusDescription(latestGroup.latest.status)}
+              <p className="mt-4 inline-flex rounded-full border border-orange-400/20 bg-orange-500/10 px-4 py-2 text-xs font-semibold text-orange-300">
+                Showing: {siteFilter.label}
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusPill
-                label={formatStatus(latestGroup.latest.status)}
-                tone={getStatusTone(latestGroup.latest.status)}
-              />
+            <div className="flex flex-wrap gap-3">
+              <Link
+                href="/home/receiving/intake"
+                className="inline-flex rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+              >
+                Intake queue →
+              </Link>
 
-              {latestGroup.latest.wasteTrackingId && (
-                <StatusPill
-                  label={`Tracking ID: ${latestGroup.latest.wasteTrackingId}`}
-                  tone="info"
-                />
-              )}
-
-              <StatusPill
-                label={`${latestGroup.attempts.length} attempt${
-                  latestGroup.attempts.length === 1 ? "" : "s"
-                }`}
-                tone="muted"
-              />
+              <Link
+                href="/home/compliance/digital-waste-tracking"
+                className="inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+              >
+                Compliance dashboard
+              </Link>
             </div>
           </div>
         </section>
-      )}
 
-      {/* ================= LIST ================= */}
-      <section className="mt-8 rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-black/10 pb-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-              Submission Register
-            </p>
+        {/* ================= METRICS ================= */}
+        <section className="grid gap-4 md:grid-cols-4">
+          <MetricCard
+            label="Tracked movements"
+            value={movementCount}
+            helper="Grouped by assignment"
+          />
 
-            <h2 className="mt-2 text-xl font-semibold text-black">
-              Digital Waste Tracking movements
-            </h2>
+          <MetricCard
+            label="Accepted"
+            value={acceptedCount}
+            helper="Latest status accepted"
+          />
 
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
-              This view shows the latest result for each movement. Older failed
-              or rejected attempts are collapsed under each card.
-            </p>
+          <MetricCard
+            label="Warnings"
+            value={warningCount}
+            helper="Latest status has warnings"
+          />
+
+          <MetricCard
+            label="Needs attention"
+            value={needsAttentionCount}
+            helper={`${attemptCount} total API attempt${
+              attemptCount === 1 ? "" : "s"
+            }`}
+          />
+        </section>
+
+        {/* ================= LATEST SUMMARY ================= */}
+        {latestGroup && (
+          <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
+                  Latest Movement
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-black">
+                  {latestGroup.latest.listing?.name ??
+                    latestGroup.latest.assignment?.listing?.name ??
+                    "Receive movement"}
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-black/50">
+                  {getStatusDescription(latestGroup.latest.status)}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusPill
+                  label={formatStatus(latestGroup.latest.status)}
+                  tone={getStatusTone(latestGroup.latest.status)}
+                />
+
+                {latestGroup.latest.wasteTrackingId && (
+                  <StatusPill
+                    label={`Tracking ID: ${latestGroup.latest.wasteTrackingId}`}
+                    tone="info"
+                  />
+                )}
+
+                <StatusPill
+                  label={`${latestGroup.attempts.length} attempt${
+                    latestGroup.attempts.length === 1 ? "" : "s"
+                  }`}
+                  tone="muted"
+                />
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ================= LIST ================= */}
+        <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-black/10 pb-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
+                Submission Register
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-black">
+                Digital Waste Tracking movements
+              </h2>
+
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+                This view shows the latest result for each movement. Older failed
+                or rejected attempts are collapsed under each card. Current site
+                scope:{" "}
+                <span className="font-semibold text-black">
+                  {siteFilter.label}
+                </span>
+                .
+              </p>
+            </div>
           </div>
-        </div>
 
-        {submissionGroups.length === 0 ? (
-          <div className="mt-6 rounded-3xl border border-dashed border-black/15 bg-[#f7f3ed] p-8">
-            <p className="text-sm font-semibold text-black">
-              No submissions yet.
-            </p>
+          {submissionGroups.length === 0 ? (
+            <div className="mt-6 rounded-3xl border border-dashed border-black/15 bg-[#f7f3ed] p-8">
+              <p className="text-sm font-semibold text-black">
+                No submissions found for this site view.
+              </p>
 
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-black/50">
-              Once a receiving intake is submitted to the Waste Tracking
-              Service, the latest result will appear here.
-            </p>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-black/50">
+                Once a receiving intake is submitted to the Waste Tracking
+                Service, the latest result will appear here.
+              </p>
 
-            <Link
-              href="/home/receiving/intake"
-              className="mt-5 inline-flex rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-            >
-              Open intake queue →
-            </Link>
-          </div>
-        ) : (
-          <div className="mt-6 space-y-5">
-            {submissionGroups.map((group) => {
-              const submission = group.latest;
+              <Link
+                href="/home/receiving/intake"
+                className="mt-5 inline-flex rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+              >
+                Open intake queue →
+              </Link>
+            </div>
+          ) : (
+            <div className="mt-6 space-y-5">
+              {submissionGroups.map((group) => {
+                const submission = group.latest;
 
-              const warnings = parseValidationResults(
-                submission.validationWarnings,
-              );
-
-              const errors = parseValidationResults(
-                submission.validationErrors,
-              );
-
-              const responseSnapshot =
-                parseJson<ParsedResponseSnapshot>(
-                  submission.responseSnapshot,
+                const warnings = parseValidationResults(
+                  submission.validationWarnings,
                 );
 
-              const listingName =
-                submission.listing?.name ??
-                submission.assignment?.listing?.name ??
-                "Receive movement";
+                const errors = parseValidationResults(
+                  submission.validationErrors,
+                );
 
-              const assignmentId =
-                submission.assignmentId ?? submission.assignment?.id;
+                const responseSnapshot =
+                  parseJson<ParsedResponseSnapshot>(
+                    submission.responseSnapshot,
+                  );
 
-              const carrierName =
-                submission.assignment?.carrierOrganisation?.teamName ??
-                "Not recorded";
+                const listingName =
+                  submission.listing?.name ??
+                  submission.assignment?.listing?.name ??
+                  "Receive movement";
 
-              const managerName =
-                submission.assignment?.managerOrganisation?.teamName ??
-                "Not recorded";
+                const assignmentId =
+                  submission.assignmentId ?? submission.assignment?.id;
 
-              const generatorName =
-                submission.assignment?.assignedByOrganisation?.teamName ??
-                submission.assignment?.organisation?.teamName ??
-                "Not recorded";
+                const carrierName =
+                  submission.assignment?.carrierOrganisation?.teamName ??
+                  "Not recorded";
 
-              const failedPreviousAttempts = countRejectedOrFailedAttempts(
-                group.previousAttempts,
-              );
+                const managerName =
+                  submission.assignment?.managerOrganisation?.teamName ??
+                  "Not recorded";
 
-              const hasPreviousAttempts = group.previousAttempts.length > 0;
+                const generatorName =
+                  submission.assignment?.assignedByOrganisation?.teamName ??
+                  submission.assignment?.organisation?.teamName ??
+                  "Not recorded";
 
-              return (
-                <article
-                  key={group.key}
-                  className={`rounded-[1.75rem] border p-5 ${
-                    submission.status === "accepted"
-                      ? "border-emerald-200 bg-emerald-50/45"
-                      : submission.status === "accepted_with_warnings"
-                        ? "border-orange-200 bg-orange-50/45"
-                        : submission.status === "rejected" ||
-                            submission.status === "failed"
-                          ? "border-red-200 bg-red-50/40"
-                          : "border-black/10 bg-[#f7f3ed]"
-                  }`}
-                >
-                  <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill
-                          label={formatStatus(submission.status)}
-                          tone={getStatusTone(submission.status)}
-                        />
+                const failedPreviousAttempts = countRejectedOrFailedAttempts(
+                  group.previousAttempts,
+                );
 
-                        <StatusPill label={submission.method} tone="muted" />
+                const hasPreviousAttempts = group.previousAttempts.length > 0;
 
-                        {submission.wasteTrackingId && (
+                return (
+                  <article
+                    key={group.key}
+                    className={`rounded-[1.75rem] border p-5 ${
+                      submission.status === "accepted"
+                        ? "border-emerald-200 bg-emerald-50/45"
+                        : submission.status === "accepted_with_warnings"
+                          ? "border-orange-200 bg-orange-50/45"
+                          : submission.status === "rejected" ||
+                              submission.status === "failed"
+                            ? "border-red-200 bg-red-50/40"
+                            : "border-black/10 bg-[#f7f3ed]"
+                    }`}
+                  >
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
                           <StatusPill
-                            label={`Tracking ID: ${submission.wasteTrackingId}`}
-                            tone="info"
+                            label={formatStatus(submission.status)}
+                            tone={getStatusTone(submission.status)}
                           />
-                        )}
 
-                        {hasPreviousAttempts && (
-                          <StatusPill
-                            label={`${group.attempts.length} attempts`}
-                            tone="muted"
-                          />
-                        )}
+                          <StatusPill label={submission.method} tone="muted" />
 
-                        {failedPreviousAttempts > 0 &&
-                          submission.status === "accepted" && (
+                          {submission.wasteTrackingId && (
                             <StatusPill
-                              label={`${failedPreviousAttempts} previous failed`}
-                              tone="warning"
+                              label={`Tracking ID: ${submission.wasteTrackingId}`}
+                              tone="info"
                             />
                           )}
+
+                          {hasPreviousAttempts && (
+                            <StatusPill
+                              label={`${group.attempts.length} attempts`}
+                              tone="muted"
+                            />
+                          )}
+
+                          {failedPreviousAttempts > 0 &&
+                            submission.status === "accepted" && (
+                              <StatusPill
+                                label={`${failedPreviousAttempts} previous failed`}
+                                tone="warning"
+                              />
+                            )}
+                        </div>
+
+                        <h3 className="mt-3 text-lg font-semibold text-black">
+                          {listingName}
+                        </h3>
+
+                        <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+                          {getStatusDescription(submission.status)}
+                        </p>
+
+                        <div className="mt-4 grid gap-2 text-sm text-black/55 md:grid-cols-2">
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Assignment:
+                            </span>{" "}
+                            {assignmentId ?? "Not linked"}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Listing:
+                            </span>{" "}
+                            {submission.listingId
+                              ? `#${submission.listingId}`
+                              : "Not linked"}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Generator:
+                            </span>{" "}
+                            {generatorName}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Carrier:
+                            </span>{" "}
+                            {carrierName}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Submitted:
+                            </span>{" "}
+                            {formatDate(submission.submittedAt)}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              HTTP status:
+                            </span>{" "}
+                            {responseSnapshot?.statusCode ?? "Not recorded"}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Manager:
+                            </span>{" "}
+                            {managerName}
+                          </p>
+
+                          <p>
+                            <span className="font-medium text-black/70">
+                              Submitted by:
+                            </span>{" "}
+                            {submission.submittedByUser?.name ?? "Unknown user"}
+                          </p>
+                        </div>
                       </div>
 
-                      <h3 className="mt-3 text-lg font-semibold text-black">
-                        {listingName}
-                      </h3>
+                      <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
+                        {assignmentId && (
+                          <>
+                            <Link
+                              href={`/home/receiving/intake/${assignmentId}`}
+                              className="inline-flex justify-center rounded-full bg-black px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                            >
+                              Open intake →
+                            </Link>
 
-                      <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
-                        {getStatusDescription(submission.status)}
-                      </p>
-
-                      <div className="mt-4 grid gap-2 text-sm text-black/55 md:grid-cols-2">
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Assignment:
-                          </span>{" "}
-                          {assignmentId ?? "Not linked"}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Listing:
-                          </span>{" "}
-                          {submission.listingId
-                            ? `#${submission.listingId}`
-                            : "Not linked"}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Generator:
-                          </span>{" "}
-                          {generatorName}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Carrier:
-                          </span>{" "}
-                          {carrierName}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Submitted:
-                          </span>{" "}
-                          {formatDate(submission.submittedAt)}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            HTTP status:
-                          </span>{" "}
-                          {responseSnapshot?.statusCode ?? "Not recorded"}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Manager:
-                          </span>{" "}
-                          {managerName}
-                        </p>
-
-                        <p>
-                          <span className="font-medium text-black/70">
-                            Submitted by:
-                          </span>{" "}
-                          {submission.submittedByUser?.name ?? "Unknown user"}
-                        </p>
+                            <Link
+                              href={`/home/operations/assignments/${assignmentId}`}
+                              className="inline-flex justify-center rounded-full border border-black/10 bg-white px-5 py-3 text-sm font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600"
+                            >
+                              View assignment
+                            </Link>
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
-                      {assignmentId && (
-                        <>
-                          <Link
-                            href={`/home/receiving/intake/${assignmentId}`}
-                            className="inline-flex justify-center rounded-full bg-black px-5 py-3 text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
-                          >
-                            Open intake →
-                          </Link>
+                    <LatestIssueDetails warnings={warnings} errors={errors} />
 
-                          <Link
-                            href={`/home/operations/assignments/${assignmentId}`}
-                            className="inline-flex justify-center rounded-full border border-black/10 bg-white px-5 py-3 text-sm font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600"
-                          >
-                            View assignment
-                          </Link>
-                        </>
-                      )}
-                    </div>
-                  </div>
+                    {responseSnapshot?.error && (
+                      <details className="mt-5 rounded-3xl border border-red-200 bg-red-50 p-5 text-red-800">
+                        <summary className="cursor-pointer text-sm font-semibold">
+                          View request failure
+                        </summary>
 
-                  <LatestIssueDetails warnings={warnings} errors={errors} />
+                        <p className="mt-3 text-sm leading-6">
+                          {responseSnapshot.error}
+                        </p>
+                      </details>
+                    )}
 
-                  {responseSnapshot?.error && (
-                    <details className="mt-5 rounded-3xl border border-red-200 bg-red-50 p-5 text-red-800">
-                      <summary className="cursor-pointer text-sm font-semibold">
-                        View request failure
-                      </summary>
-
-                      <p className="mt-3 text-sm leading-6">
-                        {responseSnapshot.error}
-                      </p>
-                    </details>
-                  )}
-
-                  <AttemptHistory attempts={group.attempts} />
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
+                    <AttemptHistory attempts={group.attempts} />
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
     </main>
   );
 }

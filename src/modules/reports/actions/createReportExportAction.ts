@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { and, eq } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { reportExports } from "@/db/schema";
+import { reportExports, sites } from "@/db/schema";
 import { getReportDataset } from "../core/getReportData";
 import {
   buildReportFileName,
@@ -26,6 +27,14 @@ export type CreateReportExportActionResult = {
   reportId?: string;
   downloadUrl?: string;
 };
+
+function normaliseOptionalString(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") return null;
+
+  const cleaned = value.trim();
+
+  return cleaned.length > 0 ? cleaned : null;
+}
 
 export async function createReportExportAction(
   formData: FormData,
@@ -63,21 +72,47 @@ export async function createReportExportAction(
     };
   }
 
+  const requestedSiteId = normaliseOptionalString(formData.get("siteId"));
+
+  let selectedSiteId: string | null = null;
+
+  if (requestedSiteId) {
+    const selectedSite = await database.query.sites.findFirst({
+      where: and(
+        eq(sites.id, requestedSiteId),
+        eq(sites.organisationId, context.organisationId),
+        eq(sites.status, "active"),
+      ),
+      columns: {
+        id: true,
+      },
+    });
+
+    if (!selectedSite) {
+      return {
+        ok: false,
+        message: "The selected site is not available for this organisation.",
+      };
+    }
+
+    selectedSiteId = selectedSite.id;
+  }
+
   const format = normaliseReportFormat(formData.get("format"));
   const filters = parseReportFiltersFromForm(formData);
 
-  try {
-    /*
-      Generate the report data first.
+  const filtersWithSite = selectedSiteId
+    ? {
+        ...filters,
+        siteId: selectedSiteId,
+      }
+    : filters;
 
-      If data generation fails, or if there are no matching records, we do not
-      create a bb_report_export row. Only real, downloadable reports should be
-      saved in the report history.
-    */
+  try {
     const dataset = await getReportDataset({
       organisationId: context.organisationId,
       reportType: reportTypeValue,
-      filters,
+      filters: filtersWithSite,
     });
 
     if (dataset.rowCount === 0) {
@@ -87,7 +122,7 @@ export async function createReportExportAction(
       };
     }
 
-    const title = buildReportTitle(reportTypeValue, filters);
+    const title = buildReportTitle(reportTypeValue, filtersWithSite);
 
     const fileName = buildReportFileName({
       reportType: reportTypeValue,
@@ -99,13 +134,14 @@ export async function createReportExportAction(
       .insert(reportExports)
       .values({
         organisationId: context.organisationId,
+        siteId: selectedSiteId,
         requestedByUserId: context.userId,
         departmentId: context.departmentId ?? null,
         reportType: reportTypeValue,
         format,
         status: "completed",
         title,
-        filtersJson: stringifyReportFilters(filters),
+        filtersJson: stringifyReportFilters(filtersWithSite),
         fileName,
         mimeType:
           format === "json"
