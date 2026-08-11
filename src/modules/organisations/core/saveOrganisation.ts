@@ -1,6 +1,8 @@
+import { eq } from "drizzle-orm";
+
 import { database } from "@/db/database";
 import { organisations, users, userProfiles } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { createDefaultSiteForOrganisation } from "@/modules/sites/data-access/createDefaultSiteForOrganisation";
 
 type Capability = "generator" | "carrier" | "manager";
 
@@ -27,15 +29,15 @@ export async function saveOrganisation({
     where: eq(userProfiles.userId, userId),
   });
 
-  const profileCompleted = !!(
+  const profileCompleted = Boolean(
     profile?.fullName &&
-    profile?.telephone &&
-    profile?.emailAddress &&
-    profile?.country &&
-    profile?.streetAddress &&
-    profile?.city &&
-    profile?.region &&
-    profile?.postCode
+      profile?.telephone &&
+      profile?.emailAddress &&
+      profile?.country &&
+      profile?.streetAddress &&
+      profile?.city &&
+      profile?.region &&
+      profile?.postCode,
   );
 
   if (!profileCompleted) {
@@ -44,7 +46,9 @@ export async function saveOrganisation({
 
   const user = await database.query.users.findFirst({
     where: eq(users.id, userId),
-    columns: { organisationId: true },
+    columns: {
+      organisationId: true,
+    },
   });
 
   if (user?.organisationId) {
@@ -53,25 +57,46 @@ export async function saveOrganisation({
       .set(data)
       .where(eq(organisations.id, user.organisationId));
 
-    return { success: true };
+    await createDefaultSiteForOrganisation({
+      organisationId: user.organisationId,
+    });
+
+    return {
+      success: true,
+      organisationId: user.organisationId,
+    };
   }
 
   const [newOrg] = await database
     .insert(organisations)
     .values({
       ...data,
+      operatingMode: "team",
       status: "PENDING",
       createdAt: new Date(),
     })
     .returning();
+
+  if (!newOrg?.id) {
+    throw new Error("ORGANISATION_CREATE_FAILED");
+  }
 
   await database
     .update(users)
     .set({
       organisationId: newOrg.id,
       role: "administrator",
+      status: "ACTIVE",
+      isActive: true,
     })
     .where(eq(users.id, userId));
 
-  return { success: true, organisationId: newOrg.id };
+  await createDefaultSiteForOrganisation({
+    organisationId: newOrg.id,
+  });
+
+  return {
+    success: true,
+    organisationId: newOrg.id,
+  };
 }

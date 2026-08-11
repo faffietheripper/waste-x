@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import { organisations, users } from "@/db/schema";
+import { createDefaultSiteForOrganisation } from "@/modules/sites/data-access/createDefaultSiteForOrganisation";
+
 import type { OrganisationInput } from "../validators/organisationSchema";
 
 export async function createOrganisation({
@@ -49,8 +51,17 @@ export async function createOrganisation({
 
     capabilities: data.capabilities,
 
-    // Important:
-    // Organisation waits for platform approval.
+    /*
+      Keep default for now.
+
+      Later onboarding will choose:
+      solo | team | multi_site | carrier_ops | enterprise
+    */
+    operatingMode: "team",
+
+    /*
+      Organisation waits for platform approval.
+    */
     status: "PENDING",
   });
 
@@ -63,6 +74,16 @@ export async function createOrganisation({
       isActive: true,
     })
     .where(eq(users.id, userId));
+
+  /*
+    Create the first/default site immediately.
+
+    The organisation can still be pending approval, but the data model is now
+    ready because every organisation has a Main Site from the start.
+  */
+  await createDefaultSiteForOrganisation({
+    organisationId,
+  });
 
   return {
     success: true,
