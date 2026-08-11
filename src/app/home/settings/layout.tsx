@@ -33,6 +33,12 @@ const settingsNavItems: SettingsNavItem[] = [
     icon: <SlidersIcon />,
   },
   {
+  label: "Sites",
+  href: "/home/settings/sites",
+  description: "Sites and depots",
+  icon: <SitesIcon />,
+},
+  {
     label: "Organisation",
     href: "/home/settings/organisation",
     description: "Company profile",
@@ -233,6 +239,23 @@ function DepartmentsIcon() {
         strokeLinejoin="round"
         d="M6.75 7.5h10.5M6.75 12h10.5M6.75 16.5h10.5M3.75 5.25A2.25 2.25 0 0 1 6 3h12a2.25 2.25 0 0 1 2.25 2.25v13.5A2.25 2.25 0 0 1 18 21H6a2.25 2.25 0 0 1-2.25-2.25V5.25Z"
       />
+    </svg>
+  );
+}
+function SitesIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="size-5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+    >
+      <path d="M4 20h16" />
+      <path d="M6 20V8l6-4 6 4v12" />
+      <path d="M9 20v-6h6v6" />
+      <path d="M9 10h.01" />
+      <path d="M15 10h.01" />
     </svg>
   );
 }
