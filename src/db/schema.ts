@@ -14,6 +14,30 @@ import type { AdapterAccount } from "next-auth/adapters";
 import { ChainOfCustodyType } from "@/util/types";
 import { relations } from "drizzle-orm";
 
+
+export type OrganisationOperatingMode =
+  | "solo"
+  | "team"
+  | "multi_site"
+  | "carrier_ops"
+  | "enterprise";
+
+export type SiteType =
+  | "main_site"
+  | "transfer_station"
+  | "depot"
+  | "recycling_yard"
+  | "construction_site"
+  | "customer_site"
+  | "other";
+
+export type SiteStatus = "active" | "inactive" | "archived";
+
+export type CarrierAssignmentJobSource =
+  | "wastex_marketplace"
+  | "external_manual"
+  | "internal_operation";
+
 /* =========================================================
    ORGANISATIONS
 ========================================================= */
@@ -32,6 +56,11 @@ export const organisations = pgTable("bb_organisation", {
     .$type<("generator" | "carrier" | "manager")[]>()
     .notNull()
     .default([]),
+
+ operatingMode: text("operatingMode")
+    .$type<OrganisationOperatingMode>()
+    .notNull()
+    .default("team"),
 
   industry: text("industry"),
 
@@ -109,6 +138,54 @@ export const organisationSubscriptions = pgTable(
   },
   (table) => ({
     orgIdx: index("subscription_org_idx").on(table.organisationId),
+  }),
+);
+
+/* =========================================================
+   SITES
+========================================================= */
+
+export const sites = pgTable(
+  "bb_sites",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    name: text("name").notNull(),
+
+    siteType: text("siteType")
+      .$type<SiteType>()
+      .notNull()
+      .default("main_site"),
+
+    fullAddress: text("fullAddress"),
+    postcode: text("postcode"),
+
+    permitNumber: text("permitNumber"),
+
+    isDefault: boolean("isDefault").notNull().default(false),
+
+    status: text("status")
+      .$type<SiteStatus>()
+      .notNull()
+      .default("active"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("site_org_idx").on(table.organisationId),
+    statusIdx: index("site_status_idx").on(table.status),
+    defaultIdx: index("site_default_idx").on(table.organisationId, table.isDefault),
+    orgNameUnique: uniqueIndex("site_org_name_unique").on(
+      table.organisationId,
+      table.name,
+    ),
   }),
 );
 
@@ -413,6 +490,9 @@ export const wasteListings = pgTable("bb_waste_listing", {
   ============================== */
 
   userId: text("userId").notNull(),
+    siteId: text("siteId").references(() => sites.id, {
+    onDelete: "set null",
+  }),
   organisationId: text("organisationId").notNull(),
 
   /* ===============================
@@ -484,8 +564,14 @@ export const wasteListings = pgTable("bb_waste_listing", {
   status: text("status")
     .$type<"open" | "assigned" | "in_progress" | "completed" | "cancelled">()
     .default("open"),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+    createdAt: timestamp("createdAt").defaultNow(),
+},
+(table) => ({
+  orgIdx: index("waste_listing_org_idx").on(table.organisationId),
+  siteIdx: index("waste_listing_site_idx").on(table.siteId),
+  statusIdx: index("waste_listing_status_idx").on(table.status),
+  createdIdx: index("waste_listing_created_idx").on(table.createdAt),
+}));
 
 /* =========================================================
    BIDS
@@ -546,6 +632,40 @@ export const carrierAssignments = pgTable(
       .notNull()
       .references(() => wasteListings.id, { onDelete: "cascade" }),
 
+
+          siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    jobSource: text("jobSource")
+      .$type<CarrierAssignmentJobSource>()
+      .notNull()
+      .default("wastex_marketplace"),
+
+    externalCustomerName: text("externalCustomerName"),
+    externalCustomerEmail: text("externalCustomerEmail"),
+    externalCustomerPhone: text("externalCustomerPhone"),
+    externalReference: text("externalReference"),
+
+    externalPickupAddress: text("externalPickupAddress"),
+    externalPickupPostcode: text("externalPickupPostcode"),
+
+    externalDestinationName: text("externalDestinationName"),
+    externalDestinationAddress: text("externalDestinationAddress"),
+    externalDestinationPostcode: text("externalDestinationPostcode"),
+
+    externalWasteDescription: text("externalWasteDescription"),
+    externalEwcCode: text("externalEwcCode"),
+    externalEstimatedWeight: numeric("externalEstimatedWeight", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    externalCollectionDate: timestamp("externalCollectionDate", {
+      mode: "date",
+    }),
+
+    externalNotes: text("externalNotes"),
     /*
       NEW EXTERNAL FLOW:
       Generator assigns manager first.
@@ -637,6 +757,15 @@ export const carrierAssignments = pgTable(
     assignedByIdx: index("assignment_assigned_by_org_idx").on(
       table.assignedByOrganisationId,
     ),
+    siteIdx: index("carrier_assignment_site_idx").on(table.siteId),
+
+    jobSourceIdx: index("carrier_assignment_job_source_idx").on(
+      table.jobSource,
+    ),
+
+    externalCollectionDateIdx: index(
+      "carrier_assignment_external_collection_date_idx",
+    ).on(table.externalCollectionDate),
   }),
 );
 
@@ -650,8 +779,9 @@ export const incidents = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-
-    // ✅ NEW
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
     organisationId: text("organisationId")
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
@@ -702,6 +832,7 @@ export const incidents = pgTable(
     assignmentIdx: index("incident_assignment_idx").on(table.assignmentId),
     listingIdx: index("incident_listing_idx").on(table.listingId),
     orgIdx: index("incident_org_idx").on(table.organisationId),
+        siteIdx: index("incident_site_idx").on(table.siteId),
   }),
 );
 
@@ -845,6 +976,10 @@ export const wasteReceipts = pgTable(
       .notNull()
       .references(() => wasteListings.id, { onDelete: "cascade" }),
 
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
     receivedByUserId: text("receivedByUserId").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -936,6 +1071,7 @@ export const wasteReceipts = pgTable(
   },
   (table) => ({
     orgIdx: index("waste_receipt_org_idx").on(table.organisationId),
+    siteIdx: index("waste_receipt_site_idx").on(table.siteId),
     assignmentIdx: index("waste_receipt_assignment_idx").on(
       table.assignmentId,
     ),
@@ -1072,7 +1208,9 @@ export const wasteTrackingSubmissions = pgTable(
     listingId: integer("listingId").references(() => wasteListings.id, {
       onDelete: "set null",
     }),
-
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
     receiptId: text("receiptId").references(() => wasteReceipts.id, {
       onDelete: "set null",
     }),
@@ -1143,6 +1281,7 @@ export const wasteTrackingSubmissions = pgTable(
     wasteTrackingIdIdx: index("waste_tracking_submission_tracking_id_idx").on(
       table.wasteTrackingId,
     ),
+    siteIdx: index("waste_tracking_submission_site_idx").on(table.siteId),
     statusIdx: index("waste_tracking_submission_status_idx").on(table.status),
   }),
 );
@@ -1665,6 +1804,10 @@ export const reportExports = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
 
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
     organisationId: text("organisationId")
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
@@ -1721,6 +1864,7 @@ export const reportExports = pgTable(
     typeIdx: index("report_export_type_idx").on(table.reportType),
     statusIdx: index("report_export_status_idx").on(table.status),
     createdIdx: index("report_export_created_idx").on(table.createdAt),
+    siteIdx: index("report_export_site_idx").on(table.siteId),
   }),
 );
 
@@ -1878,6 +2022,8 @@ export const organisationsRelations = relations(
 
     departments: many(departments),
 
+    sites: many(sites),
+
     reviews: many(reviews),
     subscriptions: many(organisationSubscriptions),
     invoices: many(invoices),
@@ -1935,6 +2081,11 @@ export const wasteListingsRelations = relations(
 
     wasteReceipts: many(wasteReceipts),
 
+      site: one(sites, {
+      fields: [wasteListings.siteId],
+      references: [sites.id],
+    }),
+
     wasteTrackingSubmissions: many(wasteTrackingSubmissions),
   }),
 );
@@ -1985,6 +2136,11 @@ export const carrierAssignmentsRelations = relations(
       references: [organisations.id],
     }),
 
+    site: one(sites, {
+      fields: [carrierAssignments.siteId],
+      references: [sites.id],
+    }),
+
     assignedByOrganisation: one(organisations, {
       relationName: "assignedByOrganisation",
       fields: [carrierAssignments.assignedByOrganisationId],
@@ -2024,6 +2180,11 @@ export const incidentsRelations = relations(incidents, ({ one }) => ({
   reportedByUser: one(users, {
     fields: [incidents.reportedByUserId],
     references: [users.id],
+  }),
+
+    site: one(sites, {
+    fields: [incidents.siteId],
+    references: [sites.id],
   }),
 
   reportedByOrganisation: one(organisations, {
@@ -2237,6 +2398,11 @@ export const wasteReceiptsRelations = relations(
     items: many(wasteReceiptItems),
 
     submissions: many(wasteTrackingSubmissions),
+
+        site: one(sites, {
+      fields: [wasteReceipts.siteId],
+      references: [sites.id],
+    }),
   }),
 );
 
@@ -2286,11 +2452,15 @@ export const wasteTrackingSubmissionsRelations = relations(
       fields: [wasteTrackingSubmissions.submittedByUserId],
       references: [users.id],
     }),
+
+        site: one(sites, {
+      fields: [wasteTrackingSubmissions.siteId],
+      references: [sites.id],
+    }),
   }),
 );
 
 /* ================= REPORT EXPORTS ================= */
-
 
 export const reportExportsRelations = relations(reportExports, ({ one }) => ({
   organisation: one(organisations, {
@@ -2307,4 +2477,25 @@ export const reportExportsRelations = relations(reportExports, ({ one }) => ({
     fields: [reportExports.departmentId],
     references: [departments.id],
   }),
+
+  site: one(sites, {
+    fields: [reportExports.siteId],
+    references: [sites.id],
+  }),
+}));
+
+/* ================= SITES ================= */
+
+export const sitesRelations = relations(sites, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [sites.organisationId],
+    references: [organisations.id],
+  }),
+
+  listings: many(wasteListings),
+  carrierAssignments: many(carrierAssignments),
+  incidents: many(incidents),
+  wasteReceipts: many(wasteReceipts),
+  wasteTrackingSubmissions: many(wasteTrackingSubmissions),
+  reportExports: many(reportExports),
 }));
