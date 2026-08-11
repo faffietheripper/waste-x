@@ -51,17 +51,8 @@ export async function createOrganisation({
 
     capabilities: data.capabilities,
 
-    /*
-      Keep default for now.
+    operatingMode: data.operatingMode ?? "team",
 
-      Later onboarding will choose:
-      solo | team | multi_site | carrier_ops | enterprise
-    */
-    operatingMode: "team",
-
-    /*
-      Organisation waits for platform approval.
-    */
     status: "PENDING",
   });
 
@@ -75,12 +66,6 @@ export async function createOrganisation({
     })
     .where(eq(users.id, userId));
 
-  /*
-    Create the first/default site immediately.
-
-    The organisation can still be pending approval, but the data model is now
-    ready because every organisation has a Main Site from the start.
-  */
   await createDefaultSiteForOrganisation({
     organisationId,
   });

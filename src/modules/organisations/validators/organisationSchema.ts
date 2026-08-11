@@ -6,6 +6,14 @@ export const organisationCapabilities = [
   "manager",
 ] as const;
 
+export const organisationOperatingModes = [
+  "solo",
+  "team",
+  "multi_site",
+  "carrier_ops",
+  "enterprise",
+] as const;
+
 export const organisationSchema = z.object({
   teamName: z.string().min(2, "Organisation name is required"),
   industry: z.string().min(2, "Industry is required"),
@@ -21,12 +29,21 @@ export const organisationSchema = z.object({
 
   profilePicture: z.string().nullable().optional(),
 
+  operatingMode: z
+    .enum(organisationOperatingModes)
+    .default("team"),
+
   capabilities: z
     .array(z.enum(organisationCapabilities))
     .min(1, "Select at least one capability"),
 });
 
 export type OrganisationInput = z.infer<typeof organisationSchema>;
+
 export type OrganisationCapability = z.infer<
   typeof organisationSchema
 >["capabilities"][number];
+
+export type OrganisationOperatingMode = z.infer<
+  typeof organisationSchema
+>["operatingMode"];
