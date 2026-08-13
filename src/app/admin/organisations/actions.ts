@@ -2,24 +2,35 @@
 
 import crypto from "crypto";
 
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+
 import { database } from "@/db/database";
 import {
+  carrierAssignments,
+  departments,
   organisations,
+  reviews,
   users,
   wasteListings,
-  carrierAssignments,
-  reviews,
-  departments,
 } from "@/db/schema";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
+import { createDefaultSiteForOrganisation } from "@/modules/sites/data-access/createDefaultSiteForOrganisation";
 
 /* =========================================
    GET ALL ORGANISATIONS (WITH SEARCH)
 ========================================= */
 
 export async function getAllOrganisations(search?: string) {
-  const query = database
+  const searchTerm = search?.trim();
+
+  const searchFilter = searchTerm
+    ? or(
+        ilike(organisations.teamName, `%${searchTerm}%`),
+        ilike(organisations.emailAddress, `%${searchTerm}%`),
+      )
+    : undefined;
+
+  return database
     .select({
       id: organisations.id,
       teamName: organisations.teamName,
@@ -43,18 +54,9 @@ export async function getAllOrganisations(search?: string) {
       eq(carrierAssignments.carrierOrganisationId, organisations.id),
     )
     .leftJoin(reviews, eq(reviews.reviewedOrganisationId, organisations.id))
-    .groupBy(organisations.id);
-
-  if (search) {
-    query.where(
-      or(
-        ilike(organisations.teamName, `%${search}%`),
-        ilike(organisations.emailAddress, `%${search}%`),
-      ),
-    );
-  }
-
-  return query.orderBy(desc(organisations.createdAt));
+    .where(searchFilter)
+    .groupBy(organisations.id)
+    .orderBy(desc(organisations.createdAt));
 }
 
 /* =========================================
@@ -213,6 +215,7 @@ export async function approveOrganisation(formData: FormData) {
     .update(organisations)
     .set({
       status: "ACTIVE",
+      approvedAt: new Date(),
     })
     .where(eq(organisations.id, orgId));
 
@@ -222,6 +225,17 @@ export async function approveOrganisation(formData: FormData) {
   await assignFirstAdminToComplianceDepartment({
     orgId,
     complianceDepartmentId,
+  });
+
+  /*
+    Site model safety check.
+
+    New organisations should already get a Main Site during organisation
+    creation. This keeps approval safe for older pending organisations or any
+    organisation created before the sites model existed.
+  */
+  await createDefaultSiteForOrganisation({
+    organisationId: orgId,
   });
 }
 

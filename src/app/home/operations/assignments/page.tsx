@@ -1,18 +1,28 @@
+import type { ReactNode } from "react";
+import Link from "next/link";
+import { alias } from "drizzle-orm/pg-core";
+import { and, desc, eq, or } from "drizzle-orm";
+
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import {
   carrierAssignments,
-  organisations,
-  wasteListings,
   incidents,
+  organisations,
+  sites,
+  wasteListings,
 } from "@/db/schema";
-import { eq, or, desc } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
-import Link from "next/link";
+import { resolveSiteFilterForOrganisation } from "@/modules/sites/data-access/resolveSiteFilterForOrganisation";
 
 /* =========================================================
    TYPES
 ========================================================= */
+
+type PageProps = {
+  searchParams?: {
+    siteId?: string;
+  };
+};
 
 type AssignmentStatus =
   | "pending"
@@ -26,6 +36,8 @@ type AssignmentRow = {
   id: string;
   organisationId: string;
   listingId: number;
+  siteId: string | null;
+  jobSource: string | null;
   managerOrganisationId: string | null;
   carrierOrganisationId: string | null;
   assignedByOrganisationId: string;
@@ -40,6 +52,7 @@ type AssignmentRow = {
   collectedAt: Date | null;
   completedAt: Date | null;
 
+  siteName: string | null;
   listingName: string | null;
   listingLocation: string | null;
   listingStatus: string | null;
@@ -75,6 +88,14 @@ function formatMode(value: string | null | undefined) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatJobSource(value: string | null | undefined) {
+  if (value === "external_manual") return "External Job";
+  if (value === "internal_operation") return "Internal Operation";
+  if (value === "wastex_marketplace") return "Waste X Marketplace";
+
+  return "Assignment";
 }
 
 function getStatusLabel(status: string | null | undefined) {
@@ -202,12 +223,12 @@ function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
    PAGE
 ========================================================= */
 
-export default async function AssignmentsPage() {
+export default async function AssignmentsPage({ searchParams }: PageProps) {
   const session = await auth();
 
   if (!session?.user?.organisationId) {
     return (
-      <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
+      <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[calc(13vh+2rem)]">
         <div className="rounded-3xl border border-red-200 bg-red-50 p-8 text-sm text-red-700">
           Unauthorized. You must belong to an organisation to view assignments.
         </div>
@@ -217,31 +238,42 @@ export default async function AssignmentsPage() {
 
   const orgId = session.user.organisationId;
 
+  const siteFilter = await resolveSiteFilterForOrganisation({
+    organisationId: orgId,
+    requestedSiteId: searchParams?.siteId,
+    createDefaultIfMissing: true,
+  });
+
   const generatorOrg = alias(organisations, "generatorOrg");
   const managerOrg = alias(organisations, "managerOrg");
   const carrierOrg = alias(organisations, "carrierOrg");
 
-  /*
-    Supports current Waste X assignment visibility:
+  const visibilityWhere =
+    or(
+      eq(carrierAssignments.organisationId, orgId),
+      eq(carrierAssignments.assignedByOrganisationId, orgId),
+      eq(carrierAssignments.managerOrganisationId, orgId),
+      eq(carrierAssignments.carrierOrganisationId, orgId),
+    ) ?? eq(carrierAssignments.organisationId, orgId);
 
-    organisationId:
-      generator-side / owning organisation context
+  const siteWhere = siteFilter.selectedSiteId
+    ? or(
+        eq(carrierAssignments.siteId, siteFilter.selectedSiteId),
+        eq(wasteListings.siteId, siteFilter.selectedSiteId),
+      )
+    : undefined;
 
-    assignedByOrganisationId:
-      organisation that created or assigned the job
-
-    managerOrganisationId:
-      waste manager organisation assigned from winning bid
-
-    carrierOrganisationId:
-      carrier/logistics organisation assigned by manager
-  */
+  const assignmentsWhere = siteWhere
+    ? and(visibilityWhere, siteWhere)
+    : visibilityWhere;
 
   const assignments = await database
     .select({
       id: carrierAssignments.id,
       organisationId: carrierAssignments.organisationId,
       listingId: carrierAssignments.listingId,
+      siteId: carrierAssignments.siteId,
+      jobSource: carrierAssignments.jobSource,
 
       managerOrganisationId: carrierAssignments.managerOrganisationId,
       carrierOrganisationId: carrierAssignments.carrierOrganisationId,
@@ -260,6 +292,8 @@ export default async function AssignmentsPage() {
       collectedAt: carrierAssignments.collectedAt,
       completedAt: carrierAssignments.completedAt,
 
+      siteName: sites.name,
+
       listingName: wasteListings.name,
       listingLocation: wasteListings.location,
       listingStatus: wasteListings.status,
@@ -273,32 +307,13 @@ export default async function AssignmentsPage() {
     })
     .from(carrierAssignments)
     .leftJoin(wasteListings, eq(wasteListings.id, carrierAssignments.listingId))
-    .leftJoin(
-      generatorOrg,
-      eq(generatorOrg.id, carrierAssignments.organisationId),
-    )
-    .leftJoin(
-      managerOrg,
-      eq(managerOrg.id, carrierAssignments.managerOrganisationId),
-    )
-    .leftJoin(
-      carrierOrg,
-      eq(carrierOrg.id, carrierAssignments.carrierOrganisationId),
-    )
+    .leftJoin(sites, eq(sites.id, carrierAssignments.siteId))
+    .leftJoin(generatorOrg, eq(generatorOrg.id, carrierAssignments.organisationId))
+    .leftJoin(managerOrg, eq(managerOrg.id, carrierAssignments.managerOrganisationId))
+    .leftJoin(carrierOrg, eq(carrierOrg.id, carrierAssignments.carrierOrganisationId))
     .leftJoin(incidents, eq(incidents.assignmentId, carrierAssignments.id))
-    .where(
-      or(
-        eq(carrierAssignments.organisationId, orgId),
-        eq(carrierAssignments.assignedByOrganisationId, orgId),
-        eq(carrierAssignments.managerOrganisationId, orgId),
-        eq(carrierAssignments.carrierOrganisationId, orgId),
-      ),
-    )
+    .where(assignmentsWhere)
     .orderBy(desc(carrierAssignments.assignedAt));
-
-  /* =========================================================
-     METRICS
-  ========================================================= */
 
   const total = assignments.length;
 
@@ -376,16 +391,11 @@ export default async function AssignmentsPage() {
     (assignment) => assignment.incidentId,
   );
 
-  /* =========================================================
-     UI
-  ========================================================= */
-
   return (
-    <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-10 py-32">
-      <div className="space-y-8">
-        {/* HEADER */}
+    <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[calc(13vh+2rem)] text-black">
+      <div className="mx-auto max-w-7xl space-y-8">
         <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
-          <div className="flex items-start justify-between gap-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.25em] text-orange-400">
                 Waste X Operations
@@ -401,6 +411,10 @@ export default async function AssignmentsPage() {
                 become the operational source of truth once a waste listing is
                 awarded or directly assigned.
               </p>
+
+              <p className="mt-4 inline-flex rounded-full border border-orange-400/20 bg-orange-500/10 px-4 py-2 text-xs font-semibold text-orange-300">
+                Showing: {siteFilter.label}
+              </p>
             </div>
 
             <Link
@@ -412,7 +426,6 @@ export default async function AssignmentsPage() {
           </div>
         </section>
 
-        {/* METRICS */}
         <section className="grid grid-cols-1 gap-5 md:grid-cols-4 xl:grid-cols-8">
           <MetricCard label="Total" value={total} />
           <MetricCard label="Pending" value={pending} />
@@ -424,7 +437,6 @@ export default async function AssignmentsPage() {
           <MetricCard label="Incidents" value={incidentsCount} />
         </section>
 
-        {/* ATTENTION STRIP */}
         <section className="grid grid-cols-1 gap-5 lg:grid-cols-4">
           <AttentionCard
             title="Manager Responses"
@@ -452,7 +464,6 @@ export default async function AssignmentsPage() {
           />
         </section>
 
-        {/* GRID SECTIONS */}
         <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <AssignmentSection
             title="Active Assignments"
@@ -461,17 +472,15 @@ export default async function AssignmentsPage() {
             hrefLabel="Open active view"
           >
             {activeAssignments.length > 0 ? (
-              activeAssignments
-                .slice(0, 5)
-                .map((assignment) => (
-                  <AssignmentItem
-                    key={`${assignment.id}-active`}
-                    assignment={assignment}
-                    orgId={orgId}
-                  />
-                ))
+              activeAssignments.slice(0, 5).map((assignment) => (
+                <AssignmentItem
+                  key={`${assignment.id}-active`}
+                  assignment={assignment}
+                  orgId={orgId}
+                />
+              ))
             ) : (
-              <Empty text="No active assignments." />
+              <Empty text="No active assignments for this site view." />
             )}
           </AssignmentSection>
 
@@ -482,17 +491,15 @@ export default async function AssignmentsPage() {
             hrefLabel="Review pending"
           >
             {pendingAssignments.length > 0 ? (
-              pendingAssignments
-                .slice(0, 5)
-                .map((assignment) => (
-                  <AssignmentItem
-                    key={`${assignment.id}-pending`}
-                    assignment={assignment}
-                    orgId={orgId}
-                  />
-                ))
+              pendingAssignments.slice(0, 5).map((assignment) => (
+                <AssignmentItem
+                  key={`${assignment.id}-pending`}
+                  assignment={assignment}
+                  orgId={orgId}
+                />
+              ))
             ) : (
-              <Empty text="No pending workflow actions." />
+              <Empty text="No pending workflow actions for this site view." />
             )}
           </AssignmentSection>
 
@@ -503,17 +510,15 @@ export default async function AssignmentsPage() {
             hrefLabel="View completed"
           >
             {completedAssignments.length > 0 ? (
-              completedAssignments
-                .slice(0, 5)
-                .map((assignment) => (
-                  <AssignmentItem
-                    key={`${assignment.id}-completed`}
-                    assignment={assignment}
-                    orgId={orgId}
-                  />
-                ))
+              completedAssignments.slice(0, 5).map((assignment) => (
+                <AssignmentItem
+                  key={`${assignment.id}-completed`}
+                  assignment={assignment}
+                  orgId={orgId}
+                />
+              ))
             ) : (
-              <Empty text="No completed assignments." />
+              <Empty text="No completed assignments for this site view." />
             )}
           </AssignmentSection>
 
@@ -524,36 +529,34 @@ export default async function AssignmentsPage() {
             hrefLabel="Open incidents"
           >
             {incidentAssignments.length > 0 ? (
-              incidentAssignments
-                .slice(0, 5)
-                .map((assignment) => (
-                  <AssignmentItem
-                    key={`${assignment.id}-incident`}
-                    assignment={assignment}
-                    orgId={orgId}
-                    showIncident
-                  />
-                ))
+              incidentAssignments.slice(0, 5).map((assignment) => (
+                <AssignmentItem
+                  key={`${assignment.id}-incident`}
+                  assignment={assignment}
+                  orgId={orgId}
+                  showIncident
+                />
+              ))
             ) : (
-              <Empty text="No incidents reported." />
+              <Empty text="No incidents reported for this site view." />
             )}
           </AssignmentSection>
         </section>
 
-        {/* FULL RECENT LIST */}
         <section className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
-          <div className="mb-6 flex items-start justify-between gap-6">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
                 Recent Records
               </p>
+
               <h2 className="mt-2 text-xl font-semibold text-black">
                 All Visible Assignments
               </h2>
+
               <p className="mt-2 max-w-2xl text-sm text-black/45">
                 This list includes assignments where your organisation is the
-                generator-side owner, assigning organisation, manager or
-                carrier.
+                generator-side owner, assigning organisation, manager or carrier.
               </p>
             </div>
 
@@ -573,7 +576,7 @@ export default async function AssignmentsPage() {
               ))}
             </div>
           ) : (
-            <Empty text="No assignments found for this organisation." />
+            <Empty text="No assignments found for this site view." />
           )}
         </section>
       </div>
@@ -619,13 +622,13 @@ function AttentionCard({
         {title}
       </p>
       <p
-        className={`mt-3 text-3xl font-semibold ${danger ? "text-red-700" : "text-black"}`}
+        className={`mt-3 text-3xl font-semibold ${
+          danger ? "text-red-700" : "text-black"
+        }`}
       >
         {value}
       </p>
-      <p
-        className={`mt-2 text-sm ${danger ? "text-red-600" : "text-black/45"}`}
-      >
+      <p className={`mt-2 text-sm ${danger ? "text-red-600" : "text-black/45"}`}>
         {detail}
       </p>
     </div>
@@ -643,7 +646,7 @@ function AssignmentSection({
   description: string;
   href: string;
   hrefLabel: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
@@ -705,25 +708,25 @@ function AssignmentItem({
       <p className="mt-3 text-sm text-black/55">{workflowMessage}</p>
 
       <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
-        <MiniDetail
-          label="Manager"
-          value={assignment.managerOrgName ?? "Not assigned"}
-        />
+        <MiniDetail label="Site" value={assignment.siteName ?? "Not assigned"} />
         <MiniDetail
           label="Carrier"
           value={assignment.carrierOrgName ?? "Not assigned"}
         />
-        <MiniDetail
-          label="Assigned"
-          value={formatDate(assignment.assignedAt)}
-        />
+        <MiniDetail label="Assigned" value={formatDate(assignment.assignedAt)} />
       </div>
 
-      {showIncident && assignment.incidentStatus && (
-        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
-          Incident status: {formatMode(assignment.incidentStatus)}
-        </div>
-      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">
+          {formatJobSource(assignment.jobSource)}
+        </span>
+
+        {showIncident && assignment.incidentStatus && (
+          <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-red-700">
+            Incident: {formatMode(assignment.incidentStatus)}
+          </span>
+        )}
+      </div>
     </Link>
   );
 }
@@ -754,7 +757,7 @@ function AssignmentRow({
       </div>
 
       <div className="col-span-2 text-sm text-black/45">
-        {formatDate(assignment.assignedAt)}
+        {assignment.siteName ?? "No site"}
       </div>
 
       <div className="col-span-2">

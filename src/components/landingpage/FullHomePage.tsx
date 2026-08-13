@@ -1,669 +1,739 @@
 "use client";
 
-import { motion } from "framer-motion";
+import {
+  AnimatePresence,
+  motion,
+  type MotionValue,
+  useScroll,
+  useTransform,
+} from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
+import { useRef, useState } from "react";
 
-const fadeUp = {
-  hidden: { opacity: 0, y: 40 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.6 } },
-};
+/* ============================================================================
+   WASTE X — MARKETING / PRODUCT HOME PAGE
+   ----------------------------------------------------------------------------
+   Required images in /public/waste-x/home/
 
-const trustMarkers = [
-  "DEFRA Digital Waste Tracking aligned",
-  "Receipt of Waste API-ready data structure",
-  "Built for single-role and full-chain operators",
+   hero-dashboard.jpg
+   active-assignments.jpg
+   assignment-detail.jpg
+   carrier-hub.jpg
+   completed-jobs.jpg
+   dwt-receipt.jpg
+   marketplace.jpg
+   dwt-pack-cover.png
+
+   Optional guide PDF:
+   /public/downloads/waste-x-dwt-guide.pdf
+============================================================================ */
+
+const productTour = [
+  {
+    eyebrow: "01 / OPERATE",
+    title: "Run the waste operation from one live workspace.",
+    text: "See sites, departments, assignments, marketplace activity and digital waste tracking without jumping between disconnected systems.",
+    image: "/waste-x/home/hero-dashboard.jpg",
+    alt: "Waste X dashboard showing organisation status, capabilities and workflow overview",
+    tags: ["Multi-site", "Department aware", "One workspace"],
+  },
+  {
+    eyebrow: "02 / ASSIGN",
+    title: "Choose carriers with operational context — not guesswork.",
+    text: "Compare workload, completion history, incidents and internal or external carrier options before assigning work.",
+    image: "/waste-x/home/carrier-hub.jpg",
+    alt: "Waste X Carrier Hub showing carrier options and operational context",
+    tags: ["Carrier context", "Workload visibility", "Internal + external"],
+  },
+  {
+    eyebrow: "03 / MOVE",
+    title: "Keep active work visible from assignment to collection.",
+    text: "Teams can see what is waiting, what is active and what needs attention from one operational queue.",
+    image: "/waste-x/home/active-assignments.jpg",
+    alt: "Waste X active assignments screen",
+    tags: ["Live jobs", "Clear status", "Operational visibility"],
+  },
+  {
+    eyebrow: "04 / RECEIVE",
+    title: "Capture receipt information inside the workflow.",
+    text: "Receiving teams can record movement and receipt information in a structured flow designed around digital reporting.",
+    image: "/waste-x/home/dwt-receipt.jpg",
+    alt: "Waste X Digital Waste Tracking receipt workflow",
+    tags: ["Receipt workflow", "Structured records", "DWT"],
+  },
+  {
+    eyebrow: "05 / PROVE",
+    title: "Keep a connected record of every handover and decision.",
+    text: "Assignments, status changes, verification and incidents stay linked so teams can understand what happened and when.",
+    image: "/waste-x/home/assignment-detail.jpg",
+    alt: "Waste X assignment detail page with movement and verification information",
+    tags: ["Chain of custody", "Audit history", "Exceptions"],
+  },
 ];
 
-const digitalShiftCards = [
+const roleFeatures = [
   {
-    label: "Operational Visibility",
-    title: "Know what happened, when it happened, and who handled it",
-    text: "Waste X helps teams move from disconnected notes and spreadsheets to structured records that show each step of the waste journey clearly.",
-  },
-  {
-    label: "Cleaner Handover",
-    title: "Connect generators, carriers, managers and receivers",
-    text: "Every organisation in the chain works from its own role while contributing to the same operational record, reducing gaps between assignment, collection and receipt.",
-  },
-  {
-    label: "Reporting Readiness",
-    title: "Build better data before reporting becomes painful",
-    text: "Instead of waiting for compliance pressure, Waste X helps businesses capture cleaner movement, receipt and audit data as part of day-to-day work.",
-  },
-];
-
-const operatingModels = [
-  {
-    title: "For full-chain waste operators",
-    description:
-      "Built for larger organisations that generate, collect, transport, receive, process and manage waste internally across multiple teams, sites or departments.",
-    items: [
-      "Manage the full journey from generation to receipt",
-      "Separate generator, carrier, manager and compliance teams",
-      "Track internal transfers and external assignments",
-      "Maintain one structured chain-of-custody record",
-      "Prepare organisation-wide data for future digital reporting",
+    title: "Managers",
+    kicker: "CONTROL THE FLOW",
+    heading: "See the job, choose the route and keep work moving.",
+    text: "Managers can oversee work, compare carrier options and keep assignment decisions visible from one place.",
+    image: "/waste-x/home/carrier-hub.jpg",
+    alt: "Waste X manager Carrier Hub",
+    points: [
+      "Route work internally or externally",
+      "Compare carrier workload and history",
+      "Track active and completed assignments",
     ],
   },
   {
-    title: "For single-role organisations",
-    description:
-      "Waste X also works for smaller firms that only operate in one part of the waste chain, such as licensed carriers, waste producers or receiving sites.",
-    items: [
-      "Use only the workflows relevant to your role",
-      "Accept or manage carrier assignments",
-      "Create waste listings as a producer",
-      "Record receipt activity as a receiving site",
-      "Build compliance-ready operational history over time",
+    title: "Carriers",
+    kicker: "WORK CLEARLY",
+    heading: "Know what is assigned, active and complete.",
+    text: "Carrier teams get a clear operational queue instead of chasing job details through calls, messages and spreadsheets.",
+    image: "/waste-x/home/active-assignments.jpg",
+    alt: "Waste X active assignments for carrier operations",
+    points: [
+      "Accept and progress assignments",
+      "Confirm collection activity",
+      "Keep job status visible to the wider chain",
+    ],
+  },
+  {
+    title: "Generators",
+    kicker: "CREATE + ROUTE",
+    heading: "Turn waste requirements into structured, actionable work.",
+    text: "Generators can create listings, route work and keep movement information connected to the job from the start.",
+    image: "/waste-x/home/marketplace.jpg",
+    alt: "Waste X marketplace listings",
+    points: [
+      "Create structured waste listings",
+      "Use direct award or market routes",
+      "Keep listings linked to assignment records",
+    ],
+  },
+  {
+    title: "Compliance",
+    kicker: "SEE THE EVIDENCE",
+    heading: "Audit the operation without rebuilding the story.",
+    text: "Compliance teams can review completed work and operational history without creating a second disconnected process.",
+    image: "/waste-x/home/completed-jobs.jpg",
+    alt: "Waste X completed jobs and audit view",
+    points: [
+      "Review completed movement history",
+      "Follow incidents and verification evidence",
+      "Prepare cleaner records for reporting",
     ],
   },
 ];
 
-const processSteps = [
+const benefitRows = [
   {
     number: "01",
-    title: "Generate",
-    description:
-      "Create structured waste records with material details, site information, estimated quantity and supporting documentation.",
+    title: "Less fragmented admin",
+    text: "Move away from disconnected emails, spreadsheets and paper handovers.",
   },
   {
     number: "02",
-    title: "Assign",
-    description:
-      "Route work internally, directly award to known partners, or open opportunities to approved carriers.",
+    title: "Better visibility",
+    text: "See who created, assigned, collected and received each movement.",
   },
   {
     number: "03",
-    title: "Collect",
-    description:
-      "Carriers receive clear assignments, confirm activity and maintain a digital record of movement progress.",
+    title: "Clear accountability",
+    text: "Role-aware workflows make ownership of each stage easier to understand.",
   },
   {
     number: "04",
-    title: "Receive",
-    description:
-      "Receiving sites and waste managers can record incoming waste activity with data shaped for future reporting requirements.",
+    title: "Faster audit preparation",
+    text: "Keep movement history, incidents and receipt records in one structured system.",
   },
   {
     number: "05",
-    title: "Audit",
-    description:
-      "Every action, incident, transfer and handover becomes part of a searchable chain-of-custody record.",
+    title: "Scalable operations",
+    text: "Support generators, carriers, managers, receivers and compliance teams in one platform.",
   },
 ];
 
-const roleCards = [
-  {
-    title: "Waste Producers",
-    text: "For contractors, developers, facilities teams and organisations generating waste across sites or projects.",
-    items: [
-      "Create structured waste listings",
-      "Assign internal or external carriers",
-      "Track collection progress",
-      "Record incidents and exceptions",
-    ],
+const fadeUp = {
+  hidden: { opacity: 0, y: 28 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.65,
+      ease: [0.22, 1, 0.36, 1] as const,
+    },
   },
-  {
-    title: "Waste Carriers",
-    text: "For licensed carriers managing collections, assignments and movement activity across multiple customers.",
-    items: [
-      "Receive clear job assignments",
-      "Accept, reject or progress work",
-      "Confirm collection activity",
-      "Build operational performance history",
-    ],
-  },
-  {
-    title: "Waste Managers & Receivers",
-    text: "For receiving sites, transfer stations, recycling facilities and waste management operators preparing for digital reporting.",
-    items: [
-      "Log received waste activity",
-      "Maintain receipt-level records",
-      "Support API-ready data capture",
-      "Prepare for Digital Waste Tracking workflows",
-    ],
-  },
-  {
-    title: "Compliance Teams",
-    text: "For internal compliance, environmental managers and audit teams that need oversight across the waste journey.",
-    items: [
-      "View chain-of-custody records",
-      "Monitor incidents and resolution logs",
-      "Review organisational activity",
-      "Export audit-ready information",
-    ],
-  },
-];
-
-const compliancePoints = [
-  {
-    title: "API-led reporting direction",
-    text: "Waste X is being structured around the data required to support software-led submission routes, reducing future reliance on manual re-entry.",
-  },
-  {
-    title: "Digital audit trail",
-    text: "Transfers, assignments, collections, receipts and incidents are recorded as operational events rather than disconnected documents.",
-  },
-  {
-    title: "Role-based accountability",
-    text: "Generators, carriers, receivers and compliance teams each work from their own operational context while contributing to the same waste record.",
-  },
-  {
-    title: "Built for phased adoption",
-    text: "Organisations can start with the part of the workflow they need today and expand as their responsibilities or regulatory requirements grow.",
-  },
-];
+};
 
 export default function FullHomePage() {
   return (
-    <main className="bg-white text-gray-900">
-      {/* ================= HERO ================= */}
-      <section className="relative overflow-hidden bg-[#1f1f1f] px-6 py-32 text-white">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_#f97316,_transparent_35%)] opacity-10" />
+    <main className="bg-[#f6f1e9] text-[#0d0d0d]">
+      <Hero />
+      <MovementStrip />
+      <DisappearingProductTour />
+      <RoleSwitcher />
+      <DwtGuide />
+      <Benefits />
+      <FinalCta />
+    </main>
+  );
+}
 
-        <div className="relative mx-auto grid max-w-6xl items-center gap-16 md:grid-cols-2">
-          <motion.div initial="hidden" animate="show" variants={fadeUp}>
-            <div className="mb-6 inline-flex items-center border border-orange-500/40 bg-orange-500/10 px-4 py-2 text-sm font-semibold text-orange-400">
-              UK Digital Waste Tracking Ready
+/* ============================================================================
+   HERO
+============================================================================ */
+
+function Hero() {
+  return (
+    <section className="relative overflow-hidden bg-[#090909] px-5 pb-20 pt-24 text-white sm:px-8 lg:px-10 lg:pb-28 lg:pt-28">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(249,115,22,0.22),transparent_28%),radial-gradient(circle_at_85%_28%,rgba(249,115,22,0.10),transparent_24%)]" />
+      <div className="absolute inset-x-0 top-0 h-px bg-white/10" />
+
+      <div className="relative mx-auto grid max-w-[1440px] items-center gap-14 lg:grid-cols-[0.86fr_1.14fr] lg:gap-16">
+        <motion.div initial="hidden" animate="show" variants={fadeUp}>
+          <div className="mb-7 inline-flex items-center gap-3 rounded-full border border-orange-500/25 bg-orange-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-orange-300">
+            <span className="h-2 w-2 rounded-full bg-orange-500" />
+            Digital waste operations, connected
+          </div>
+
+          <h1 className="max-w-3xl text-5xl font-semibold leading-[0.97] tracking-[-0.055em] sm:text-6xl lg:text-7xl xl:text-[82px]">
+            Control every waste movement.
+            <span className="block text-orange-500">Prove every handover.</span>
+          </h1>
+
+          <p className="mt-7 max-w-2xl text-lg leading-8 text-white/65 sm:text-xl">
+            Waste X connects generators, managers, carriers, receiving sites and
+            compliance teams in one operational workflow — from creation to
+            receipt and audit.
+          </p>
+
+          <div className="mt-9 flex flex-col gap-3 sm:flex-row">
+            <Link
+              href="/book-demo"
+              className="inline-flex items-center justify-center rounded-full bg-orange-500 px-7 py-4 text-sm font-bold text-black transition hover:-translate-y-0.5 hover:bg-orange-400"
+            >
+              Book a demo <span className="ml-2">→</span>
+            </Link>
+
+            <Link
+              href="/login"
+              className="inline-flex items-center justify-center rounded-full border border-white/20 px-7 py-4 text-sm font-semibold text-white transition hover:border-white/40 hover:bg-white/5"
+            >
+              Sign in
+            </Link>
+          </div>
+
+          <div className="mt-9 flex flex-wrap gap-x-6 gap-y-3 text-sm text-white/45">
+            <span>✓ Multi-role organisations</span>
+            <span>✓ Chain-of-custody records</span>
+            <span>✓ Digital reporting workflows</span>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 30, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{
+            duration: 0.85,
+            delay: 0.12,
+            ease: [0.22, 1, 0.36, 1],
+          }}
+          className="relative"
+        >
+          <div className="absolute -inset-10 rounded-[48px] bg-orange-500/10 blur-3xl" />
+
+          <div className="relative rounded-[28px] border border-white/10 bg-[#171717] p-2 shadow-2xl shadow-black/50 sm:p-3">
+            <BrowserBar label="Waste X / Live product" />
+
+            <div className="relative aspect-[16/9] overflow-hidden rounded-[20px] bg-[#f6f1e9]">
+              <Image
+                src="/waste-x/home/hero-dashboard.jpg"
+                alt="Waste X dashboard interface"
+                fill
+                priority
+                sizes="(min-width: 1024px) 55vw, 100vw"
+                className="object-cover object-left-top"
+              />
+            </div>
+          </div>
+
+          <div className="absolute -bottom-6 left-4 rounded-2xl border border-white/10 bg-black/90 px-5 py-4 shadow-xl backdrop-blur md:left-[-28px]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-orange-400">
+              Connected chain of custody
+            </p>
+            <p className="mt-1 text-sm font-medium text-white">
+              One record across each stage.
+            </p>
+          </div>
+
+          <div className="absolute -right-3 top-16 hidden rounded-2xl border border-orange-500/30 bg-[#17120e]/95 px-5 py-4 shadow-xl backdrop-blur sm:block lg:right-[-26px]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-orange-400">
+              DWT workflow
+            </p>
+            <p className="mt-1 text-sm font-medium text-white">
+              Receipt data captured in-product.
+            </p>
+          </div>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+function BrowserBar({ label }: { label: string }) {
+  return (
+    <div className="mb-2 flex items-center justify-between px-3 py-2">
+      <div className="flex gap-1.5">
+        <span className="h-2.5 w-2.5 rounded-full bg-white/20" />
+        <span className="h-2.5 w-2.5 rounded-full bg-white/20" />
+        <span className="h-2.5 w-2.5 rounded-full bg-orange-500" />
+      </div>
+
+      <span className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+/* ============================================================================
+   MOVEMENT STRIP
+============================================================================ */
+
+function MovementStrip() {
+  const stages = ["Generate", "Assign", "Collect", "Receive", "Report", "Audit"];
+
+  return (
+    <section className="border-b border-black/10 border-t border-black/10 bg-[#fffaf4] px-5 py-5 sm:px-8 lg:px-10">
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-center gap-x-3 gap-y-2 text-xs font-bold uppercase tracking-[0.2em] text-black/50 sm:justify-between sm:text-sm">
+        {stages.map((stage, index) => (
+          <div key={stage} className="contents">
+            <span>{stage}</span>
+            {index < stages.length - 1 && (
+              <span className="text-orange-500">→</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================================
+   DISAPPEARING PRODUCT TOUR
+============================================================================ */
+
+function DisappearingProductTour() {
+  return (
+    <section className="relative bg-[#f6f1e9] px-5 sm:px-8 lg:px-10">
+      <div className="relative mx-auto grid w-full max-w-[1440px] grid-cols-1 gap-10 lg:grid-cols-[0.72fr_1.28fr] lg:gap-16">
+        <ProductTourCopy />
+        <ProductTourCarousel />
+      </div>
+    </section>
+  );
+}
+
+function ProductTourCopy() {
+  return (
+    <div className="flex h-fit w-full flex-col justify-center py-20 lg:sticky lg:top-0 lg:h-screen lg:py-0">
+      <span className="w-fit rounded-full bg-black px-4 py-2 text-[11px] font-bold uppercase tracking-[0.2em] text-orange-400">
+        Product tour
+      </span>
+
+      <h2 className="mt-5 max-w-xl text-4xl font-semibold leading-[1.02] tracking-[-0.045em] sm:text-5xl lg:text-6xl">
+        One platform.
+        <span className="block text-orange-500">
+          Every stage of the movement.
+        </span>
+      </h2>
+
+      <p className="mt-6 max-w-lg text-lg leading-8 text-black/55">
+        Create the record, assign the work, manage the movement and keep the
+        evidence connected from start to finish.
+      </p>
+
+      <div className="mt-9 hidden max-w-md border-l-2 border-orange-500 pl-5 text-sm leading-6 text-black/45 lg:block">
+        Scroll through Waste X to see how each part of the operation connects.
+      </div>
+    </div>
+  );
+}
+
+function ProductTourCarousel() {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const { scrollYProgress } = useScroll({
+    target: ref,
+    offset: ["start start", "end start"],
+  });
+
+  return (
+    <div className="relative w-full pb-24 lg:pb-36">
+      <div className="sticky top-0 z-20 hidden h-24 w-full bg-gradient-to-b from-[#f6f1e9] via-[#f6f1e9] to-[#f6f1e9]/0 lg:block" />
+
+      <div
+        ref={ref}
+        className="relative z-10 flex flex-col gap-8 lg:gap-14"
+      >
+        {productTour.map((item, index) => (
+          <TourCard
+            key={item.title}
+            item={item}
+            position={index + 1}
+            numItems={productTour.length}
+            scrollYProgress={scrollYProgress}
+          />
+        ))}
+      </div>
+
+      <div className="h-12 lg:h-24" />
+    </div>
+  );
+}
+
+type TourCardProps = {
+  item: (typeof productTour)[number];
+  position: number;
+  numItems: number;
+  scrollYProgress: MotionValue<number>;
+};
+
+function TourCard({
+  item,
+  position,
+  numItems,
+  scrollYProgress,
+}: TourCardProps) {
+  const stepSize = 1 / numItems;
+  const end = stepSize * position;
+  const start = end - stepSize;
+
+  const opacity = useTransform(scrollYProgress, [start, end], [1, 0]);
+  const scale = useTransform(scrollYProgress, [start, end], [1, 0.8]);
+  const y = useTransform(scrollYProgress, [start, end], [0, -32]);
+
+  return (
+    <motion.article
+      style={{ opacity, scale, y }}
+      className="origin-center overflow-hidden rounded-[30px] border border-black/10 bg-white shadow-[0_24px_80px_rgba(17,17,17,0.08)]"
+    >
+      <div className="relative aspect-[16/9] overflow-hidden border-b border-black/10 bg-[#eee8df]">
+        <Image
+          src={item.image}
+          alt={item.alt}
+          fill
+          sizes="(min-width: 1024px) 60vw, 100vw"
+          className="object-cover object-left-top"
+        />
+      </div>
+
+      <div className="p-6 sm:p-8">
+        <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-orange-500">
+          {item.eyebrow}
+        </div>
+
+        <h3 className="mt-3 max-w-2xl text-2xl font-semibold tracking-[-0.03em] sm:text-3xl">
+          {item.title}
+        </h3>
+
+        <p className="mt-3 max-w-2xl leading-7 text-black/55">
+          {item.text}
+        </p>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          {item.tags.map((tag) => (
+            <span
+              key={tag}
+              className="rounded-full border border-black/10 bg-[#faf7f2] px-3 py-1.5 text-xs font-medium text-black/55"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      </div>
+    </motion.article>
+  );
+}
+
+/* ============================================================================
+   ROLE SWITCHER
+============================================================================ */
+
+function RoleSwitcher() {
+  const [selected, setSelected] = useState(0);
+  const active = roleFeatures[selected];
+
+  return (
+    <section className="bg-[#0a0a0a] px-5 py-24 text-white sm:px-8 lg:px-10 lg:py-32">
+      <div className="mx-auto max-w-[1440px]">
+        <div className="mb-12 max-w-3xl">
+          <p className="text-xs font-bold uppercase tracking-[0.24em] text-orange-500">
+            Built around real roles
+          </p>
+
+          <h2 className="mt-4 text-4xl font-semibold leading-[1.02] tracking-[-0.045em] sm:text-5xl lg:text-6xl">
+            The right view for the people doing the work.
+          </h2>
+
+          <p className="mt-5 max-w-2xl text-lg leading-8 text-white/50">
+            Waste X can support one-role businesses or organisations operating
+            across several parts of the waste chain.
+          </p>
+        </div>
+
+        <div className="grid items-start gap-8 lg:grid-cols-[270px_1fr] lg:gap-12">
+          <RoleTabs selected={selected} setSelected={setSelected} />
+
+          <div className="overflow-hidden rounded-[30px] border border-white/10 bg-[#141414]">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={active.title}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 12 }}
+                transition={{ duration: 0.3 }}
+              >
+                <div className="relative aspect-[16/9] overflow-hidden border-b border-white/10 bg-[#eee8df]">
+                  <Image
+                    src={active.image}
+                    alt={active.alt}
+                    fill
+                    sizes="(min-width: 1024px) 70vw, 100vw"
+                    className="object-cover object-left-top"
+                  />
+                </div>
+
+                <div className="grid gap-8 p-7 sm:p-10 lg:grid-cols-[1fr_0.8fr] lg:p-12">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-orange-500">
+                      {active.kicker}
+                    </p>
+
+                    <h3 className="mt-4 max-w-2xl text-3xl font-semibold leading-tight tracking-[-0.035em] lg:text-4xl">
+                      {active.heading}
+                    </h3>
+
+                    <p className="mt-5 max-w-xl leading-7 text-white/50">
+                      {active.text}
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 lg:pt-2">
+                    {active.points.map((point) => (
+                      <div
+                        key={point}
+                        className="flex items-start gap-3 border-t border-white/10 pt-4 text-sm leading-6 text-white/75"
+                      >
+                        <span className="mt-0.5 text-orange-500">✓</span>
+                        <span>{point}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RoleTabs({
+  selected,
+  setSelected,
+}: {
+  selected: number;
+  setSelected: (index: number) => void;
+}) {
+  return (
+    <div className="overflow-x-auto lg:overflow-visible">
+      <div className="flex min-w-max lg:block lg:min-w-0">
+        {roleFeatures.map((feature, index) => {
+          const isSelected = selected === index;
+
+          return (
+            <div key={feature.title} className="group relative">
+              <button
+                type="button"
+                onClick={() => setSelected(index)}
+                className="relative z-10 flex min-w-[180px] items-center border-b border-white/10 px-5 py-5 text-left transition lg:w-full lg:min-w-0 lg:border-b-0 lg:border-l lg:px-7 lg:py-7"
+              >
+                <span
+                  className={`text-xl font-semibold tracking-[-0.02em] transition sm:text-2xl ${
+                    isSelected
+                      ? "text-white"
+                      : "text-white/35 group-hover:text-white/65"
+                  }`}
+                >
+                  {feature.title}
+                </span>
+              </button>
+
+              {isSelected && (
+                <motion.span
+                  layoutId="waste-x-role-slider"
+                  className="absolute bottom-0 left-0 right-0 z-20 h-0.5 bg-orange-500 lg:bottom-0 lg:right-auto lg:top-0 lg:h-full lg:w-1"
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   DWT GUIDE
+============================================================================ */
+
+function DwtGuide() {
+  return (
+    <section className="bg-[#fffaf4] px-5 py-24 sm:px-8 lg:px-10 lg:py-32">
+      <div className="mx-auto max-w-[1440px] overflow-hidden rounded-[34px] border border-black/10 bg-white shadow-[0_24px_80px_rgba(17,17,17,0.06)]">
+        <div className="grid lg:grid-cols-[0.82fr_1.18fr]">
+          <div className="relative min-h-[460px] overflow-hidden bg-[#0a0a0a] lg:min-h-[640px]">
+            <Image
+              src="/waste-x/home/dwt-pack-cover.png"
+              alt="Waste X Preparing for Digital Waste Tracking guide cover"
+              fill
+              sizes="(min-width: 1024px) 40vw, 100vw"
+              className="object-contain object-left-top p-5 sm:p-8"
+            />
+          </div>
+
+          <div className="flex flex-col justify-center p-8 sm:p-12 lg:p-16">
+            <div className="w-fit rounded-full bg-orange-500 px-4 py-2 text-[11px] font-bold uppercase tracking-[0.2em] text-black">
+              Free Waste X guide
             </div>
 
-            <h1 className="mb-6 text-5xl font-bold leading-tight">
-              One Platform for Every Role in the
-              <span className="text-orange-500"> Waste Chain</span>
-            </h1>
+            <h2 className="mt-5 max-w-2xl text-4xl font-semibold leading-[1.02] tracking-[-0.045em] sm:text-5xl lg:text-6xl">
+              Preparing for Digital Waste Tracking?
+            </h2>
 
-            <p className="mb-6 text-lg leading-relaxed text-gray-300">
-              Waste X provides digital infrastructure for organisations that
-              generate, carry, receive, manage or oversee waste movements across
-              the UK.
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-black/55">
+              A practical readiness guide for UK waste operations covering the
+              reporting shift, receipt routes, operational preparation and how
+              Waste X fits into a software-led workflow.
             </p>
 
-            <p className="mb-10 leading-relaxed text-gray-400">
-              Built for both full-chain operators and single-role firms, Waste X
-              helps teams replace fragmented paperwork, spreadsheets and manual
-              handovers with structured, auditable workflows designed for the
-              future of DEFRA Digital Waste Tracking.
-            </p>
-
-            <div className="mb-10 flex flex-col gap-4 sm:flex-row">
-  <Link
-    href="/login"
-    className="inline-flex items-center justify-center border border-white/30 px-8 py-4 font-semibold text-white transition hover:bg-white/10"
-  >
-    Login
-  </Link>
-
-  <Link
-    href="/book-demo"
-    className="inline-flex items-center justify-center bg-orange-500 px-8 py-4 font-semibold text-white transition hover:bg-orange-600"
-  >
-    Book Demo
-  </Link>
-</div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              {trustMarkers.map((item) => (
+            <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              {[
+                "Requirements + timelines",
+                "Receipt reporting routes",
+                "Operational readiness",
+              ].map((item) => (
                 <div
                   key={item}
-                  className="border border-white/10 bg-white/5 px-4 py-3 text-sm text-gray-300"
+                  className="rounded-2xl border border-black/10 bg-[#faf7f2] p-4 text-sm font-semibold"
                 >
                   {item}
                 </div>
               ))}
             </div>
-          </motion.div>
 
-          <motion.div
-            initial="hidden"
-            animate="show"
-            variants={fadeUp}
-            className="relative h-[420px]"
-          >
-            <Image
-              src="https://images.unsplash.com/photo-1711618732595-0c517e08d40c?q=80&w=2906&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
-              alt="Industrial waste and construction operations"
-              fill
-              className="border-4 border-orange-500 object-cover"
-              priority
-            />
+            <div className="mt-9 flex flex-col gap-3 sm:flex-row">
+              <a
+                href="/downloads/waste-x-dwt-guide.pdf"
+                className="inline-flex items-center justify-center rounded-full bg-black px-7 py-4 text-sm font-bold text-white transition hover:bg-orange-500 hover:text-black"
+              >
+                Download the guide <span className="ml-2">↓</span>
+              </a>
 
-            <div className="absolute -bottom-8 -left-8 hidden max-w-sm border border-orange-500 bg-black p-6 shadow-2xl md:block">
-              <p className="mb-2 text-sm font-bold text-orange-500">
-                DEFRA API DIRECTION
-              </p>
-
-              <p className="text-sm leading-relaxed text-gray-300">
-                Structured around the movement, receipt and audit data required
-                for modern digital waste reporting workflows.
-              </p>
+              <Link
+                href="/book-demo"
+                className="inline-flex items-center justify-center rounded-full border border-black/15 px-7 py-4 text-sm font-bold transition hover:border-black/30"
+              >
+                Talk to Waste X <span className="ml-2">→</span>
+              </Link>
             </div>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* ================= INDUSTRY CONTEXT ================= */}
-      <section className="border-t-8 border-orange-500 bg-gray-100 px-6 py-28">
-        <div className="mx-auto max-w-5xl space-y-6 text-center">
-          <p className="text-sm font-bold uppercase tracking-[0.2em] text-orange-500">
-            The shift Waste X is built for
-          </p>
-
-          <h2 className="text-4xl font-bold">
-            Waste Operations Need More Than Paper Trails
-          </h2>
-
-          <p className="text-lg leading-relaxed text-gray-600">
-            Waste businesses are under growing pressure to prove where waste
-            came from, who handled it, where it moved, and how it was received.
-            The problem is that most teams are still trying to manage that
-            journey through spreadsheets, emails, phone calls and disconnected
-            documents.
-          </p>
-
-          <p className="text-lg leading-relaxed text-gray-600">
-            Waste X brings that activity into one structured workflow, helping
-            teams create cleaner records, reduce handover gaps and prepare for a
-            more digital waste sector without changing everything overnight.
-          </p>
-
-          <div className="grid gap-6 pt-10 text-left md:grid-cols-3">
-            {digitalShiftCards.map((item) => (
-              <DigitalShiftCard
-                key={item.label}
-                label={item.label}
-                title={item.title}
-                text={item.text}
-              />
-            ))}
           </div>
         </div>
-      </section>
+      </div>
+    </section>
+  );
+}
 
-      {/* ================= KEY RISKS ================= */}
-      <section className="bg-white px-6 py-28">
-        <div className="mx-auto mb-16 max-w-6xl text-center">
-          <h2 className="mb-6 text-4xl font-bold">
-            The Risk Is Not Just Compliance. It Is Poor Visibility.
-          </h2>
+/* ============================================================================
+   BENEFITS
+============================================================================ */
 
-          <p className="mx-auto max-w-3xl text-lg leading-relaxed text-gray-600">
-            When waste operations are split across paper, phone calls,
-            spreadsheets and separate systems, it becomes harder to prove what
-            happened, who was responsible and whether the movement was handled
-            correctly.
-          </p>
-        </div>
-
-        <div className="mx-auto grid max-w-6xl gap-12 md:grid-cols-3">
-          <IndustrialCard
-            title="Fragmented Records"
-            text="Waste movements often rely on documents, emails and spreadsheets that are difficult to connect into one reliable chain of custody."
-          />
-
-          <IndustrialCard
-            title="Role Handover Gaps"
-            text="Producers, carriers and receiving sites each have different responsibilities. Without a shared workflow, key updates can be missed."
-          />
-
-          <IndustrialCard
-            title="Regulatory Exposure"
-            text="As digital reporting expands, organisations will need stronger audit trails, cleaner data and more consistent operational processes."
-          />
-        </div>
-      </section>
-
-      {/* ================= OPERATING MODELS ================= */}
-      <section className="bg-[#2b2b2b] px-6 py-32 text-white">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-16 max-w-3xl">
-            <p className="mb-4 font-bold text-orange-500">
-              BUILT FOR DIFFERENT TYPES OF WASTE ORGANISATIONS
-            </p>
-
-            <h2 className="mb-6 text-4xl font-bold">
-              Full-chain operator or single-role firm — Waste X adapts to how
-              you work.
-            </h2>
-
-            <p className="text-lg leading-relaxed text-gray-300">
-              Some organisations manage the entire waste lifecycle internally.
-              Others only focus on one part of the chain, such as carrying,
-              receiving or producing waste. Waste X is designed to support both.
-            </p>
-          </div>
-
-          <div className="grid gap-12 md:grid-cols-2">
-            {operatingModels.map((model) => (
-              <SideBlock
-                key={model.title}
-                title={model.title}
-                description={model.description}
-                items={model.items}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ================= WHY WASTE X ================= */}
-      <section className="relative overflow-hidden py-40 text-white">
-        <div className="absolute inset-0">
-          <Image
-            src="https://images.unsplash.com/photo-1642204705127-accc0dcc5779?auto=format&fit=crop&w=2000&q=80"
-            alt="Construction waste background"
-            fill
-            sizes="100vw"
-            className="scale-110 object-cover"
-            priority={false}
-          />
-        </div>
-
-        <div className="absolute inset-0 bg-black/70" />
-
-        <div className="relative mx-auto max-w-6xl px-6">
-          <h2 className="mb-20 text-center text-4xl font-bold md:text-5xl">
-            Why <span className="text-orange-500">Waste X</span>
-          </h2>
-
-          <div className="grid gap-16 md:grid-cols-2">
-            <BenefitBlock
-              title="Replace Paper, Spreadsheets & Manual Handover"
-              text="Waste X gives teams a structured digital workspace for listings, assignments, collections, incidents and receipts — reducing reliance on fragmented admin processes."
-            />
-
-            <BenefitBlock
-              title="Prepare for DEFRA Digital Waste Tracking"
-              text="The platform is being shaped around the UK’s move towards digital waste records, helping operators capture cleaner movement and receipt data from day one."
-            />
-
-            <BenefitBlock
-              title="Support Multiple Organisation Roles"
-              text="A company can operate as a generator, carrier, waste manager, receiver or multi-role organisation without needing separate disconnected systems."
-            />
-
-            <BenefitBlock
-              title="Create Audit-Ready Chain-of-Custody Records"
-              text="Every assignment, status update, verification point and incident record contributes to a clear operational history that can support reporting, reviews and compliance checks."
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* ================= PROCESS ================= */}
-      <section className="bg-white px-6 py-32">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-16 max-w-3xl">
-            <p className="mb-4 font-bold text-orange-500">
-              FROM GENERATION TO RECEIPT
-            </p>
-
-            <h2 className="mb-6 text-4xl font-bold">
-              A structured workflow for the complete waste journey.
-            </h2>
-
-            <p className="text-lg leading-relaxed text-gray-600">
-              Waste X connects operational activity into one digital record,
-              giving each organisation the tools it needs for its own role while
-              maintaining visibility across the wider movement.
-            </p>
-          </div>
-
-          <div className="grid gap-6 md:grid-cols-5">
-            {processSteps.map((step) => (
-              <ProcessStep
-                key={step.number}
-                number={step.number}
-                title={step.title}
-                description={step.description}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ================= FOR EVERY ROLE ================= */}
-      <section className="bg-[#2b2b2b] px-6 py-32 text-white">
-        <div className="mx-auto max-w-6xl">
-          <div className="mx-auto mb-20 max-w-4xl text-center">
-            <h2 className="mb-6 text-4xl font-bold">
-              Services for Every Organisation in the Waste Chain
-            </h2>
-
-            <p className="text-lg leading-relaxed text-gray-300">
-              Waste X is not limited to one type of operator. It is built around
-              the real structure of the waste sector, where each organisation
-              may have different duties, permissions and workflows.
-            </p>
-          </div>
-
-          <div className="grid gap-10 md:grid-cols-2">
-            {roleCards.map((role) => (
-              <RoleCard
-                key={role.title}
-                title={role.title}
-                text={role.text}
-                items={role.items}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ================= COMPLIANCE ================= */}
-      <section className="border-t-8 border-yellow-500 bg-white px-6 py-32">
-        <div className="mx-auto mb-16 max-w-5xl space-y-6 text-center">
-          <h2 className="text-4xl font-bold">
-            Regulatory-Ready Digital Waste Infrastructure
-          </h2>
-
-          <p className="text-lg leading-relaxed text-gray-600">
-            Compliance should not sit outside operations. Waste X embeds
-            compliance activity into the same workflows teams use to create,
-            assign, collect, receive and manage waste.
-          </p>
-
-          <p className="text-lg leading-relaxed text-gray-600">
-            As the UK moves towards mandatory Digital Waste Tracking, Waste X
-            helps organisations build the data habits, audit trails and
-            role-based processes needed for a more transparent waste sector.
-          </p>
-        </div>
-
-        <div className="mx-auto grid max-w-6xl gap-6 md:grid-cols-4">
-          {compliancePoints.map((point) => (
-            <CompliancePoint
-              key={point.title}
-              title={point.title}
-              text={point.text}
-            />
-          ))}
-        </div>
-      </section>
-
-      {/* ================= FINAL POSITIONING ================= */}
-      <section className="bg-gray-100 px-6 py-28">
-        <div className="mx-auto grid max-w-6xl items-center gap-16 md:grid-cols-2">
+function Benefits() {
+  return (
+    <section className="bg-[#0a0a0a] px-5 py-24 text-white sm:px-8 lg:px-10 lg:py-32">
+      <div className="mx-auto max-w-[1440px]">
+        <div className="grid gap-12 lg:grid-cols-[0.72fr_1.28fr] lg:gap-20">
           <div>
-            <p className="mb-4 font-bold text-orange-500">
-              BUILT FOR THE NEXT PHASE OF WASTE OPERATIONS
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-orange-500">
+              Why Waste X
             </p>
 
-            <h2 className="mb-6 text-4xl font-bold">
-              Start with the workflow you need. Expand as your organisation
-              grows.
+            <h2 className="mt-4 max-w-xl text-4xl font-semibold leading-[1.02] tracking-[-0.045em] sm:text-5xl lg:text-6xl">
+              Build compliance into the workflow.
             </h2>
 
-            <p className="mb-6 text-lg leading-relaxed text-gray-600">
-              A small carrier can use Waste X to manage assignments and
-              collection records. A receiving site can use it to prepare receipt
-              workflows. A large infrastructure business can use it to connect
-              internal generation, transport, management and compliance teams.
-            </p>
-
-            <p className="text-lg leading-relaxed text-gray-600">
-              The result is a flexible platform that supports today’s operations
-              while preparing businesses for tomorrow’s digital reporting
-              requirements.
+            <p className="mt-6 max-w-lg text-lg leading-8 text-white/50">
+              Waste X keeps operational evidence inside the same workflow teams
+              use to create, assign, collect, receive and review waste movements.
             </p>
           </div>
 
-          <div className="border-2 border-orange-500 bg-white p-10 shadow-sm">
-            <h3 className="mb-6 text-2xl font-bold">
-              Waste X is designed for:
-            </h3>
+          <div className="border-t border-white/15">
+            {benefitRows.map((item) => (
+              <div
+                key={item.number}
+                className="grid gap-3 border-b border-white/15 py-6 sm:grid-cols-[70px_1fr_1fr] sm:items-center sm:gap-8"
+              >
+                <span className="text-sm font-bold text-orange-500">
+                  {item.number}
+                </span>
 
-            <ul className="space-y-4 text-gray-700">
-              <li>• Construction and demolition waste operations</li>
-              <li>• Licensed waste carriers</li>
-              <li>• Waste managers and receiving sites</li>
-              <li>• Multi-site organisations</li>
-              <li>• Compliance and environmental teams</li>
-              <li>• Businesses preparing for Digital Waste Tracking</li>
-            </ul>
+                <h3 className="text-xl font-semibold tracking-[-0.02em] sm:text-2xl">
+                  {item.title}
+                </h3>
+
+                <p className="leading-7 text-white/45">{item.text}</p>
+              </div>
+            ))}
           </div>
         </div>
-      </section>
-
-      {/* ================= CTA ================= */}
-      <section className="bg-orange-500 px-6 py-28 text-center text-white">
-        <h2 className="mb-6 text-4xl font-bold">
-          Prepare Your Waste Operations for Digital Tracking
-        </h2>
-
-        <p className="mx-auto mb-10 max-w-3xl text-lg leading-relaxed">
-          Built for operational clarity. Structured for audit visibility.
-          Designed for the UK’s Digital Waste Tracking future.
-        </p>
-
-        <button className="bg-black px-10 py-4 font-semibold transition hover:bg-gray-900">
-          Start Your Organisation
-        </button>
-      </section>
-    </main>
-  );
-}
-
-/* ================= COMPONENTS ================= */
-
-type IndustrialCardProps = {
-  title: string;
-  text: string;
-};
-
-function IndustrialCard({ title, text }: IndustrialCardProps) {
-  return (
-    <div className="border-2 border-gray-200 p-8 shadow-sm">
-      <h3 className="mb-4 text-xl font-bold text-orange-500">{title}</h3>
-      <p className="leading-relaxed text-gray-600">{text}</p>
-    </div>
-  );
-}
-
-type DigitalShiftCardProps = {
-  label: string;
-  title: string;
-  text: string;
-};
-
-function DigitalShiftCard({ label, title, text }: DigitalShiftCardProps) {
-  return (
-    <div className="border-2 border-gray-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:border-orange-500">
-      <div className="mb-4 text-sm font-bold uppercase tracking-[0.15em] text-orange-500">
-        {label}
       </div>
-
-      <h3 className="mb-4 text-xl font-bold leading-snug">{title}</h3>
-
-      <p className="text-sm leading-relaxed text-gray-600">{text}</p>
-    </div>
+    </section>
   );
 }
 
-type ProcessStepProps = {
-  number: string;
-  title: string;
-  description: string;
-};
+/* ============================================================================
+   FINAL CTA
+============================================================================ */
 
-function ProcessStep({ number, title, description }: ProcessStepProps) {
+function FinalCta() {
   return (
-    <div className="border-2 border-gray-200 p-6">
-      <div className="mb-3 text-4xl font-bold text-orange-500">{number}</div>
-      <div className="mb-2 font-semibold">{title}</div>
-      <div className="text-sm leading-relaxed text-gray-600">
-        {description}
+    <section className="relative overflow-hidden bg-orange-500 px-5 py-24 text-black sm:px-8 lg:px-10 lg:py-32">
+      <div className="absolute -right-24 -top-24 h-80 w-80 rounded-full border border-black/10" />
+      <div className="absolute -right-8 -top-8 h-48 w-48 rounded-full border border-black/10" />
+
+      <div className="relative mx-auto flex max-w-[1440px] flex-col items-start justify-between gap-10 lg:flex-row lg:items-end">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.24em] text-black/55">
+            See Waste X in your workflow
+          </p>
+
+          <h2 className="mt-4 max-w-4xl text-5xl font-semibold leading-[0.98] tracking-[-0.05em] sm:text-6xl lg:text-7xl">
+            Less chasing. More visibility. A cleaner digital record.
+          </h2>
+        </div>
+
+        <Link
+          href="/book-demo"
+          className="inline-flex shrink-0 items-center justify-center rounded-full bg-black px-8 py-4 text-sm font-bold text-white transition hover:-translate-y-0.5"
+        >
+          Book a demo <span className="ml-2">→</span>
+        </Link>
       </div>
-    </div>
-  );
-}
-
-type SideBlockProps = {
-  title: string;
-  description: string;
-  items: string[];
-};
-
-function SideBlock({ title, description, items }: SideBlockProps) {
-  return (
-    <div className="border border-white/10 bg-black/30 p-10">
-      <h3 className="mb-4 text-2xl font-bold text-orange-500">{title}</h3>
-      <p className="mb-8 leading-relaxed text-gray-300">{description}</p>
-
-      <ul className="space-y-4 text-gray-300">
-        {items.map((item) => (
-          <li key={item}>• {item}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-type BenefitBlockProps = {
-  title: string;
-  text: string;
-};
-
-function BenefitBlock({ title, text }: BenefitBlockProps) {
-  return (
-    <div className="border border-white/20 bg-black/40 p-10 backdrop-blur-sm">
-      <h3 className="mb-6 text-2xl font-bold text-orange-500">{title}</h3>
-      <p className="leading-relaxed text-gray-300">{text}</p>
-    </div>
-  );
-}
-
-type RoleCardProps = {
-  title: string;
-  text: string;
-  items: string[];
-};
-
-function RoleCard({ title, text, items }: RoleCardProps) {
-  return (
-    <div className="border border-white/10 bg-black/30 p-8">
-      <h3 className="mb-4 text-2xl font-bold text-orange-500">{title}</h3>
-      <p className="mb-8 leading-relaxed text-gray-300">{text}</p>
-
-      <ul className="space-y-3 text-gray-300">
-        {items.map((item) => (
-          <li key={item}>• {item}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-type CompliancePointProps = {
-  title: string;
-  text: string;
-};
-
-function CompliancePoint({ title, text }: CompliancePointProps) {
-  return (
-    <div className="border-2 border-gray-200 p-6">
-      <h3 className="mb-4 font-bold text-orange-500">{title}</h3>
-      <p className="text-sm leading-relaxed text-gray-600">{text}</p>
-    </div>
+    </section>
   );
 }

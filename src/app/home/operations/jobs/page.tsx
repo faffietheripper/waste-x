@@ -13,11 +13,17 @@ import {
   wasteListings,
   type OrganisationOperatingMode,
 } from "@/db/schema";
-import { getDefaultSiteForOrganisation } from "@/modules/sites/data-access/getDefaultSiteForOrganisation";
 import {
   shouldShowExternalJobs,
   type OrganisationCapability,
 } from "@/modules/organisations/core/operatingModes";
+import { resolveSiteFilterForOrganisation } from "@/modules/sites/data-access/resolveSiteFilterForOrganisation";
+
+type PageProps = {
+  searchParams?: {
+    siteId?: string;
+  };
+};
 
 type JobRow = {
   id: string;
@@ -156,7 +162,7 @@ function getDestinationValue(job: JobRow) {
   return "Handled through Waste X assignment";
 }
 
-export default async function CarrierJobsPage() {
+export default async function CarrierJobsPage({ searchParams }: PageProps) {
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -197,10 +203,24 @@ export default async function CarrierJobsPage() {
     redirect("/home");
   }
 
-  await getDefaultSiteForOrganisation({
+  const siteFilter = await resolveSiteFilterForOrganisation({
     organisationId: currentUser.organisationId,
-    createIfMissing: true,
+    requestedSiteId: searchParams?.siteId,
+    createDefaultIfMissing: true,
   });
+
+  const jobsWhere = siteFilter.selectedSiteId
+    ? and(
+        eq(
+          carrierAssignments.carrierOrganisationId,
+          currentUser.organisationId,
+        ),
+        eq(carrierAssignments.siteId, siteFilter.selectedSiteId),
+      )
+    : eq(
+        carrierAssignments.carrierOrganisationId,
+        currentUser.organisationId,
+      );
 
   const jobs = await database
     .select({
@@ -238,14 +258,7 @@ export default async function CarrierJobsPage() {
     .from(carrierAssignments)
     .leftJoin(wasteListings, eq(carrierAssignments.listingId, wasteListings.id))
     .leftJoin(sites, eq(carrierAssignments.siteId, sites.id))
-    .where(
-      and(
-        eq(
-          carrierAssignments.carrierOrganisationId,
-          currentUser.organisationId,
-        ),
-      ),
-    )
+    .where(jobsWhere)
     .orderBy(
       desc(carrierAssignments.externalCollectionDate),
       desc(carrierAssignments.assignedAt),
@@ -260,135 +273,141 @@ export default async function CarrierJobsPage() {
   );
 
   return (
-    <main className="space-y-8 min-h-screen bg-[#f7f3ed] px-8 py-10 pl-[22vw] text-black pt-[calc(13vh+2rem)]">
-      <section className="rounded-[2rem] border border-black/10 bg-white p-7 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-              Carrier operations
-            </p>
+    <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[calc(13vh+2rem)] text-black">
+      <div className="mx-auto max-w-6xl space-y-8">
+        <section className="rounded-[2rem] border border-black/10 bg-white p-7 shadow-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
+                Carrier operations
+              </p>
 
-            <h1 className="mt-2 text-2xl font-semibold text-black">
-              Jobs
-            </h1>
+              <h1 className="mt-2 text-2xl font-semibold text-black">
+                External Jobs
+              </h1>
 
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
-              Manage Waste X marketplace jobs and external/private carrier jobs
-              from one operational view.
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
+                Manage Waste X marketplace jobs and external/private carrier
+                jobs from one operational view.
+              </p>
+
+              <p className="mt-3 inline-flex rounded-full border border-black/10 bg-[#f7f3ed] px-4 py-2 text-xs font-semibold text-black/50">
+                Showing: {siteFilter.label}
+              </p>
+            </div>
+
+            <Link
+              href="/home/operations/jobs/new"
+              className="inline-flex rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+            >
+              Add external job
+            </Link>
+          </div>
+
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <Stat label="Total jobs" value={jobs.length} />
+            <Stat label="Active jobs" value={activeJobs.length} />
+            <Stat label="External jobs" value={externalJobs.length} />
+          </div>
+        </section>
+
+        <section className="space-y-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
+                Job queue
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-black">
+                Current carrier jobs
+              </h2>
+            </div>
+
+            <p className="text-sm text-black/40">
+              {completedJobs.length} completed
             </p>
           </div>
 
-          <Link
-            href="/home/operations/jobs/new"
-            className="inline-flex rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
-          >
-            Add external job
-          </Link>
-        </div>
+          {jobs.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <div className="space-y-4">
+              {jobs.map((job) => {
+                const title = getJobTitle(job);
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Stat label="Total jobs" value={jobs.length} />
-          <Stat label="Active jobs" value={activeJobs.length} />
-          <Stat label="External jobs" value={externalJobs.length} />
-        </div>
-      </section>
+                return (
+                  <article
+                    key={job.id}
+                    className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  >
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="truncate text-lg font-semibold text-black">
+                            {title}
+                          </h3>
 
-      <section className="space-y-5">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-              Job queue
-            </p>
+                          <span
+                            className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusClass(
+                              job.status,
+                            )}`}
+                          >
+                            {formatStatus(job.status)}
+                          </span>
 
-            <h2 className="mt-2 text-xl font-semibold text-black">
-              Current carrier jobs
-            </h2>
-          </div>
+                          <span className="rounded-full border border-black/10 bg-[#f7f3ed] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/45">
+                            {formatJobSource(job.jobSource)}
+                          </span>
+                        </div>
 
-          <p className="text-sm text-black/40">
-            {completedJobs.length} completed
-          </p>
-        </div>
+                        <p className="mt-2 text-sm leading-6 text-black/55">
+                          {getWasteDescription(job)}
+                        </p>
 
-        {jobs.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <div className="space-y-4">
-            {jobs.map((job) => {
-              const title = getJobTitle(job);
+                        <div className="mt-4 grid gap-3 text-sm text-black/55 md:grid-cols-2 xl:grid-cols-4">
+                          <Detail
+                            label="Collection date"
+                            value={formatDate(
+                              job.externalCollectionDate ?? job.assignedAt,
+                            )}
+                          />
 
-              return (
-                <article
-                  key={job.id}
-                  className="rounded-[2rem] border border-black/10 bg-white p-5 shadow-sm"
-                >
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="truncate text-lg font-semibold text-black">
-                          {title}
-                        </h3>
+                          <Detail
+                            label="Site"
+                            value={job.siteName ?? "Main Site"}
+                          />
 
-                        <span
-                          className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusClass(
-                            job.status,
-                          )}`}
+                          <Detail label="Pickup" value={getPickupValue(job)} />
+
+                          <Detail
+                            label="Destination"
+                            value={getDestinationValue(job)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 flex-col gap-2 lg:items-end">
+                        {job.externalReference && (
+                          <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs font-medium text-black/45">
+                            Ref: {job.externalReference}
+                          </span>
+                        )}
+
+                        <Link
+                          href={`/home/operations/jobs/${job.id}`}
+                          className="rounded-full bg-black px-4 py-2 text-xs font-semibold text-orange-400 transition hover:bg-black/80"
                         >
-                          {formatStatus(job.status)}
-                        </span>
-
-                        <span className="rounded-full border border-black/10 bg-[#f7f3ed] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/45">
-                          {formatJobSource(job.jobSource)}
-                        </span>
-                      </div>
-
-                      <p className="mt-2 text-sm leading-6 text-black/55">
-                        {getWasteDescription(job)}
-                      </p>
-
-                      <div className="mt-4 grid gap-3 text-sm text-black/55 md:grid-cols-2 xl:grid-cols-4">
-                        <Detail
-                          label="Collection date"
-                          value={formatDate(
-                            job.externalCollectionDate ?? job.assignedAt,
-                          )}
-                        />
-
-                        <Detail
-                          label="Site"
-                          value={job.siteName ?? "Main Site"}
-                        />
-
-                        <Detail label="Pickup" value={getPickupValue(job)} />
-
-                        <Detail
-                          label="Destination"
-                          value={getDestinationValue(job)}
-                        />
+                          View job
+                        </Link>
                       </div>
                     </div>
-
-                    <div className="flex shrink-0 flex-col gap-2 lg:items-end">
-                      {job.externalReference && (
-                        <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs font-medium text-black/45">
-                          Ref: {job.externalReference}
-                        </span>
-                      )}
-
-                     <Link
-  href={`/home/operations/jobs/${job.id}`}
-  className="rounded-full bg-black px-4 py-2 text-xs font-semibold text-orange-400 transition hover:bg-black/80"
->
-  View job
-</Link>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
     </main>
   );
 }

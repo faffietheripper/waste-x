@@ -17,9 +17,20 @@ import {
 
 type Capability = "generator" | "carrier" | "manager";
 
+const operatingModes = [
+  "solo",
+  "team",
+  "multi_site",
+  "carrier_ops",
+  "enterprise",
+] as const;
+
+type OperatingMode = (typeof operatingModes)[number];
+
 interface OrganisationData {
   profilePicture?: string | null;
   capabilities?: Capability[];
+  operatingMode?: OperatingMode | null;
   teamName?: string | null;
   industry?: string | null;
   telephone?: string | null;
@@ -31,6 +42,49 @@ interface OrganisationData {
   country?: string | null;
   status?: string | null;
 }
+
+const operatingModeOptions: {
+  label: string;
+  value: OperatingMode;
+  description: string;
+  helper: string;
+}[] = [
+  {
+    label: "I run this myself",
+    value: "solo",
+    description:
+      "For a small operator who needs simple waste records, submissions and reports without heavy team setup.",
+    helper: "Simple workspace",
+  },
+  {
+    label: "We have a small team",
+    value: "team",
+    description:
+      "For organisations using departments, assignments, receipts, incidents and compliance workflows.",
+    helper: "Team workspace",
+  },
+  {
+    label: "We operate across multiple sites",
+    value: "multi_site",
+    description:
+      "For businesses working across depots, yards, transfer stations, customer sites or multiple operating locations.",
+    helper: "Multi-site workspace",
+  },
+  {
+    label: "We are mainly a carrier / skip hire operator",
+    value: "carrier_ops",
+    description:
+      "For carriers managing Waste X jobs, external/private jobs, collections and operational job queues.",
+    helper: "Carrier operations",
+  },
+  {
+    label: "We need enterprise compliance controls",
+    value: "enterprise",
+    description:
+      "For larger compliance-heavy organisations needing stronger reporting, controls, auditing and governance.",
+    helper: "Enterprise workspace",
+  },
+];
 
 const capabilityOptions: {
   label: string;
@@ -57,12 +111,29 @@ const capabilityOptions: {
   },
 ];
 
+function isOperatingMode(value: unknown): value is OperatingMode {
+  return (
+    typeof value === "string" &&
+    (operatingModes as readonly string[]).includes(value)
+  );
+}
+
+function formatOperatingMode(value: OperatingMode | null | undefined) {
+  if (!value) return "Team Mode";
+
+  const option = operatingModeOptions.find((item) => item.value === value);
+
+  return option?.helper ?? "Team Mode";
+}
+
 export default function OrganisationSetupForm() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
 
   const [profileData, setProfileData] = useState<OrganisationData>({});
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [selectedOperatingMode, setSelectedOperatingMode] =
+    useState<OperatingMode>("team");
   const [loading, setLoading] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [success, setSuccess] = useState<string | null>(null);
@@ -74,12 +145,16 @@ export default function OrganisationSetupForm() {
         const organisation = await fetchOrganisationAction();
 
         if (organisation) {
-          setProfileData(organisation as OrganisationData);
+          const organisationData = organisation as OrganisationData;
 
-          if ((organisation as OrganisationData).capabilities?.length) {
-            setCapabilities(
-              (organisation as OrganisationData).capabilities as Capability[],
-            );
+          setProfileData(organisationData);
+
+          if (organisationData.capabilities?.length) {
+            setCapabilities(organisationData.capabilities);
+          }
+
+          if (isOperatingMode(organisationData.operatingMode)) {
+            setSelectedOperatingMode(organisationData.operatingMode);
           }
         }
       } catch (err) {
@@ -98,6 +173,16 @@ export default function OrganisationSetupForm() {
         ? prev.filter((capability) => capability !== value)
         : [...prev, value],
     );
+  };
+
+  const selectOperatingMode = (value: OperatingMode) => {
+    setSelectedOperatingMode(value);
+
+    if (value === "carrier_ops") {
+      setCapabilities((prev) =>
+        prev.includes("carrier") ? prev : [...prev, "carrier"],
+      );
+    }
   };
 
   const mapError = (err: any): React.ReactNode => {
@@ -135,6 +220,8 @@ export default function OrganisationSetupForm() {
     }
 
     const formData = new FormData(e.currentTarget);
+
+    formData.set("operatingMode", selectedOperatingMode);
 
     formData.delete("capabilities");
     capabilities.forEach((capability) => {
@@ -176,9 +263,9 @@ export default function OrganisationSetupForm() {
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm text-white/55">
-                Tell us what your organisation does in the waste chain. Your
-                account will be submitted for platform approval before your team
-                can operate inside Waste X.
+                Tell us how your organisation works in the waste chain. Waste X
+                will use this to configure your navigation, departments, sites,
+                jobs and compliance tools after approval.
               </p>
             </div>
           </div>
@@ -222,12 +309,73 @@ export default function OrganisationSetupForm() {
             <div className="grid grid-cols-6 gap-6">
               <section className="col-span-6">
                 <h2 className="text-lg font-semibold text-black">
+                  Business Setup
+                </h2>
+
+                <p className="mt-1 text-sm text-black/50">
+                  Choose the setup that best matches how your organisation will
+                  use Waste X. This controls whether your workspace feels simple,
+                  carrier-focused, multi-site or compliance-heavy.
+                </p>
+
+                <input
+                  type="hidden"
+                  name="operatingMode"
+                  value={selectedOperatingMode}
+                />
+
+                <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  {operatingModeOptions.map((item) => {
+                    const selected = selectedOperatingMode === item.value;
+
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => selectOperatingMode(item.value)}
+                        className={`rounded-2xl border p-5 text-left transition ${
+                          selected
+                            ? "border-orange-500 bg-orange-50"
+                            : "border-black/10 bg-[#fbfaf7] hover:border-orange-300"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-black">
+                              {item.label}
+                            </p>
+
+                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-600">
+                              {item.helper}
+                            </p>
+
+                            <p className="mt-3 text-xs leading-relaxed text-black/50">
+                              {item.description}
+                            </p>
+                          </div>
+
+                          <span
+                            className={`mt-1 h-4 w-4 rounded-full border ${
+                              selected
+                                ? "border-orange-500 bg-orange-500"
+                                : "border-black/20 bg-white"
+                            }`}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="col-span-6 mt-4">
+                <h2 className="text-lg font-semibold text-black">
                   Organisation Capabilities
                 </h2>
 
                 <p className="mt-1 text-sm text-black/50">
                   Select all operational roles your organisation performs. This
-                  helps Waste X configure your account correctly after approval.
+                  helps Waste X configure your permissions and workflow access.
                 </p>
 
                 <div className="mt-5 grid gap-4 md:grid-cols-3">
@@ -355,8 +503,9 @@ export default function OrganisationSetupForm() {
               <div className="col-span-6 mt-4 flex items-center justify-between gap-4 border-t border-black/10 pt-6">
                 <p className="max-w-xl text-xs text-black/45">
                   Once submitted, your organisation will be reviewed by the
-                  Waste X platform team. Departments are created automatically
-                  after approval.
+                  Waste X platform team. Your selected setup controls the
+                  workspace mode, and departments plus the default Main Site are
+                  created automatically after approval.
                 </p>
 
                 <button
@@ -443,7 +592,11 @@ function SubmittedState({ organisation }: { organisation: OrganisationData }) {
         </span>
       </div>
 
-      <div className="mt-8 grid gap-4 md:grid-cols-3">
+      <div className="mt-8 grid gap-4 md:grid-cols-4">
+        <Info
+          label="Workspace"
+          value={formatOperatingMode(organisation.operatingMode)}
+        />
         <Info label="Industry" value={organisation.industry} />
         <Info label="Email" value={organisation.emailAddress} />
         <Info label="Telephone" value={organisation.telephone} />
@@ -455,23 +608,29 @@ function SubmittedState({ organisation }: { organisation: OrganisationData }) {
         </p>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          {organisation.capabilities?.map((capability) => (
-            <span
-              key={capability}
-              className="rounded-full border border-black/10 bg-[#fbfaf7] px-3 py-1 text-xs font-medium capitalize text-black/70"
-            >
-              {capability}
+          {organisation.capabilities?.length ? (
+            organisation.capabilities.map((capability) => (
+              <span
+                key={capability}
+                className="rounded-full border border-black/10 bg-[#fbfaf7] px-3 py-1 text-xs font-medium capitalize text-black/70"
+              >
+                {capability}
+              </span>
+            ))
+          ) : (
+            <span className="rounded-full border border-black/10 bg-[#fbfaf7] px-3 py-1 text-xs font-medium text-black/50">
+              No capabilities recorded
             </span>
-          ))}
+          )}
         </div>
       </div>
 
       <div className="mt-8 rounded-2xl border border-black/10 bg-[#fbfaf7] p-5 text-sm text-black/55">
         {isPending &&
-          "Your organisation is waiting for platform approval. Once approved, Waste X will automatically create your default departments and assign the first administrator to Compliance."}
+          "Your organisation is waiting for platform approval. Once approved, Waste X will automatically create your default departments, create your Main Site and assign the first administrator to Compliance."}
 
         {isActive &&
-          "Your organisation is active. You can now invite team members and assign them to departments."}
+          "Your organisation is active. You can now invite team members, manage departments and configure sites."}
 
         {isRejected &&
           "Your organisation request was rejected. Contact Waste X support for next steps."}

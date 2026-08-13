@@ -4,6 +4,7 @@ import {
   notifications,
   supportTickets,
   users,
+  type OrganisationOperatingMode,
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import Image from "next/image";
@@ -11,6 +12,7 @@ import Link from "next/link";
 
 import { getProfileByUserId } from "@/data-access/profiles";
 import SignOutButton from "../SignOutButton";
+import SiteSwitcher from "./SiteSwitcher";
 
 import {
   type Capability,
@@ -18,6 +20,19 @@ import {
   type Permission,
   hasOperationalPermission,
 } from "@/modules/auth/core/permissions";
+
+import {
+  shouldShowActiveDepartmentSwitcher,
+  shouldShowAdvancedCompliance,
+  shouldShowCarrierHub,
+  shouldShowDepartments,
+  shouldShowExternalJobs,
+  shouldShowMarketplace,
+  shouldShowSiteSettings,
+  shouldShowTeamMembers,
+  shouldUseSimplifiedNavigation,
+  type OrganisationCapability,
+} from "@/modules/organisations/core/operatingModes";
 
 /* =========================================================
    TYPES
@@ -37,6 +52,11 @@ type NavSection = {
 type ActiveDepartmentSummary = {
   name: string;
   type: DepartmentType | null;
+} | null;
+
+type OrganisationNavigationContext = {
+  operatingMode?: OrganisationOperatingMode | null;
+  capabilities?: OrganisationCapability[] | null;
 } | null;
 
 /* =========================================================
@@ -248,11 +268,7 @@ function ActiveDepartmentPill({
    NOTIFICATION BUTTON
 ========================================================= */
 
-function NotificationButton({
-  unreadCount,
-}: {
-  unreadCount: number;
-}) {
+function NotificationButton({ unreadCount }: { unreadCount: number }) {
   const notificationLabel =
     unreadCount > 0
       ? `${unreadCount} unread notification${
@@ -286,10 +302,12 @@ function OperationalNav({
   capabilities,
   activeDepartmentType,
   hasOrganisation,
+  organisation,
 }: {
   capabilities: Capability[];
   activeDepartmentType: DepartmentType | null;
   hasOrganisation: boolean;
+  organisation: OrganisationNavigationContext;
 }) {
   function can(permission: Permission) {
     return hasOperationalPermission({
@@ -299,9 +317,18 @@ function OperationalNav({
     });
   }
 
+  const simplifiedNavigation = shouldUseSimplifiedNavigation(organisation);
+
+  const hasCarrierCapability = capabilities.includes("carrier");
+  const hasManagerCapability = capabilities.includes("manager");
+
   /* Listings */
   const canViewListings = can("listing:view");
   const canCreateListings = can("listing:create");
+
+  const canAccessWasteRecords = simplifiedNavigation
+    ? hasOrganisation
+    : canViewListings || canCreateListings;
 
   /* Templates */
   const canViewTemplates = can("template:view");
@@ -311,18 +338,32 @@ function OperationalNav({
   const canViewMarketplace = can("marketplace:view");
   const canBid = can("listing:bid");
 
+  const canAccessMarketplace =
+    !simplifiedNavigation &&
+    shouldShowMarketplace(organisation) &&
+    (canViewMarketplace || canBid);
+
   /* Assignments */
   const canViewAssignments = can("assignment:view");
   const canAssignCarrier = can("assignment:assign_carrier");
 
+  const canAccessAssignments = simplifiedNavigation
+    ? hasOrganisation && (hasCarrierCapability || hasManagerCapability)
+    : canViewAssignments;
+
+  const canAccessExternalJobs =
+    hasOrganisation &&
+    !simplifiedNavigation &&
+    shouldShowExternalJobs(organisation);
+
   /*
-    Carrier Hub is intentionally manager-side for MVP.
-    Generators can still see assigned carriers through listings/assignments,
-    and carriers use their own assignment queue. The hub is for the manager
-    step: accepted job -> choose carrier -> carrier workflow starts.
+    Carrier Hub stays manager-side for MVP.
+    Carrier operations will use /home/operations/jobs.
   */
   const canUseCarrierHub =
     hasOrganisation &&
+    !simplifiedNavigation &&
+    shouldShowCarrierHub(organisation) &&
     activeDepartmentType === "manager" &&
     (canViewAssignments || canAssignCarrier);
 
@@ -342,35 +383,28 @@ function OperationalNav({
     "dwt:update_receive_movement",
   );
 
-  const canViewDwtReferenceData = can(
-    "dwt:reference_data:view",
-  );
+  const canViewDwtReferenceData = can("dwt:reference_data:view");
 
-  const canSyncDwtReferenceData = can(
-    "dwt:reference_data:sync",
-  );
+  const canSyncDwtReferenceData = can("dwt:reference_data:sync");
 
   const canAccessDwtArea =
-    canViewDigitalWasteTracking ||
-    canSubmitDigitalWasteTracking ||
-    canUpdateDigitalWasteTracking ||
-    canViewDwtReferenceData ||
-    canSyncDwtReferenceData;
+    simplifiedNavigation && hasOrganisation
+      ? true
+      : canViewDigitalWasteTracking ||
+        canSubmitDigitalWasteTracking ||
+        canUpdateDigitalWasteTracking ||
+        canViewDwtReferenceData ||
+        canSyncDwtReferenceData;
 
   /* Incidents, compliance and reports */
   const canViewIncidents = can("incident:view");
   const canViewComplianceReports = can("compliance:reports");
   const canViewComplianceAudit = can("compliance:audit");
 
-  /*
-    Reports Centre is wider than the old compliance reports page.
-    It should be available to organisation users who can view operational,
-    compliance, receiving or DWT areas. The reports page itself still performs
-    server-side permission checks before generating anything.
-  */
   const canViewReportsCentre =
     hasOrganisation &&
-    (canViewListings ||
+    (simplifiedNavigation ||
+      canViewListings ||
       canViewAssignments ||
       canViewReceiving ||
       canAccessDwtArea ||
@@ -378,10 +412,75 @@ function OperationalNav({
       canViewComplianceReports ||
       canViewComplianceAudit);
 
+  const canAccessAdvancedCompliance =
+    shouldShowAdvancedCompliance(organisation) && canViewComplianceAudit;
+
   /* Shared workspace */
   const canViewTeam = can("team:view") || hasOrganisation;
 
-  const sections: NavSection[] = [
+  const canAccessTeamMembers =
+    canViewTeam && shouldShowTeamMembers(organisation);
+
+  const canAccessDepartments =
+    hasOrganisation && shouldShowDepartments(organisation);
+
+  const canAccessSiteSettings =
+    hasOrganisation && shouldShowSiteSettings(organisation);
+
+  const simplifiedSections: NavSection[] = [
+    {
+      label: "Overview",
+      items: [
+        {
+          label: "Dashboard",
+          href: "/home",
+          show: true,
+        },
+      ],
+    },
+    {
+      label: "Records",
+      items: [
+        {
+          label: "Waste Records",
+          href: "/home/operations/listings",
+          show: canAccessWasteRecords,
+        },
+        {
+          label: "Active Jobs",
+          href: "/home/operations/assignments/active",
+          show: canAccessAssignments,
+        },
+        {
+          label: "DWT Submissions",
+          href: "/home/receiving/submissions",
+          show: canAccessDwtArea,
+        },
+      ],
+    },
+    {
+      label: "Reports",
+      items: [
+        {
+          label: "Reports Centre",
+          href: "/home/reports",
+          show: canViewReportsCentre,
+        },
+      ],
+    },
+    {
+      label: "Workspace",
+      items: [
+        {
+          label: "Organisation",
+          href: "/home/settings/organisation",
+          show: hasOrganisation,
+        },
+      ],
+    },
+  ];
+
+  const fullSections: NavSection[] = [
     {
       label: "Overview",
       items: [
@@ -398,7 +497,12 @@ function OperationalNav({
         {
           label: "My Listings",
           href: "/home/operations/listings",
-          show: canViewListings || canCreateListings,
+          show: canAccessWasteRecords,
+        },
+        {
+          label: "External Jobs",
+          href: "/home/operations/jobs",
+          show: canAccessExternalJobs,
         },
         {
           label: "Assignments",
@@ -446,12 +550,12 @@ function OperationalNav({
         {
           label: "Browse Listings",
           href: "/home/marketplace/browse",
-          show: canViewMarketplace,
+          show: canAccessMarketplace && canViewMarketplace,
         },
         {
           label: "My Bids",
           href: "/home/marketplace/bids",
-          show: canBid,
+          show: canAccessMarketplace && canBid,
         },
       ],
     },
@@ -476,7 +580,7 @@ function OperationalNav({
         {
           label: "Audit Trail",
           href: "/home/compliance/audit",
-          show: canViewComplianceAudit,
+          show: canAccessAdvancedCompliance,
         },
       ],
     },
@@ -491,21 +595,28 @@ function OperationalNav({
         {
           label: "Team Members",
           href: "/home/team/members",
-          show: canViewTeam,
+          show: canAccessTeamMembers,
         },
         {
           label: "Organisation",
           href: "/home/settings/organisation",
-          show: true,
+          show: hasOrganisation,
+        },
+        {
+          label: "Sites",
+          href: "/home/settings/sites",
+          show: canAccessSiteSettings,
         },
         {
           label: "Departments",
           href: "/home/settings/departments",
-          show: true,
+          show: canAccessDepartments,
         },
       ],
     },
   ];
+
+  const sections = simplifiedNavigation ? simplifiedSections : fullSections;
 
   return (
     <nav className="flex flex-col gap-6">
@@ -517,21 +628,12 @@ function OperationalNav({
         if (visibleItems.length === 0) return null;
 
         return (
-          <section
-            key={section.label}
-            className="space-y-2"
-          >
-            <p className={navSectionLabel}>
-              {section.label}
-            </p>
+          <section key={section.label} className="space-y-2">
+            <p className={navSectionLabel}>{section.label}</p>
 
             <div className="space-y-1">
               {visibleItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={navItem}
-                >
+                <Link key={item.href} href={item.href} className={navItem}>
                   <span className="min-w-0 flex-1 truncate">
                     {item.label}
                   </span>
@@ -571,9 +673,7 @@ function SidebarFooter({
 
           {waitingOnUserCount > 0 && (
             <span className="absolute -right-1.5 -top-1.5 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-[#f7f3ed] bg-red-500 px-1 text-[9px] font-bold text-white">
-              {waitingOnUserCount > 9
-                ? "9+"
-                : waitingOnUserCount}
+              {waitingOnUserCount > 9 ? "9+" : waitingOnUserCount}
             </span>
           )}
         </Link>
@@ -613,9 +713,19 @@ export default async function SystemNav() {
   });
 
   const capabilities =
-    (user?.organisation?.capabilities as
-      | Capability[]
-      | null) ?? [];
+    (user?.organisation?.capabilities as Capability[] | null) ?? [];
+
+  const organisationModeCapabilities =
+    capabilities as unknown as OrganisationCapability[];
+
+  const organisationContext: OrganisationNavigationContext =
+    user?.organisation
+      ? {
+          operatingMode:
+            user.organisation.operatingMode as OrganisationOperatingMode | null,
+          capabilities: organisationModeCapabilities,
+        }
+      : null;
 
   const hasOrganisation = Boolean(
     user?.organisationId && user?.organisation,
@@ -624,17 +734,17 @@ export default async function SystemNav() {
   const activeDepartment = user?.department ?? null;
 
   const activeDepartmentType =
-    (activeDepartment?.type as
-      | DepartmentType
-      | undefined) ?? null;
+    (activeDepartment?.type as DepartmentType | undefined) ?? null;
+
+  const showActiveDepartmentPill =
+    hasOrganisation &&
+    shouldShowActiveDepartmentSwitcher(organisationContext);
 
   /* =========================================================
      PROFILE, NOTIFICATIONS AND SUPPORT COUNTS
   ========================================================= */
 
-  const profilePromise = getProfileByUserId(
-    session.user.id,
-  );
+  const profilePromise = getProfileByUserId(session.user.id);
 
   const unreadNotificationsPromise = database
     .select({
@@ -643,10 +753,7 @@ export default async function SystemNav() {
     .from(notifications)
     .where(
       and(
-        eq(
-          notifications.recipientId,
-          session.user.id,
-        ),
+        eq(notifications.recipientId, session.user.id),
         eq(notifications.isRead, false),
       ),
     );
@@ -654,14 +761,8 @@ export default async function SystemNav() {
   const waitingTicketsPromise = user?.organisationId
     ? database.query.supportTickets.findMany({
         where: and(
-          eq(
-            supportTickets.organisationId,
-            user.organisationId,
-          ),
-          eq(
-            supportTickets.status,
-            "waiting_on_user",
-          ),
+          eq(supportTickets.organisationId, user.organisationId),
+          eq(supportTickets.status, "waiting_on_user"),
         ),
         columns: {
           id: true,
@@ -669,29 +770,19 @@ export default async function SystemNav() {
       })
     : Promise.resolve([]);
 
-  const [
-    profile,
-    unreadNotifications,
-    waitingTickets,
-  ] = await Promise.all([
+  const [profile, unreadNotifications, waitingTickets] = await Promise.all([
     profilePromise,
     unreadNotificationsPromise,
     waitingTicketsPromise,
   ]);
 
-  const fullName =
-    profile?.fullName ??
-    user?.name ??
-    "Unknown User";
+  const fullName = profile?.fullName ?? user?.name ?? "Unknown User";
 
-  const profileImage =
-    profile?.profilePicture ?? null;
+  const profileImage = profile?.profilePicture ?? null;
 
-  const unreadNotificationCount =
-    unreadNotifications.length;
+  const unreadNotificationCount = unreadNotifications.length;
 
-  const waitingOnUserCount =
-    waitingTickets.length;
+  const waitingOnUserCount = waitingTickets.length;
 
   const departmentSummary: ActiveDepartmentSummary =
     activeDepartment
@@ -727,13 +818,18 @@ export default async function SystemNav() {
 
         {/* TOP BAR ACTIONS */}
         <div className="flex items-center gap-2 sm:gap-3">
-          <ActiveDepartmentPill
-            department={departmentSummary}
-          />
+          {hasOrganisation && user?.organisationId && (
+            <SiteSwitcher
+              organisationId={user.organisationId}
+              organisation={organisationContext}
+            />
+          )}
 
-          <NotificationButton
-            unreadCount={unreadNotificationCount}
-          />
+          {showActiveDepartmentPill && (
+            <ActiveDepartmentPill department={departmentSummary} />
+          )}
+
+          <NotificationButton unreadCount={unreadNotificationCount} />
 
           <Link
             href="/home/settings/profile"
@@ -767,19 +863,14 @@ export default async function SystemNav() {
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
             <OperationalNav
               capabilities={capabilities}
-              activeDepartmentType={
-                activeDepartmentType
-              }
+              activeDepartmentType={activeDepartmentType}
               hasOrganisation={hasOrganisation}
+              organisation={organisationContext}
             />
           </div>
 
           {/* ALWAYS-VISIBLE FOOTER ACTIONS */}
-          <SidebarFooter
-            waitingOnUserCount={
-              waitingOnUserCount
-            }
-          />
+          <SidebarFooter waitingOnUserCount={waitingOnUserCount} />
         </div>
       </aside>
     </>
