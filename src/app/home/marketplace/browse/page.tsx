@@ -1,3 +1,6 @@
+
+
+
 import { database } from "@/db/database";
 import { wasteListings } from "@/db/schema";
 import { desc } from "drizzle-orm";
@@ -27,23 +30,42 @@ function formatStatus(status: string | undefined) {
     .join(" ");
 }
 
+function formatDepartmentLabel(value: string | null | undefined) {
+  if (!value) return "Solo Workspace";
+
+  if (value === "generator") return "Waste Generator";
+  if (value === "carrier") return "Waste Carrier";
+  if (value === "manager") return "Waste Manager";
+  if (value === "compliance") return "Compliance";
+
+  return "Operational Workspace";
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
 
-export default async function BrowsePage({ searchParams }: any) {
+type BrowsePageProps = {
+  searchParams?:
+    | Promise<Record<string, string | string[] | undefined>>
+    | Record<string, string | string[] | undefined>;
+};
+
+export default async function BrowsePage({ searchParams }: BrowsePageProps) {
+  const resolvedSearchParams = searchParams
+    ? await searchParams
+    : {};
   /* =========================================================
-     DEPARTMENT PERMISSION GUARD
+     SOLO-AWARE OPERATIONAL PERMISSION GUARD
 
      Marketplace browsing is an operational bidding area.
 
-     This means:
-     - carrier department can access
-     - manager department can access
-     - generator department cannot access
-     - compliance department cannot access
+     Team mode:
+     - still uses active department permissions.
 
-     The organisation must also have the matching capability.
+     Solo mode:
+     - does not require active department switching.
+     - receives an effective manager workflow context for marketplace bidding.
   ========================================================= */
 
   const context = await requireOperationalPermission("listing:bid");
@@ -83,11 +105,11 @@ export default async function BrowsePage({ searchParams }: any) {
      PARAMS
   ========================================================= */
 
-  const status = getParam(searchParams.status);
-  const location = getParam(searchParams.location);
-  const minPrice = getParam(searchParams.minPrice);
-  const maxPrice = getParam(searchParams.maxPrice);
-  const endDate = getParam(searchParams.endDate);
+  const status = getParam(resolvedSearchParams.status);
+  const location = getParam(resolvedSearchParams.location);
+  const minPrice = getParam(resolvedSearchParams.minPrice);
+  const maxPrice = getParam(resolvedSearchParams.maxPrice);
+  const endDate = getParam(resolvedSearchParams.endDate);
 
   /* =========================================================
      FILTERS
@@ -159,6 +181,8 @@ export default async function BrowsePage({ searchParams }: any) {
     (listing: any) => listing.status === "completed",
   ).length;
 
+ const workspaceLabel = context.departmentLabel;
+
   /* =========================================================
      UI
   ========================================================= */
@@ -177,9 +201,9 @@ export default async function BrowsePage({ searchParams }: any) {
               <h1 className="mt-3 text-3xl font-semibold">Browse Listings</h1>
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Discover available waste listings your department is allowed to
-                access. Marketplace access is restricted to departments that can
-                participate in bidding or waste management operations.
+                Discover available waste listings your workspace is allowed to
+                access. Solo operators can browse from a single-operator
+                workflow without switching departments.
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
@@ -194,7 +218,7 @@ export default async function BrowsePage({ searchParams }: any) {
                 )}
 
                 <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-4 py-2 text-xs font-medium text-orange-300">
-                  Department: {context.department.name}
+                  Workspace: {workspaceLabel}
                 </span>
               </div>
             </div>
@@ -235,7 +259,7 @@ export default async function BrowsePage({ searchParams }: any) {
             </h2>
             <p className="mt-2 text-sm text-black/45">
               Showing {filtered.length} listing
-              {filtered.length === 1 ? "" : "s"} available to your department.
+              {filtered.length === 1 ? "" : "s"} available to your workspace.
             </p>
           </div>
         </section>

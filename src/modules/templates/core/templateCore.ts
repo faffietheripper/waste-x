@@ -1,10 +1,16 @@
+import { and, eq } from "drizzle-orm";
+
 import { database } from "@/db/database";
 import {
-  listingTemplates,
-  listingTemplateSections,
   listingTemplateFields,
+  listingTemplateSections,
+  listingTemplates,
 } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import {
+  hasAnyDwtListingProfileValue,
+  normaliseDwtListingProfile,
+  type DwtListingProfile,
+} from "@/modules/digital-waste-tracking/core/dwtListingProfile";
 
 /* =========================================================
    CREATE TEMPLATE
@@ -46,6 +52,61 @@ export async function getOrgTemplatesCore(organisationId: string) {
 }
 
 /* =========================================================
+   DWT PROFILE
+========================================================= */
+
+export async function updateTemplateDwtProfileCore({
+  templateId,
+  organisationId,
+  profile,
+}: {
+  templateId: string;
+  organisationId: string;
+  profile: Partial<DwtListingProfile> | null;
+}) {
+  const template = await database.query.listingTemplates.findFirst({
+    where: and(
+      eq(listingTemplates.id, templateId),
+      eq(listingTemplates.organisationId, organisationId),
+    ),
+  });
+
+  if (!template) {
+    throw new Error("Template not found");
+  }
+
+  if (template.isLocked) {
+    throw new Error("TEMPLATE_LOCKED");
+  }
+
+  const normalisedProfile = normaliseDwtListingProfile(profile);
+  const shouldStoreProfile = hasAnyDwtListingProfileValue(normalisedProfile);
+
+  const [updatedTemplate] = await database
+    .update(listingTemplates)
+    .set({
+      dwtProfileJson: shouldStoreProfile
+        ? JSON.stringify({
+            ...normalisedProfile,
+            templateId,
+            templateVersion: template.version,
+            capturedAt: new Date().toISOString(),
+            capturedFrom: "template_admin_profile",
+          })
+        : null,
+    })
+    .where(
+      and(
+        eq(listingTemplates.id, templateId),
+        eq(listingTemplates.organisationId, organisationId),
+      ),
+    )
+    .returning();
+
+  return updatedTemplate;
+}
+
+/* =========================================================
    SECTION LOGIC
 ========================================================= */
 
@@ -58,7 +119,7 @@ export async function addSectionCore(templateId: string, title: string) {
   const nextOrder =
     existingSections.length === 0
       ? 1
-      : Math.max(...existingSections.map((s) => s.orderIndex)) + 1;
+      : Math.max(...existingSections.map((section) => section.orderIndex)) + 1;
 
   const [section] = await database
     .insert(listingTemplateSections)
@@ -109,7 +170,7 @@ export async function addFieldCore({
   const nextOrder =
     existingFields.length === 0
       ? 1
-      : Math.max(...existingFields.map((f) => f.orderIndex)) + 1;
+      : Math.max(...existingFields.map((field) => field.orderIndex)) + 1;
 
   const [field] = await database
     .insert(listingTemplateFields)
@@ -170,20 +231,20 @@ export async function toggleTemplateLockCore(templateId: string) {
 ========================================================= */
 
 export async function reorderSectionsCore(orderedIds: string[]) {
-  for (let i = 0; i < orderedIds.length; i++) {
+  for (let index = 0; index < orderedIds.length; index++) {
     await database
       .update(listingTemplateSections)
-      .set({ orderIndex: i + 1 })
-      .where(eq(listingTemplateSections.id, orderedIds[i]));
+      .set({ orderIndex: index + 1 })
+      .where(eq(listingTemplateSections.id, orderedIds[index]));
   }
 }
 
 export async function reorderFieldsCore(orderedIds: string[]) {
-  for (let i = 0; i < orderedIds.length; i++) {
+  for (let index = 0; index < orderedIds.length; index++) {
     await database
       .update(listingTemplateFields)
-      .set({ orderIndex: i + 1 })
-      .where(eq(listingTemplateFields.id, orderedIds[i]));
+      .set({ orderIndex: index + 1 })
+      .where(eq(listingTemplateFields.id, orderedIds[index]));
   }
 }
 
@@ -213,6 +274,7 @@ export async function cloneTemplateCore(
       organisationId,
       name: `${original.name} (Clone)`,
       description: original.description,
+      dwtProfileJson: original.dwtProfileJson,
       createdByUserId: userId,
       version: 1,
       isLocked: false,

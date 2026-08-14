@@ -13,7 +13,7 @@ import { redirect } from "next/navigation";
 import {
   type Capability,
   type DepartmentType,
-  hasOperationalPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 import type { DefraValidationResult } from "@/modules/digital-waste-tracking/types/receiveMovement.types";
@@ -275,38 +275,38 @@ export default async function DigitalWasteTrackingDashboardPage() {
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  if (!currentUser.department) {
-    redirect("/home/settings/departments?reason=no-active-department");
-  }
-
   const capabilities =
     (currentUser.organisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentUser.department.type as DepartmentType | undefined) ?? null;
+    (currentUser.department?.type as DepartmentType | undefined) ?? null;
 
-  const canViewDwt = hasOperationalPermission({
+  const canViewDwt = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "dwt:view",
+    operatingMode: currentUser.organisation.operatingMode,
   });
 
-  const canViewCompliance = hasOperationalPermission({
+  const canViewCompliance = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "compliance:view",
+    operatingMode: currentUser.organisation.operatingMode,
   });
 
-  const canViewReferenceData = hasOperationalPermission({
+  const canViewReferenceData = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "dwt:reference_data:view",
+    operatingMode: currentUser.organisation.operatingMode,
   });
 
-  const canSyncReferenceData = hasOperationalPermission({
+  const canSyncReferenceData = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "dwt:reference_data:sync",
+    operatingMode: currentUser.organisation.operatingMode,
   });
 
   if (!canViewDwt && !canViewCompliance) {
@@ -320,7 +320,7 @@ export default async function DigitalWasteTrackingDashboardPage() {
             Access unavailable
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-black/55">
-            Your active department does not currently have permission to view
+            Your current workspace does not currently have permission to view
             the Digital Waste Tracking compliance dashboard.
           </p>
         </section>
@@ -627,7 +627,7 @@ export default async function DigitalWasteTrackingDashboardPage() {
                 Reference data is restricted
               </p>
               <p className="mt-2 text-sm leading-6 text-black/50">
-                Your active department can view the DWT dashboard but does not
+                Your current workspace can view the DWT dashboard but does not
                 have permission to view reference data details.
               </p>
             </div>

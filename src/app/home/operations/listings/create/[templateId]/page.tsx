@@ -59,7 +59,7 @@ export default async function TemplateCreatePage({
 
               <div className="mt-6 flex flex-wrap gap-3">
                 <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
-                  Department: {context.department.name}
+                  Department: {context.departmentLabel}
                 </span>
 
                 <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-4 py-2 text-xs font-medium text-orange-300">

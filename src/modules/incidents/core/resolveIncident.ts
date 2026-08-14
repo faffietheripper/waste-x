@@ -1,9 +1,5 @@
 import { database } from "@/db/database";
-import {
-  incidents,
-  carrierAssignments,
-  wasteListings,
-} from "@/db/schema";
+import { incidents, carrierAssignments, wasteListings } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 
 export async function resolveIncident({
@@ -29,6 +25,9 @@ export async function resolveIncident({
   responsiblePerson: string;
   dateClosed: Date;
 }) {
+  if (!incidentId) throw new Error("INCIDENT_REQUIRED");
+  if (!assignmentId) throw new Error("ASSIGNMENT_REQUIRED");
+
   if (!investigationFindings.trim()) {
     throw new Error("INVESTIGATION_FINDINGS_REQUIRED");
   }
@@ -52,7 +51,8 @@ export async function resolveIncident({
   const [assignment] = await database
     .select()
     .from(carrierAssignments)
-    .where(eq(carrierAssignments.id, assignmentId));
+    .where(eq(carrierAssignments.id, assignmentId))
+    .limit(1);
 
   if (!assignment) {
     throw new Error("ASSIGNMENT_NOT_FOUND");
@@ -67,15 +67,35 @@ export async function resolveIncident({
   }
 
   /*
-    Generator/compliance or assigned manager can resolve an incident.
+    Incident resolution is intentionally broader than incident reporting.
 
-    Carrier reports the incident, but the receiving/generator side should
-    formally close it after review.
+    Allowed to resolve:
+    - generator / original assignment owner
+    - organisation that assigned the job
+    - manager / receiver organisation
+    - carrier organisation only if it is also the same organisation as the manager/generator
+      in solo/internal workflows
+
+    This keeps normal carrier-only reporting separate from formal closure,
+    but allows solo workflows to close their own incidents.
   */
-  const canResolve =
+  const organisationIsGeneratorSide =
     assignment.organisationId === organisationId ||
-    assignment.assignedByOrganisationId === organisationId ||
+    assignment.assignedByOrganisationId === organisationId;
+
+  const organisationIsManagerSide =
     assignment.managerOrganisationId === organisationId;
+
+  const organisationIsSoloOrInternalCarrierSide =
+    assignment.carrierOrganisationId === organisationId &&
+    (assignment.managerOrganisationId === organisationId ||
+      assignment.organisationId === organisationId ||
+      assignment.assignedByOrganisationId === organisationId);
+
+  const canResolve =
+    organisationIsGeneratorSide ||
+    organisationIsManagerSide ||
+    organisationIsSoloOrInternalCarrierSide;
 
   if (!canResolve) {
     throw new Error("UNAUTHORISED_TO_RESOLVE_INCIDENT");
@@ -89,7 +109,8 @@ export async function resolveIncident({
         eq(incidents.id, incidentId),
         eq(incidents.assignmentId, assignmentId),
       ),
-    );
+    )
+    .limit(1);
 
   if (!incident) {
     throw new Error("INCIDENT_NOT_FOUND");
@@ -97,6 +118,10 @@ export async function resolveIncident({
 
   if (incident.status === "resolved") {
     throw new Error("INCIDENT_ALREADY_RESOLVED");
+  }
+
+  if (incident.status === "rejected") {
+    throw new Error("INCIDENT_ALREADY_REJECTED");
   }
 
   const now = new Date();

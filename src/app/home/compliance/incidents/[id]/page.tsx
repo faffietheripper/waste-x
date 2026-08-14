@@ -421,7 +421,7 @@ export default async function IncidentDetailPage({
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <HeaderPill>Department: {context.department.name}</HeaderPill>
+                <HeaderPill>Department: {context.departmentLabel}</HeaderPill>
                 <HeaderPill>Permission: incident:view</HeaderPill>
                 <HeaderPill>
                   Resolve Access: {canResolve ? "Yes" : "No"}

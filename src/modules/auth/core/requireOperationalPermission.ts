@@ -5,13 +5,56 @@ import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
 import {
-  Capability,
-  DepartmentType,
-  Permission,
-  hasOperationalPermission,
+  type Capability,
+  type DepartmentType,
+  type Permission,
+  getEffectiveDepartmentTypeForPermission,
+  hasOperationalPermissionForOrganisation,
 } from "./permissions";
 
-export async function requireOperationalPermission(permission: Permission) {
+type OperationalDepartmentContext = {
+  id: string;
+  name: string;
+  type: DepartmentType;
+  isSyntheticSoloDepartment: boolean;
+};
+
+type OperationalPermissionContext = {
+  user: typeof users.$inferSelect & {
+    organisation: any;
+    department: any;
+  };
+  organisation: any;
+  department: OperationalDepartmentContext;
+  departmentLabel: string;
+  capabilities: Capability[];
+  departmentType: DepartmentType;
+  storedDepartmentType: DepartmentType | null;
+  isSoloOrganisation: boolean;
+};
+
+function getSoloEffectiveCapabilities(capabilities: Capability[]) {
+  const next = new Set<Capability>(capabilities);
+
+  next.add("generator");
+  next.add("carrier");
+  next.add("manager");
+
+  return Array.from(next);
+}
+
+function formatDepartmentName(type: DepartmentType) {
+  if (type === "generator") return "Solo Generator Workspace";
+  if (type === "carrier") return "Solo Carrier Workspace";
+  if (type === "manager") return "Solo Manager Workspace";
+  if (type === "compliance") return "Solo Compliance Workspace";
+
+  return "Solo Workspace";
+}
+
+export async function requireOperationalPermission(
+  permission: Permission,
+): Promise<OperationalPermissionContext> {
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -27,33 +70,68 @@ export async function requireOperationalPermission(permission: Permission) {
   });
 
   if (!user?.organisationId || !user.organisation) {
-    redirect("/home/settings/organisation");
+    redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  if (!user.department) {
-    redirect("/home/settings/departments");
+  const isSoloOrganisation = user.organisation.operatingMode === "solo";
+
+  if (!user.department && !isSoloOrganisation) {
+    redirect("/home/settings/departments?reason=no-active-department");
   }
 
-  const capabilities =
+  const storedCapabilities =
     (user.organisation.capabilities as Capability[] | null) ?? [];
 
-  const departmentType = user.department.type as DepartmentType;
+  const capabilities = isSoloOrganisation
+    ? getSoloEffectiveCapabilities(storedCapabilities)
+    : storedCapabilities;
 
-  const allowed = hasOperationalPermission({
-    capabilities,
-    departmentType,
+  const storedDepartmentType =
+    (user.department?.type as DepartmentType | undefined) ?? null;
+
+  const departmentType = getEffectiveDepartmentTypeForPermission({
+    operatingMode: user.organisation.operatingMode,
+    departmentType: storedDepartmentType,
     permission,
+  });
+
+  if (!departmentType) {
+    redirect("/home/settings/departments?reason=no-active-department");
+  }
+
+  const allowed = hasOperationalPermissionForOrganisation({
+    capabilities: storedCapabilities,
+    departmentType: storedDepartmentType,
+    permission,
+    operatingMode: user.organisation.operatingMode,
   });
 
   if (!allowed) {
     redirect("/home?reason=unauthorised");
   }
 
+  const department: OperationalDepartmentContext = user.department
+    ? {
+        id: user.department.id,
+        name: user.department.name,
+        type: user.department.type as DepartmentType,
+        isSyntheticSoloDepartment: false,
+      }
+    : {
+        id: "solo-workspace",
+        name: formatDepartmentName(departmentType),
+        type: departmentType,
+        isSyntheticSoloDepartment: true,
+      };
+
   return {
     user,
     organisation: user.organisation,
-    department: user.department,
+    department,
+    departmentLabel: department.name,
     capabilities,
     departmentType,
+    storedDepartmentType,
+    isSoloOrganisation,
   };
 }

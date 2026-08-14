@@ -138,7 +138,7 @@ export default async function ComplianceAuditPage({
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <Pill>Department: {context.department.name}</Pill>
+                <Pill>Department: {context.departmentLabel}</Pill>
                 <Pill>Showing: {filteredRows.length}</Pill>
                 <Pill>Permission: compliance:audit</Pill>
               </div>

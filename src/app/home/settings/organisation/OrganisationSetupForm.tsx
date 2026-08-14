@@ -50,11 +50,11 @@ const operatingModeOptions: {
   helper: string;
 }[] = [
   {
-    label: "I run this myself",
+    label: "Single-Operator full workflow",
     value: "solo",
     description:
-      "For a small operator who needs simple waste records, submissions and reports without heavy team setup.",
-    helper: "Simple workspace",
+      "For one-person businesses that may create waste records, manage jobs, collect or move waste, receive waste, submit DWT records and generate reports without team complexity.",
+    helper: "Single-operator full workflow",
   },
   {
     label: "We have a small team",
@@ -95,7 +95,7 @@ const capabilityOptions: {
     label: "Waste Generator",
     value: "generator",
     description:
-      "Your organisation produces waste and needs to assign it for collection or treatment.",
+      "Your organisation produces waste and needs to create records, listings or assignments.",
   },
   {
     label: "Waste Carrier",
@@ -107,7 +107,7 @@ const capabilityOptions: {
     label: "Waste Manager",
     value: "manager",
     description:
-      "Your organisation manages compliance, brokerage, oversight or waste operations.",
+      "Your organisation manages receiving, compliance, brokerage, oversight or waste operations.",
   },
 ];
 
@@ -178,6 +178,11 @@ export default function OrganisationSetupForm() {
   const selectOperatingMode = (value: OperatingMode) => {
     setSelectedOperatingMode(value);
 
+    if (value === "solo") {
+      setCapabilities(["generator", "carrier", "manager"]);
+      return;
+    }
+
     if (value === "carrier_ops") {
       setCapabilities((prev) =>
         prev.includes("carrier") ? prev : [...prev, "carrier"],
@@ -243,6 +248,8 @@ export default function OrganisationSetupForm() {
     profileData.status === "PENDING" ||
     profileData.status === "ACTIVE" ||
     profileData.status === "REJECTED";
+
+  const soloSelected = selectedOperatingMode === "solo";
 
   return (
     <main className="min-h-screen bg-[#f7f3ed]">
@@ -314,8 +321,8 @@ export default function OrganisationSetupForm() {
 
                 <p className="mt-1 text-sm text-black/50">
                   Choose the setup that best matches how your organisation will
-                  use Waste X. This controls whether your workspace feels simple,
-                  carrier-focused, multi-site or compliance-heavy.
+                  use Waste X. Solo mode is a full workflow mode for a
+                  one-person business, not a restricted account.
                 </p>
 
                 <input
@@ -374,9 +381,19 @@ export default function OrganisationSetupForm() {
                 </h2>
 
                 <p className="mt-1 text-sm text-black/50">
-                  Select all operational roles your organisation performs. This
-                  helps Waste X configure your permissions and workflow access.
+                  Select all operational roles your organisation performs. If
+                  you choose solo mode, Waste X defaults this to the full
+                  workflow because one person may act as generator, carrier and
+                  manager.
                 </p>
+
+                {soloSelected && (
+                  <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                    Solo mode selected: generator, carrier and manager
+                    capabilities have been selected so this business can run the
+                    full workflow without team complexity.
+                  </div>
+                )}
 
                 <div className="mt-5 grid gap-4 md:grid-cols-3">
                   {capabilityOptions.map((item) => {

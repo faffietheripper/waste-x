@@ -225,7 +225,7 @@ export default async function ComplianceReportsPage() {
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <Pill>Department: {context.department.name}</Pill>
+                <Pill>Department: {context.departmentLabel}</Pill>
                 <Pill>Assignments: {assignmentRows.length}</Pill>
                 <Pill>Chain Events: {eventRows.length}</Pill>
                 <Pill>Warnings: {complianceWarnings.length}</Pill>

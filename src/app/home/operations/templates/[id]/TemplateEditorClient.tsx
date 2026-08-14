@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-
+import TemplateDwtProfileEditor from "@/components/app/Templates/TemplateDwtProfileEditor";
 import AddSectionModal from "@/components/app/Templates/AddSectionModal";
 import AddFieldModal from "@/components/app/Templates/AddFieldModal";
 import FieldSettingsPanel from "@/components/app/Templates/FieldSettingsPanel";
@@ -64,6 +64,7 @@ type Template = {
   organisationId: string;
   name: string;
   description?: string | null;
+  dwtProfileJson?: string | null;
   version: number;
   isActive: boolean;
   isLocked: boolean;
@@ -576,7 +577,12 @@ export default function TemplateEditorClient({
           </p>
         </section>
       )}
-
+<TemplateDwtProfileEditor
+  templateId={template.id}
+  templateVersion={template.version}
+  initialProfileJson={template.dwtProfileJson ?? null}
+  isLocked={template.isLocked}
+/>
       {/* BUILDER GRID */}
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
         {/* LEFT: SECTIONS */}

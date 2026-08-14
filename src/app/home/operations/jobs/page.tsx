@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
@@ -11,6 +11,8 @@ import {
   sites,
   users,
   wasteListings,
+  wasteReceiptItems,
+  wasteReceipts,
   type OrganisationOperatingMode,
 } from "@/db/schema";
 import {
@@ -20,10 +22,18 @@ import {
 import { resolveSiteFilterForOrganisation } from "@/modules/sites/data-access/resolveSiteFilterForOrganisation";
 
 type PageProps = {
-  searchParams?: {
-    siteId?: string;
-  };
+  searchParams?:
+    | Promise<{
+        siteId?: string;
+        error?: string;
+      }>
+    | {
+        siteId?: string;
+        error?: string;
+      };
 };
+
+type Tone = "muted" | "warning" | "success" | "danger";
 
 type JobRow = {
   id: string;
@@ -53,6 +63,8 @@ type JobRow = {
   listingStatus: string | null;
 };
 
+type ReceiptRow = typeof wasteReceipts.$inferSelect;
+
 function formatDate(value: Date | string | null | undefined) {
   if (!value) return "Not set";
 
@@ -69,11 +81,13 @@ function formatStatus(status: string | null | undefined) {
   const labels: Record<string, string> = {
     pending: "Pending",
     accepted: "Accepted",
-    carrier_pending: "Carrier pending",
     in_progress: "In progress",
     completed: "Completed",
     rejected: "Rejected",
     cancelled: "Cancelled",
+    draft: "Draft",
+    confirmed: "Confirmed",
+    submitted: "Submitted",
   };
 
   return labels[status] ?? status.replaceAll("_", " ");
@@ -95,14 +109,15 @@ function getStatusClass(status: string | null | undefined) {
   return "border-black/10 bg-[#f7f3ed] text-black/50";
 }
 
-function formatJobSource(source: string | null | undefined) {
-  const labels: Record<string, string> = {
-    wastex_marketplace: "Waste X marketplace",
-    external_manual: "External/private job",
-    internal_operation: "Internal operation",
+function getReadinessClass(tone: Tone) {
+  const classes: Record<Tone, string> = {
+    muted: "border-black/10 bg-[#f7f3ed] text-black/50",
+    warning: "border-orange-200 bg-orange-50 text-orange-700",
+    success: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    danger: "border-red-200 bg-red-50 text-red-700",
   };
 
-  return labels[source ?? ""] ?? "Job";
+  return classes[tone];
 }
 
 function isClosedJob(status: string | null | undefined) {
@@ -114,52 +129,110 @@ function isClosedJob(status: string | null | undefined) {
 }
 
 function getJobTitle(job: JobRow) {
-  if (job.jobSource === "external_manual") {
-    return (
-      job.externalCustomerName ||
-      job.externalWasteDescription ||
-      job.externalReference ||
-      "External job"
-    );
-  }
-
-  return job.listingName || "Waste X marketplace job";
+  return (
+    job.externalCustomerName ||
+    job.externalWasteDescription ||
+    job.externalReference ||
+    "External job"
+  );
 }
 
 function getWasteDescription(job: JobRow) {
-  if (job.jobSource === "external_manual") {
-    return job.externalWasteDescription || "No waste description added yet.";
-  }
-
-  return job.listingName || "Marketplace listing";
+  return job.externalWasteDescription || "No waste description added yet.";
 }
 
 function getPickupValue(job: JobRow) {
-  if (job.jobSource === "external_manual") {
-    return (
-      [job.externalPickupAddress, job.externalPickupPostcode]
-        .filter(Boolean)
-        .join(", ") || "Not set"
-    );
-  }
-
-  return job.listingLocation || "Listing location not set";
+  return (
+    [job.externalPickupAddress, job.externalPickupPostcode]
+      .filter(Boolean)
+      .join(", ") || "Not set"
+  );
 }
 
 function getDestinationValue(job: JobRow) {
-  if (job.jobSource === "external_manual") {
-    return (
-      [
-        job.externalDestinationName,
-        job.externalDestinationAddress,
-        job.externalDestinationPostcode,
-      ]
-        .filter(Boolean)
-        .join(", ") || "Not set"
-    );
+  return (
+    [
+      job.externalDestinationName,
+      job.externalDestinationAddress,
+      job.externalDestinationPostcode,
+    ]
+      .filter(Boolean)
+      .join(", ") || "Not set"
+  );
+}
+
+function getDraftReadiness(params: {
+  job: JobRow;
+  receipt: ReceiptRow | undefined;
+  itemCount: number;
+}) {
+  const missing: string[] = [];
+
+  if (!params.receipt) {
+    missing.push("DWT draft receipt");
   }
 
-  return "Handled through Waste X assignment";
+  if (params.receipt) {
+    if (
+      !params.receipt.carrierRegistrationNumber &&
+      !params.receipt.carrierReasonForNoRegistrationNumber
+    ) {
+      missing.push("carrier registration or reason");
+    }
+
+    if (!params.receipt.carrierOrganisationName) {
+      missing.push("carrier name");
+    }
+
+    if (!params.receipt.receiverAuthorisationNumber) {
+      missing.push("receiver permit/authorisation");
+    }
+
+    if (!params.receipt.receiptFullAddress) {
+      missing.push("receipt address");
+    }
+
+    if (!params.receipt.receiptPostcode) {
+      missing.push("receipt postcode");
+    }
+  }
+
+  if (!params.job.externalEwcCode) {
+    missing.push("EWC code");
+  }
+
+  if (params.itemCount === 0) {
+    missing.push("waste item details");
+  }
+
+  if (params.job.status !== "completed") {
+    missing.push("operational completion");
+  }
+
+  if (missing.length === 0) {
+    return {
+      label: "Ready for DWT review",
+      tone: "success" as const,
+      detail: "Draft is complete enough to review in the DWT intake form.",
+      missing,
+    };
+  }
+
+  if (params.receipt && params.itemCount > 0) {
+    return {
+      label: "Draft partially ready",
+      tone: "warning" as const,
+      detail: `${missing.length} item${missing.length === 1 ? "" : "s"} still needed.`,
+      missing,
+    };
+  }
+
+  return {
+    label: "Draft needs info",
+    tone: "muted" as const,
+    detail: `${missing.length} item${missing.length === 1 ? "" : "s"} missing.`,
+    missing,
+  };
 }
 
 export default async function CarrierJobsPage({ searchParams }: PageProps) {
@@ -168,6 +241,8 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
   if (!session?.user?.id) {
     redirect("/login");
   }
+
+  const resolvedSearchParams = searchParams ? await searchParams : {};
 
   const currentUser = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
@@ -205,22 +280,25 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
 
   const siteFilter = await resolveSiteFilterForOrganisation({
     organisationId: currentUser.organisationId,
-    requestedSiteId: searchParams?.siteId,
+    requestedSiteId: resolvedSearchParams?.siteId,
     createDefaultIfMissing: true,
   });
 
+  const orgInvolvementWhere =
+    or(
+      eq(carrierAssignments.organisationId, currentUser.organisationId),
+      eq(carrierAssignments.assignedByOrganisationId, currentUser.organisationId),
+      eq(carrierAssignments.managerOrganisationId, currentUser.organisationId),
+      eq(carrierAssignments.carrierOrganisationId, currentUser.organisationId),
+    ) ?? eq(carrierAssignments.organisationId, currentUser.organisationId);
+
   const jobsWhere = siteFilter.selectedSiteId
     ? and(
-        eq(
-          carrierAssignments.carrierOrganisationId,
-          currentUser.organisationId,
-        ),
+        eq(carrierAssignments.jobSource, "external_manual"),
+        orgInvolvementWhere,
         eq(carrierAssignments.siteId, siteFilter.selectedSiteId),
       )
-    : eq(
-        carrierAssignments.carrierOrganisationId,
-        currentUser.organisationId,
-      );
+    : and(eq(carrierAssignments.jobSource, "external_manual"), orgInvolvementWhere);
 
   const jobs = await database
     .select({
@@ -264,13 +342,63 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
       desc(carrierAssignments.assignedAt),
     );
 
-  const activeJobs = jobs.filter((job) => !isClosedJob(job.status));
+  const assignmentIds = jobs.map((job) => job.id);
 
+  const receipts =
+    assignmentIds.length > 0
+      ? await database.query.wasteReceipts.findMany({
+          where: and(
+            eq(wasteReceipts.organisationId, currentUser.organisationId),
+            inArray(wasteReceipts.assignmentId, assignmentIds),
+          ),
+          orderBy: [desc(wasteReceipts.updatedAt)],
+        })
+      : [];
+
+  const latestReceiptByAssignment = new Map<string, ReceiptRow>();
+
+  for (const receipt of receipts) {
+    if (!latestReceiptByAssignment.has(receipt.assignmentId)) {
+      latestReceiptByAssignment.set(receipt.assignmentId, receipt);
+    }
+  }
+
+  const receiptIds = receipts.map((receipt) => receipt.id);
+
+  const receiptItems =
+    receiptIds.length > 0
+      ? await database.query.wasteReceiptItems.findMany({
+          where: and(
+            eq(wasteReceiptItems.organisationId, currentUser.organisationId),
+            inArray(wasteReceiptItems.receiptId, receiptIds),
+          ),
+        })
+      : [];
+
+  const itemCountByReceipt = new Map<string, number>();
+
+  for (const item of receiptItems) {
+    itemCountByReceipt.set(
+      item.receiptId,
+      (itemCountByReceipt.get(item.receiptId) ?? 0) + 1,
+    );
+  }
+
+  const activeJobs = jobs.filter((job) => !isClosedJob(job.status));
   const completedJobs = jobs.filter((job) => job.status === "completed");
 
-  const externalJobs = jobs.filter(
-    (job) => job.jobSource === "external_manual",
-  );
+  const readyForReview = jobs.filter((job) => {
+    const receipt = latestReceiptByAssignment.get(job.id);
+    const itemCount = receipt ? itemCountByReceipt.get(receipt.id) ?? 0 : 0;
+
+    const readiness = getDraftReadiness({
+      job,
+      receipt,
+      itemCount,
+    });
+
+    return readiness.tone === "success";
+  });
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[calc(13vh+2rem)] text-black">
@@ -279,7 +407,7 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-                Carrier operations
+                External operations
               </p>
 
               <h1 className="mt-2 text-2xl font-semibold text-black">
@@ -287,8 +415,9 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
-                Manage Waste X marketplace jobs and external/private carrier
-                jobs from one operational view.
+                Manage private external jobs only. Each external job can carry a
+                DWT draft receipt so your team can complete missing data later
+                and submit from the receiving intake flow.
               </p>
 
               <p className="mt-3 inline-flex rounded-full border border-black/10 bg-[#f7f3ed] px-4 py-2 text-xs font-semibold text-black/50">
@@ -304,11 +433,22 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
             </Link>
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <Stat label="Total jobs" value={jobs.length} />
-            <Stat label="Active jobs" value={activeJobs.length} />
-            <Stat label="External jobs" value={externalJobs.length} />
+          <div className="mt-6 grid gap-3 sm:grid-cols-4">
+            <Stat label="External jobs" value={jobs.length} />
+            <Stat label="Active" value={activeJobs.length} />
+            <Stat label="Completed" value={completedJobs.length} />
+            <Stat label="DWT review ready" value={readyForReview.length} />
           </div>
+        </section>
+
+        <section className="rounded-3xl border border-orange-200 bg-orange-50 p-5 text-orange-800">
+          <p className="text-sm font-semibold">External job draft system</p>
+
+          <p className="mt-2 text-sm leading-6">
+            Create the job with whatever information you know now. Waste X will
+            keep a DWT draft receipt behind the scenes and show what is missing
+            before the final DEFRA submission.
+          </p>
         </section>
 
         <section className="space-y-5">
@@ -319,7 +459,7 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
               </p>
 
               <h2 className="mt-2 text-xl font-semibold text-black">
-                Current carrier jobs
+                External/private jobs
               </h2>
             </div>
 
@@ -333,6 +473,17 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
           ) : (
             <div className="space-y-4">
               {jobs.map((job) => {
+                const receipt = latestReceiptByAssignment.get(job.id);
+                const itemCount = receipt
+                  ? itemCountByReceipt.get(receipt.id) ?? 0
+                  : 0;
+
+                const readiness = getDraftReadiness({
+                  job,
+                  receipt,
+                  itemCount,
+                });
+
                 const title = getJobTitle(job);
 
                 return (
@@ -355,13 +506,21 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
                             {formatStatus(job.status)}
                           </span>
 
-                          <span className="rounded-full border border-black/10 bg-[#f7f3ed] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/45">
-                            {formatJobSource(job.jobSource)}
+                          <span
+                            className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getReadinessClass(
+                              readiness.tone,
+                            )}`}
+                          >
+                            {readiness.label}
                           </span>
                         </div>
 
                         <p className="mt-2 text-sm leading-6 text-black/55">
                           {getWasteDescription(job)}
+                        </p>
+
+                        <p className="mt-1 text-xs text-black/35">
+                          {readiness.detail}
                         </p>
 
                         <div className="mt-4 grid gap-3 text-sm text-black/55 md:grid-cols-2 xl:grid-cols-4">
@@ -384,6 +543,19 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
                             value={getDestinationValue(job)}
                           />
                         </div>
+
+                        {readiness.missing.length > 0 && (
+                          <div className="mt-4 rounded-2xl border border-black/10 bg-[#f7f3ed] p-4">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-black/35">
+                              Missing before DWT
+                            </p>
+
+                            <p className="mt-2 text-sm leading-6 text-black/55">
+                              {readiness.missing.slice(0, 5).join(", ")}
+                              {readiness.missing.length > 5 ? "…" : ""}
+                            </p>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex shrink-0 flex-col gap-2 lg:items-end">
@@ -399,6 +571,15 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
                         >
                           View job
                         </Link>
+
+                        {job.status === "completed" && (
+                          <Link
+                            href={`/home/receiving/intake/${job.id}`}
+                            className="rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-xs font-semibold text-orange-700 transition hover:border-orange-400"
+                          >
+                            Open DWT intake
+                          </Link>
+                        )}
                       </div>
                     </div>
                   </article>
@@ -431,9 +612,7 @@ function Detail({ label, value }: { label: string; value: string }) {
         {label}
       </p>
 
-      <p className="mt-1 line-clamp-2 font-medium text-black/70">
-        {value}
-      </p>
+      <p className="mt-1 line-clamp-2 font-medium text-black/70">{value}</p>
     </div>
   );
 }
@@ -442,16 +621,16 @@ function EmptyState() {
   return (
     <div className="rounded-[2rem] border border-dashed border-black/15 bg-white p-10 text-center">
       <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-        No jobs yet
+        No external jobs yet
       </p>
 
       <h3 className="mt-2 text-xl font-semibold text-black">
-        Start by adding an external carrier job
+        Start by adding an external job
       </h3>
 
       <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-black/45">
-        This area will show external/private jobs and Waste X marketplace jobs
-        assigned to your carrier operation.
+        External jobs are private jobs created outside the Waste X marketplace.
+        Waste X will create the job and start a DWT draft receipt for later.
       </p>
 
       <Link

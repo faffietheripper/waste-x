@@ -5,7 +5,7 @@ import { eq, inArray, or } from "drizzle-orm";
 import { database } from "@/db/database";
 import { carrierAssignments, incidents } from "@/db/schema";
 import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
-import { hasOperationalPermission } from "@/modules/auth/core/permissions";
+import { hasOperationalPermissionForOrganisation } from "@/modules/auth/core/permissions";
 
 /* =========================================================
    TYPES
@@ -65,19 +65,24 @@ function getStatusClass(status: string | null | undefined) {
    PAGE
 ========================================================= */
 
+type ComplianceIncidentsPageProps = {
+  searchParams?: Promise<{ status?: string }> | { status?: string };
+};
+
 export default async function ComplianceIncidentsPage({
   searchParams,
-}: {
-  searchParams: { status?: string };
-}) {
+}: ComplianceIncidentsPageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+
   const context = await requireOperationalPermission("incident:view");
 
   const organisationId = context.user.organisationId!;
 
-  const canResolveIncidents = hasOperationalPermission({
+  const canResolveIncidents = hasOperationalPermissionForOrganisation({
     capabilities: context.capabilities,
-    departmentType: context.departmentType,
+    departmentType: context.storedDepartmentType ?? context.departmentType,
     permission: "incident:resolve",
+    operatingMode: context.organisation?.operatingMode ?? null,
   });
 
   const assignmentRows = await database.query.carrierAssignments.findMany({
@@ -123,7 +128,7 @@ export default async function ComplianceIncidentsPage({
     orderBy: (rows, { desc }) => [desc(rows.createdAt)],
   });
 
-  const selectedStatus = (searchParams.status || "all") as IncidentStatus;
+  const selectedStatus = (resolvedSearchParams.status || "all") as IncidentStatus;
 
   const filteredIncidents =
     selectedStatus === "all"
@@ -165,7 +170,7 @@ export default async function ComplianceIncidentsPage({
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <Pill>Department: {context.department.name}</Pill>
+                <Pill>Department: {context.departmentLabel}</Pill>
                 <Pill>Unresolved: {unresolvedCount}</Pill>
                 <Pill>
                   Resolve Access: {canResolveIncidents ? "Yes" : "No"}

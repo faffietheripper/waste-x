@@ -19,7 +19,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   type Capability,
   type DepartmentType,
-  hasOperationalPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 import {
@@ -143,11 +143,13 @@ function isUserInvolvedInAssignment(params: {
 function canSubmitReceiveMovement(params: {
   capabilities: Capability[];
   departmentType: DepartmentType | null;
+  operatingMode?: string | null;
 }) {
-  return hasOperationalPermission({
+  return hasOperationalPermissionForOrganisation({
     capabilities: params.capabilities,
     departmentType: params.departmentType,
     permission: "dwt:submit_receive_movement",
+    operatingMode: params.operatingMode,
   });
 }
 
@@ -366,7 +368,10 @@ export async function submitReceiveMovementAction(
     };
   }
 
-  if (!currentUser.department) {
+  const isSoloOrganisation =
+    currentUser.organisation.operatingMode === "solo";
+
+  if (!currentUser.department && !isSoloOrganisation) {
     return {
       success: false,
       message:
@@ -380,12 +385,13 @@ export async function submitReceiveMovementAction(
     (currentUser.organisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentUser.department.type as DepartmentType | undefined) ?? null;
+    (currentUser.department?.type as DepartmentType | undefined) ?? null;
 
   if (
     !canSubmitReceiveMovement({
       capabilities,
       departmentType,
+      operatingMode: currentUser.organisation.operatingMode,
     })
   ) {
     return {
@@ -397,7 +403,7 @@ export async function submitReceiveMovementAction(
           key: "submission.permission",
           errorType: "BusinessRuleViolation",
           message:
-            "Your active department does not have dwt:submit_receive_movement permission.",
+            "Your current workspace does not have dwt:submit_receive_movement permission.",
         },
       ],
     };

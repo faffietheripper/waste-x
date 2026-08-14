@@ -1,24 +1,44 @@
+// src/app/home/receiving/intake/[assignmentId]/page.tsx
+
+import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
+import { and, desc, eq } from "drizzle-orm";
+
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import {
   carrierAssignments,
   users,
+  wasteListings,
+  wasteReceiptItems,
   wasteReceipts,
   wasteTrackingOrganisationSettings,
 } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
-import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
 
 import {
   type Capability,
   type DepartmentType,
-  hasOperationalPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 import { getLatestWasteTrackingSubmissionByAssignment } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingSubmissionByAssignment";
 
+import {
+  getDwtListingProfileReadiness,
+  hasAnyDwtListingProfileValue,
+  safeParseDwtListingProfile,
+  type DwtListingProfile,
+} from "@/modules/digital-waste-tracking/core/dwtListingProfile";
+
 import ReceiveMovementForm from "./ReceiveMovementForm";
+
+import {
+  createDefaultWasteItem,
+  createDisposalRecoveryCode,
+  createHazardousComponent,
+  createPopsComponent,
+  type WasteItemFormState,
+} from "./receiveMovementFormTypes";
 
 /* =========================================================
    HELPERS
@@ -99,6 +119,252 @@ function getBlockReason(params: {
   };
 }
 
+type StoredDisposalOrRecoveryCode = {
+  code?: string | null;
+  weight?: {
+    metric?: "Grams" | "Kilograms" | "Tonnes" | null;
+    amount?: string | number | null;
+    isEstimate?: boolean | null;
+  } | null;
+};
+
+type StoredPopsComponent = {
+  code?: string | null;
+  concentration?: string | number | null;
+};
+
+type StoredHazardousComponent = {
+  name?: string | null;
+  concentration?: string | number | null;
+};
+
+function parseJsonArray<T>(value: string | null | undefined): T[] {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseCodeList(value: string | null | undefined) {
+  const parsed = parseJsonArray<string>(value);
+
+  if (parsed.length > 0) {
+    return parsed.join(", ");
+  }
+
+  return (value ?? "")
+    .split(/[,;\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+function stringifyNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined) return "";
+
+  return String(value);
+}
+
+function buildAddress(parts: Array<string | null | undefined>) {
+  return parts.filter(Boolean).join(", ");
+}
+
+function formatRpsNumbers(value: string | null | undefined) {
+  return parseJsonArray<number>(value).join(", ");
+}
+
+function firstNonEmptyString(
+  ...values: Array<string | null | undefined>
+): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function receiptItemHasMeaningfulDwtData(
+  item: typeof wasteReceiptItems.$inferSelect,
+) {
+  return Boolean(
+    parseCodeList(item.ewcCodes) ||
+      item.wasteDescription?.trim() ||
+      item.typeOfContainers?.trim() ||
+      stringifyNumber(item.weightAmount).trim() ||
+      parseCodeList(item.hazardousHazCodes) ||
+      item.disposalOrRecoveryCodes?.trim() ||
+      item.popsComponents?.trim() ||
+      item.hazardousComponents?.trim(),
+  );
+}
+
+function normalisePhysicalFormForForm(
+  value: DwtListingProfile["physicalForm"],
+): WasteItemFormState["physicalForm"] {
+  const allowed: WasteItemFormState["physicalForm"][] = [
+    "Gas",
+    "Liquid",
+    "Solid",
+    "Powder",
+    "Sludge",
+    "Mixed",
+  ];
+
+  if (allowed.includes(value as WasteItemFormState["physicalForm"])) {
+    return value as WasteItemFormState["physicalForm"];
+  }
+
+  return "Solid";
+}
+
+function normaliseSourceOfComponentsForForm(
+  value: string | null | undefined,
+): WasteItemFormState["popsSourceOfComponents"] {
+  const allowed: WasteItemFormState["popsSourceOfComponents"][] = [
+    "NOT_PROVIDED",
+    "GUIDANCE",
+    "OWN_TESTING",
+  ];
+
+  if (allowed.includes(value as WasteItemFormState["popsSourceOfComponents"])) {
+    return value as WasteItemFormState["popsSourceOfComponents"];
+  }
+
+  return "NOT_PROVIDED";
+}
+
+function mapReceiptItemToFormState(
+  item: typeof wasteReceiptItems.$inferSelect,
+): WasteItemFormState {
+  const disposalOrRecoveryCodes =
+    parseJsonArray<StoredDisposalOrRecoveryCode>(
+      item.disposalOrRecoveryCodes,
+    );
+
+  const popsComponents = parseJsonArray<StoredPopsComponent>(
+    item.popsComponents,
+  );
+
+  const hazardousComponents = parseJsonArray<StoredHazardousComponent>(
+    item.hazardousComponents,
+  );
+
+  return createDefaultWasteItem(item.wasteDescription, {
+    ewcCodes: parseCodeList(item.ewcCodes),
+    wasteDescription: item.wasteDescription,
+    physicalForm: item.physicalForm,
+    numberOfContainers: stringifyNumber(item.numberOfContainers),
+    typeOfContainers: item.typeOfContainers,
+    weightMetric: item.weightMetric,
+    weightAmount: stringifyNumber(item.weightAmount),
+    weightIsEstimate: item.weightIsEstimate,
+
+    containsPops: item.containsPops,
+    popsSourceOfComponents: item.popsSourceOfComponents ?? "NOT_PROVIDED",
+    popsComponents: popsComponents.map((component) =>
+      createPopsComponent({
+        code: component.code ?? "",
+        concentration: stringifyNumber(component.concentration),
+      }),
+    ),
+
+    containsHazardous: item.containsHazardous,
+    hazardousSourceOfComponents:
+      item.hazardousSourceOfComponents ?? "NOT_PROVIDED",
+    hazCodes: parseCodeList(item.hazardousHazCodes),
+    hazardousComponents: hazardousComponents.map((component) =>
+      createHazardousComponent({
+        name: component.name ?? "",
+        concentration: stringifyNumber(component.concentration),
+      }),
+    ),
+
+    disposalOrRecoveryCodes:
+      disposalOrRecoveryCodes.length > 0
+        ? disposalOrRecoveryCodes.map((row) =>
+            createDisposalRecoveryCode({
+              code: row.code ?? "",
+              weightAmount: stringifyNumber(row.weight?.amount),
+              weightMetric: row.weight?.metric ?? item.weightMetric,
+              weightIsEstimate:
+                row.weight?.isEstimate ?? item.weightIsEstimate,
+            }),
+          )
+        : [createDisposalRecoveryCode()],
+  });
+}
+
+function mapListingDwtSnapshotToFormState({
+  profile,
+  listingName,
+}: {
+  profile: DwtListingProfile;
+  listingName: string;
+}): WasteItemFormState {
+  const popsComponents = parseJsonArray<StoredPopsComponent>(
+    profile.popsComponentsJson,
+  );
+
+  const hazardousComponents = parseJsonArray<StoredHazardousComponent>(
+    profile.hazardousComponentsJson,
+  );
+
+  return createDefaultWasteItem(profile.wasteDescription || listingName, {
+    ewcCodes: profile.ewcCodes,
+    wasteDescription: profile.wasteDescription || listingName,
+
+    physicalForm: normalisePhysicalFormForForm(profile.physicalForm),
+
+    numberOfContainers: profile.numberOfContainers,
+    typeOfContainers: profile.typeOfContainers,
+
+    weightMetric: profile.weightMetric,
+    weightAmount: profile.weightAmount,
+    weightIsEstimate: profile.weightIsEstimate,
+
+    containsPops: profile.containsPops === "yes",
+    popsSourceOfComponents: normaliseSourceOfComponentsForForm(
+      profile.popsSourceOfComponents,
+    ),
+    popsComponents: popsComponents.map((component) =>
+      createPopsComponent({
+        code: component.code ?? "",
+        concentration: stringifyNumber(component.concentration),
+      }),
+    ),
+
+    containsHazardous: profile.containsHazardous === "yes",
+    hazardousSourceOfComponents: normaliseSourceOfComponentsForForm(
+      profile.hazardousSourceOfComponents,
+    ),
+    hazCodes: profile.hazardousHazCodes,
+    hazardousComponents: hazardousComponents.map((component) =>
+      createHazardousComponent({
+        name: component.name ?? "",
+        concentration: stringifyNumber(component.concentration),
+      }),
+    ),
+
+    disposalOrRecoveryCodes: profile.disposalOrRecoveryCode
+      ? [
+          createDisposalRecoveryCode({
+            code: profile.disposalOrRecoveryCode,
+            weightAmount: profile.weightAmount,
+            weightMetric: profile.weightMetric,
+            weightIsEstimate: profile.weightIsEstimate,
+          }),
+        ]
+      : [createDisposalRecoveryCode()],
+  });
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -128,26 +394,31 @@ export default async function ReceivingIntakeDetailPage({
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  if (!currentUser.department) {
+  const currentOrganisation = currentUser.organisation;
+  const isSoloOrganisation = currentOrganisation.operatingMode === "solo";
+
+  if (!currentUser.department && !isSoloOrganisation) {
     redirect("/home/settings/departments?reason=no-active-department");
   }
 
   const capabilities =
-    (currentUser.organisation.capabilities as Capability[] | null) ?? [];
+    (currentOrganisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentUser.department.type as DepartmentType | undefined) ?? null;
+    (currentUser.department?.type as DepartmentType | undefined) ?? null;
 
-  const canViewReceiving = hasOperationalPermission({
+  const canViewReceiving = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "receiving:view",
+    operatingMode: currentOrganisation.operatingMode,
   });
 
-  const canSubmitDwt = hasOperationalPermission({
+  const canSubmitDwt = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "dwt:submit_receive_movement",
+    operatingMode: currentOrganisation.operatingMode,
   });
 
   if (!canViewReceiving) {
@@ -185,10 +456,77 @@ export default async function ReceivingIntakeDetailPage({
     listingStatus: assignment.listing?.status ?? null,
   });
 
+  /*
+    Important:
+    Do not only trust assignment.listing.dwtSnapshotJson.
+    Depending on the Drizzle relation/query shape, the listing relation may not
+    expose newly added columns. This direct fallback guarantees the DWT snapshot
+    is loaded from bb_waste_listing.
+  */
+  const [listingDwtSnapshotRecord] = await database
+    .select({
+      dwtSnapshotJson: wasteListings.dwtSnapshotJson,
+    })
+    .from(wasteListings)
+    .where(eq(wasteListings.id, assignment.listingId))
+    .limit(1);
+
+  const listingDwtSnapshotJson =
+    firstNonEmptyString(
+      (assignment.listing as { dwtSnapshotJson?: string | null } | null)
+        ?.dwtSnapshotJson,
+      listingDwtSnapshotRecord?.dwtSnapshotJson,
+    ) || null;
+
+  const listingDwtProfile = safeParseDwtListingProfile(listingDwtSnapshotJson);
+  const hasListingDwtSnapshot = hasAnyDwtListingProfileValue(listingDwtProfile);
+  const listingDwtReadiness =
+    getDwtListingProfileReadiness(listingDwtProfile);
+
   const latestReceipt = await database.query.wasteReceipts.findFirst({
-    where: eq(wasteReceipts.assignmentId, assignment.id),
+    where: and(
+      eq(wasteReceipts.assignmentId, assignment.id),
+      eq(wasteReceipts.organisationId, currentUser.organisationId),
+    ),
     orderBy: [desc(wasteReceipts.updatedAt)],
   });
+
+  const latestReceiptItems = latestReceipt
+    ? await database.query.wasteReceiptItems.findMany({
+        where: and(
+          eq(wasteReceiptItems.receiptId, latestReceipt.id),
+          eq(wasteReceiptItems.organisationId, currentUser.organisationId),
+        ),
+      })
+    : [];
+
+  /*
+    Important:
+    Receipt items should win only when they actually contain useful DWT data.
+    A blank draft item should not override a 9/9 listing/template DWT snapshot.
+  */
+  const meaningfulReceiptItems = latestReceiptItems.filter(
+    receiptItemHasMeaningfulDwtData,
+  );
+
+  const defaultWasteItems =
+    meaningfulReceiptItems.length > 0
+      ? meaningfulReceiptItems.map(mapReceiptItemToFormState)
+      : hasListingDwtSnapshot
+        ? [
+            mapListingDwtSnapshotToFormState({
+              profile: listingDwtProfile,
+              listingName: assignment.listing?.name ?? "Waste movement",
+            }),
+          ]
+        : [];
+
+  const defaultWasteItemSource =
+    meaningfulReceiptItems.length > 0
+      ? "receipt_draft"
+      : hasListingDwtSnapshot
+        ? "listing_snapshot"
+        : "blank";
 
   const receiptConfirmed = isReceiptConfirmed(latestReceipt);
 
@@ -210,14 +548,6 @@ export default async function ReceivingIntakeDetailPage({
       assignmentId: assignment.id,
     });
 
-  /*
-    IMPORTANT:
-    This page is now unlocked by operational completion.
-
-    A separate wasteReceipts row is useful when it exists, but it is not required
-    because the ManagerReceiptPanel completion step already confirms receipt in
-    the operational assignment flow.
-  */
   if (!assignmentComplete) {
     const blockReason = getBlockReason({
       assignmentComplete,
@@ -250,7 +580,6 @@ export default async function ReceivingIntakeDetailPage({
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] pr-10 pt-[17vh] text-black">
-      {/* ================= HEADER ================= */}
       <section className="rounded-[2rem] bg-black p-8 text-white shadow-sm">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -263,8 +592,9 @@ export default async function ReceivingIntakeDetailPage({
             </h1>
 
             <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-              This assignment is complete operationally. You can now submit or
-              update the Digital Waste Tracking receive movement.
+              This assignment is complete operationally. Waste X loads receipt
+              draft data first when it contains real DWT values. Otherwise it
+              falls back to the listing/template DWT snapshot.
             </p>
           </div>
 
@@ -277,20 +607,53 @@ export default async function ReceivingIntakeDetailPage({
         </div>
       </section>
 
-      {/* ================= READY NOTE ================= */}
       <section className="mt-8 rounded-3xl border border-emerald-200 bg-emerald-50 p-6 text-emerald-800">
         <p className="text-sm font-semibold">
-          Ready for Digital Waste Tracking submission
+          Ready for Digital Waste Tracking review
         </p>
 
         <p className="mt-2 text-sm leading-6">
-          This assignment or linked listing has been completed operationally.
-          Waste X can now use the confirmed operational information for the DWT
-          receive movement.
+          Waste X has checked for draft receipt items and the listing DWT
+          snapshot. The form below should be prefilled from the best available
+          source.
         </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <StatusBox
+            label="Form source"
+            value={
+              defaultWasteItemSource === "receipt_draft"
+                ? "Receipt draft"
+                : defaultWasteItemSource === "listing_snapshot"
+                  ? "Listing DWT snapshot"
+                  : "Blank intake form"
+            }
+          />
+
+          <StatusBox
+            label="Draft receipt"
+            value={latestReceipt?.id ?? "No receipt draft yet"}
+          />
+
+          <StatusBox
+            label="Receipt items"
+            value={`${latestReceiptItems.length} total / ${meaningfulReceiptItems.length} usable`}
+          />
+
+          <StatusBox
+            label="Waste items loaded"
+            value={String(defaultWasteItems.length)}
+          />
+        </div>
       </section>
 
-      {/* ================= SUMMARY ================= */}
+      {hasListingDwtSnapshot && (
+        <ListingDwtSnapshotPanel
+          readiness={listingDwtReadiness}
+          source={defaultWasteItemSource}
+        />
+      )}
+
       <section className="mt-8 grid gap-5 lg:grid-cols-3">
         <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
           <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-orange-600">
@@ -344,7 +707,7 @@ export default async function ReceivingIntakeDetailPage({
           </p>
 
           <h2 className="mt-3 text-lg font-semibold text-black">
-            Manager confirmation
+            Draft / confirmation
           </h2>
 
           <div className="mt-5 space-y-3 text-sm text-black/55">
@@ -366,9 +729,30 @@ export default async function ReceivingIntakeDetailPage({
             </p>
 
             <p>
+              <span className="font-medium text-black/70">
+                Receipt waste items:
+              </span>{" "}
+              {latestReceiptItems.length}
+            </p>
+
+            <p>
+              <span className="font-medium text-black/70">
+                Usable receipt items:
+              </span>{" "}
+              {meaningfulReceiptItems.length}
+            </p>
+
+            <p>
+              <span className="font-medium text-black/70">
+                Form waste items:
+              </span>{" "}
+              {defaultWasteItems.length}
+            </p>
+
+            <p>
               <span className="font-medium text-black/70">Receiver org:</span>{" "}
               {assignment.managerOrganisation?.teamName ??
-                currentUser.organisation.teamName ??
+                currentOrganisation.teamName ??
                 "Not recorded"}
             </p>
 
@@ -417,7 +801,6 @@ export default async function ReceivingIntakeDetailPage({
         </div>
       </section>
 
-      {/* ================= BLOCKERS ================= */}
       {unresolvedIncidents.length > 0 && (
         <section className="mt-8 rounded-3xl border border-red-200 bg-red-50 p-6">
           <p className="text-sm font-semibold text-red-800">
@@ -428,6 +811,13 @@ export default async function ReceivingIntakeDetailPage({
             Resolve all open or under-review incidents before submitting this
             receive movement.
           </p>
+
+          <Link
+            href="/home/operations/incidents"
+            className="mt-4 inline-flex rounded-full bg-red-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-600"
+          >
+            Open incidents →
+          </Link>
         </section>
       )}
 
@@ -458,13 +848,12 @@ export default async function ReceivingIntakeDetailPage({
           </p>
 
           <p className="mt-2 text-sm leading-6 text-black/55">
-            Your active department can view this receiving intake, but cannot
+            Your current workspace can view this receiving intake, but cannot
             submit the receive movement.
           </p>
         </section>
       )}
 
-      {/* ================= FORM ================= */}
       <section className="mt-8">
         <ReceiveMovementForm
           assignmentId={assignment.id}
@@ -474,37 +863,172 @@ export default async function ReceivingIntakeDetailPage({
           canSubmit={canSubmit}
           existingWasteTrackingId={latestSubmission?.wasteTrackingId ?? null}
           defaultReceiverApiCode={organisationSettings?.apiCode ?? ""}
+          receiptId={latestReceipt?.id ?? null}
+          defaultMovement={{
+            dateTimeReceived:
+              latestReceipt?.receivedAt?.toISOString() ??
+              assignment.completedAt?.toISOString() ??
+              null,
+            hazardousWasteConsignmentCode:
+              latestReceipt?.hazardousWasteConsignmentCode ?? "",
+            reasonForNoConsignmentCode:
+              latestReceipt?.reasonForNoConsignmentCode ?? "",
+            yourUniqueReference:
+              latestReceipt?.yourUniqueReference ??
+              `WX-${assignment.id.slice(0, 8)}`,
+            specialHandlingRequirements: firstNonEmptyString(
+              latestReceipt?.specialHandlingRequirements,
+              listingDwtProfile.specialHandlingRequirements,
+            ),
+          }}
+          defaultWasteItems={defaultWasteItems}
           defaultCarrier={{
             organisationName:
-              assignment.carrierOrganisation?.teamName ?? "Unknown carrier",
+              latestReceipt?.carrierOrganisationName ??
+              assignment.carrierOrganisation?.teamName ??
+              "Unknown carrier",
             fullAddress:
-              assignment.carrierOrganisation?.streetAddress ??
-              assignment.carrierOrganisation?.city ??
+              latestReceipt?.carrierFullAddress ??
+              buildAddress([
+                assignment.carrierOrganisation?.streetAddress,
+                assignment.carrierOrganisation?.city,
+                assignment.carrierOrganisation?.region,
+                assignment.carrierOrganisation?.country,
+              ]),
+            postcode:
+              latestReceipt?.carrierPostcode ??
+              assignment.carrierOrganisation?.postCode ??
               "",
-            postcode: assignment.carrierOrganisation?.postCode ?? "",
-            emailAddress: assignment.carrierOrganisation?.emailAddress ?? "",
-            phoneNumber: assignment.carrierOrganisation?.telephone ?? "",
+            emailAddress:
+              latestReceipt?.carrierEmailAddress ??
+              assignment.carrierOrganisation?.emailAddress ??
+              "",
+            phoneNumber:
+              latestReceipt?.carrierPhoneNumber ??
+              assignment.carrierOrganisation?.telephone ??
+              "",
+            registrationNumber: latestReceipt?.carrierRegistrationNumber ?? "",
+            reasonForNoRegistrationNumber:
+              latestReceipt?.carrierReasonForNoRegistrationNumber ?? "",
+            meansOfTransport: latestReceipt?.carrierMeansOfTransport ?? "Road",
+            vehicleRegistration: latestReceipt?.carrierVehicleRegistration ?? "",
           }}
           defaultReceiver={{
             siteName:
-              currentUser.organisation.teamName ??
+              latestReceipt?.receiverSiteName ??
+              currentOrganisation.teamName ??
               assignment.managerOrganisation?.teamName ??
               "Receiving site",
-            emailAddress: currentUser.organisation.emailAddress ?? "",
-            phoneNumber: currentUser.organisation.telephone ?? "",
-            fullAddress: [
-              currentUser.organisation.streetAddress,
-              currentUser.organisation.city,
-              currentUser.organisation.region,
-              currentUser.organisation.country,
-            ]
-              .filter(Boolean)
-              .join(", "),
-            postcode: currentUser.organisation.postCode ?? "",
+            emailAddress:
+              latestReceipt?.receiverEmailAddress ??
+              currentOrganisation.emailAddress ??
+              "",
+            phoneNumber:
+              latestReceipt?.receiverPhoneNumber ??
+              currentOrganisation.telephone ??
+              "",
+            fullAddress:
+              latestReceipt?.receiptFullAddress ??
+              buildAddress([
+                currentOrganisation.streetAddress,
+                currentOrganisation.city,
+                currentOrganisation.region,
+                currentOrganisation.country,
+              ]),
+            postcode:
+              latestReceipt?.receiptPostcode ??
+              currentOrganisation.postCode ??
+              "",
+            authorisationNumber:
+              latestReceipt?.receiverAuthorisationNumber ?? "",
+            regulatoryPositionStatements: formatRpsNumbers(
+              latestReceipt?.receiverRegulatoryPositionStatements,
+            ),
           }}
         />
       </section>
     </main>
+  );
+}
+
+/* =========================================================
+   SMALL UI
+========================================================= */
+
+function StatusBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-emerald-200 bg-white/70 p-4 text-sm">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700/70">
+        {label}
+      </p>
+
+      <p className="mt-2 break-all font-semibold text-emerald-900">{value}</p>
+    </div>
+  );
+}
+
+function ListingDwtSnapshotPanel({
+  readiness,
+  source,
+}: {
+  readiness: ReturnType<typeof getDwtListingProfileReadiness>;
+  source: "receipt_draft" | "listing_snapshot" | "blank";
+}) {
+  const isUsed = source === "listing_snapshot";
+
+  return (
+    <section
+      className={`mt-8 rounded-3xl border p-6 shadow-sm ${
+        isUsed
+          ? "border-orange-200 bg-orange-50 text-orange-800"
+          : "border-black/10 bg-white text-black"
+      }`}
+    >
+      <p className="text-xs font-semibold uppercase tracking-[0.25em] text-orange-600">
+        Listing DWT Snapshot
+      </p>
+
+      <h2 className="mt-2 text-xl font-semibold text-black">
+        {isUsed
+          ? "Template/listing prefill has been loaded"
+          : "Template/listing prefill is available"}
+      </h2>
+
+      <p className="mt-2 max-w-4xl text-sm leading-6 text-black/55">
+        {isUsed
+          ? "No meaningful receipt waste item was found, so Waste X has used the listing DWT snapshot to prefill the intake form."
+          : "A meaningful receipt draft already exists, so Waste X is using the receipt draft first. The listing DWT snapshot remains available as supporting context."}
+      </p>
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        <span className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/55">
+          {readiness.label}
+        </span>
+
+        <span className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/55">
+          {readiness.completedFields}/{readiness.totalFields} fields
+        </span>
+      </div>
+
+      {(readiness.missing.length > 0 || readiness.warnings.length > 0) && (
+        <div className="mt-5 rounded-2xl border border-black/10 bg-white/70 p-4 text-sm leading-6">
+          {readiness.missing.length > 0 && (
+            <p className="text-black/55">
+              <span className="font-semibold text-black">Still missing:</span>{" "}
+              {readiness.missing.join(", ")}
+            </p>
+          )}
+
+          {readiness.warnings.length > 0 && (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-orange-800">
+              {readiness.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

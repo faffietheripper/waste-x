@@ -2,15 +2,19 @@
 
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import {
   carrierAssignments,
+  incidents,
   sites,
   users,
-  wasteListings,
+  wasteReceiptItems,
+  wasteReceipts,
+  wasteTrackingOrganisationSettings,
+  wasteTrackingSubmissions,
   type OrganisationOperatingMode,
 } from "@/db/schema";
 import {
@@ -18,50 +22,27 @@ import {
   type OrganisationCapability,
 } from "@/modules/organisations/core/operatingModes";
 
+import AssignmentIncidentModal from "@/components/app/Assignments/AssignmentIncidentModal";
+import { completeExternalCarrierJobAction } from "../actions";
+
 type PageProps = {
-  params: {
-    assignmentId: string;
-  };
-  searchParams?: {
-    success?: string;
-  };
+  params:
+    | Promise<{
+        assignmentId: string;
+      }>
+    | {
+        assignmentId: string;
+      };
+  searchParams?:
+    | Promise<{
+        success?: string;
+      }>
+    | {
+        success?: string;
+      };
 };
 
-type DetailRow = {
-  id: string;
-  listingId: number;
-  siteId: string | null;
-  status: string | null;
-  jobSource: string | null;
-
-  externalCustomerName: string | null;
-  externalCustomerEmail: string | null;
-  externalCustomerPhone: string | null;
-  externalReference: string | null;
-
-  externalPickupAddress: string | null;
-  externalPickupPostcode: string | null;
-
-  externalDestinationName: string | null;
-  externalDestinationAddress: string | null;
-  externalDestinationPostcode: string | null;
-
-  externalWasteDescription: string | null;
-  externalEwcCode: string | null;
-  externalEstimatedWeight: string | null;
-  externalCollectionDate: Date | null;
-  externalNotes: string | null;
-
-  assignedAt: Date | null;
-  respondedAt: Date | null;
-  collectedAt: Date | null;
-  completedAt: Date | null;
-
-  siteName: string | null;
-  listingName: string | null;
-  listingLocation: string | null;
-  listingStatus: string | null;
-};
+type Tone = "muted" | "warning" | "success" | "danger";
 
 function formatDateTime(value: Date | string | null | undefined) {
   if (!value) return "Not set";
@@ -91,87 +72,231 @@ function formatStatus(status: string | null | undefined) {
   const labels: Record<string, string> = {
     pending: "Pending",
     accepted: "Accepted",
-    carrier_pending: "Carrier pending",
     in_progress: "In progress",
     completed: "Completed",
     rejected: "Rejected",
     cancelled: "Cancelled",
+    draft: "Draft",
+    confirmed: "Confirmed",
+    submitted: "Submitted",
+    accepted_with_warnings: "Accepted with warnings",
+    failed: "Failed",
+    open: "Open",
+    under_review: "Under review",
+    resolved: "Resolved",
   };
 
   return labels[status] ?? status.replaceAll("_", " ");
 }
 
 function getStatusClass(status: string | null | undefined) {
-  if (status === "completed") {
+  if (status === "completed" || status === "confirmed" || status === "accepted") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
 
-  if (status === "in_progress" || status === "accepted") {
+  if (status === "in_progress" || status === "draft" || status === "submitted") {
     return "border-orange-200 bg-orange-50 text-orange-700";
   }
 
-  if (status === "rejected" || status === "cancelled") {
+  if (status === "rejected" || status === "cancelled" || status === "failed") {
     return "border-red-200 bg-red-50 text-red-700";
   }
 
   return "border-black/10 bg-[#f7f3ed] text-black/50";
 }
 
-function formatJobSource(source: string | null | undefined) {
-  const labels: Record<string, string> = {
-    wastex_marketplace: "Waste X marketplace",
-    external_manual: "External/private job",
-    internal_operation: "Internal operation",
+function getIncidentStatusClass(status: string | null | undefined) {
+  if (status === "open") {
+    return "border-red-200 bg-red-50 text-red-700";
+  }
+
+  if (status === "under_review") {
+    return "border-orange-200 bg-orange-50 text-orange-700";
+  }
+
+  if (status === "resolved") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  return "border-black/10 bg-[#f7f3ed] text-black/50";
+}
+
+function toneClass(tone: Tone) {
+  const classes: Record<Tone, string> = {
+    muted: "border-black/10 bg-[#f7f3ed] text-black/50",
+    warning: "border-orange-200 bg-orange-50 text-orange-700",
+    success: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    danger: "border-red-200 bg-red-50 text-red-700",
   };
 
-  return labels[source ?? ""] ?? "Job";
+  return classes[tone];
 }
 
-function getJobTitle(job: DetailRow) {
-  if (job.jobSource === "external_manual") {
-    return (
-      job.externalCustomerName ||
-      job.externalWasteDescription ||
-      job.externalReference ||
-      "External job"
-    );
-  }
-
-  return job.listingName || "Waste X marketplace job";
+function getJobTitle(job: typeof carrierAssignments.$inferSelect) {
+  return (
+    job.externalCustomerName ||
+    job.externalWasteDescription ||
+    job.externalReference ||
+    "External job"
+  );
 }
 
-function getPickup(job: DetailRow) {
-  if (job.jobSource === "external_manual") {
-    return (
-      [job.externalPickupAddress, job.externalPickupPostcode]
-        .filter(Boolean)
-        .join(", ") || "Not set"
-    );
-  }
-
-  return job.listingLocation || "Listing location not set";
+function getPickup(job: typeof carrierAssignments.$inferSelect) {
+  return (
+    [job.externalPickupAddress, job.externalPickupPostcode]
+      .filter(Boolean)
+      .join(", ") || "Not set"
+  );
 }
 
-function getDestination(job: DetailRow) {
-  if (job.jobSource === "external_manual") {
-    return (
-      [
-        job.externalDestinationName,
-        job.externalDestinationAddress,
-        job.externalDestinationPostcode,
-      ]
-        .filter(Boolean)
-        .join(", ") || "Not set"
-    );
+function getDestination(job: typeof carrierAssignments.$inferSelect) {
+  return (
+    [
+      job.externalDestinationName,
+      job.externalDestinationAddress,
+      job.externalDestinationPostcode,
+    ]
+      .filter(Boolean)
+      .join(", ") || "Not set"
+  );
+}
+
+function getAddress(parts: Array<string | null | undefined>) {
+  return parts.filter(Boolean).join(", ");
+}
+
+function isUserInvolved(params: {
+  assignment: typeof carrierAssignments.$inferSelect;
+  organisationId: string;
+}) {
+  const { assignment, organisationId } = params;
+
+  return (
+    assignment.organisationId === organisationId ||
+    assignment.assignedByOrganisationId === organisationId ||
+    assignment.managerOrganisationId === organisationId ||
+    assignment.carrierOrganisationId === organisationId
+  );
+}
+
+function isUnresolvedIncidentStatus(status: string | null | undefined) {
+  return status === "open" || status === "under_review";
+}
+
+function getReadiness(params: {
+  job: typeof carrierAssignments.$inferSelect;
+  receipt: typeof wasteReceipts.$inferSelect | null;
+  itemCount: number;
+  unresolvedIncidentCount: number;
+  dwtEnabled: boolean;
+  hasReceiverApiCode: boolean;
+}) {
+  const missing: string[] = [];
+
+  if (params.unresolvedIncidentCount > 0) {
+    missing.push("resolve incidents");
   }
 
-  return "Handled through Waste X assignment";
+  if (!params.dwtEnabled) {
+    missing.push("enable DWT settings");
+  }
+
+  if (!params.hasReceiverApiCode) {
+    missing.push("receiver API code");
+  }
+
+  if (params.job.status !== "completed") {
+    missing.push("complete the external job");
+  }
+
+  if (!params.receipt) {
+    missing.push("draft receipt");
+  }
+
+  if (params.receipt) {
+    if (
+      !params.receipt.carrierRegistrationNumber &&
+      !params.receipt.carrierReasonForNoRegistrationNumber
+    ) {
+      missing.push("carrier registration or reason");
+    }
+
+    if (!params.receipt.carrierOrganisationName) {
+      missing.push("carrier organisation name");
+    }
+
+    if (
+      params.receipt.carrierMeansOfTransport === "Road" &&
+      !params.receipt.carrierVehicleRegistration
+    ) {
+      missing.push("vehicle registration");
+    }
+
+    if (!params.receipt.receiverAuthorisationNumber) {
+      missing.push("receiver permit / authorisation number");
+    }
+
+    if (!params.receipt.receiptFullAddress) {
+      missing.push("receipt address");
+    }
+
+    if (!params.receipt.receiptPostcode) {
+      missing.push("receipt postcode");
+    }
+  }
+
+  if (params.itemCount === 0) {
+    missing.push("at least one waste item");
+  }
+
+  if (missing.length === 0) {
+    return {
+      label: "Ready for DWT review",
+      tone: "success" as const,
+      description:
+        "The job is complete and the DWT draft has enough information to review in receiving intake.",
+      missing,
+    };
+  }
+
+  if (params.unresolvedIncidentCount > 0) {
+    return {
+      label: "Blocked by incident",
+      tone: "danger" as const,
+      description:
+        "This job has an unresolved incident. Resolve it before completing the external job or submitting DWT.",
+      missing,
+    };
+  }
+
+  if (params.receipt && params.itemCount > 0) {
+    return {
+      label: "Draft partially ready",
+      tone: "warning" as const,
+      description: `${missing.length} item${
+        missing.length === 1 ? "" : "s"
+      } still need attention before final submission.`,
+      missing,
+    };
+  }
+
+  return {
+    label: "Draft needs information",
+    tone: "muted" as const,
+    description: `${missing.length} item${
+      missing.length === 1 ? "" : "s"
+    } missing before DWT submission.`,
+    missing,
+  };
 }
 
 export default async function CarrierJobDetailPage({
   params,
   searchParams,
 }: PageProps) {
+  const resolvedParams = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -212,67 +337,109 @@ export default async function CarrierJobDetailPage({
     redirect("/home");
   }
 
-  const [job] = await database
-    .select({
-      id: carrierAssignments.id,
-      listingId: carrierAssignments.listingId,
-      siteId: carrierAssignments.siteId,
-      status: carrierAssignments.status,
-      jobSource: carrierAssignments.jobSource,
+  const job = await database.query.carrierAssignments.findFirst({
+    where: eq(carrierAssignments.id, resolvedParams.assignmentId),
+    with: {
+      listing: true,
+      organisation: true,
+      carrierOrganisation: true,
+      managerOrganisation: true,
+      assignedByOrganisation: true,
+    },
+  });
 
-      externalCustomerName: carrierAssignments.externalCustomerName,
-      externalCustomerEmail: carrierAssignments.externalCustomerEmail,
-      externalCustomerPhone: carrierAssignments.externalCustomerPhone,
-      externalReference: carrierAssignments.externalReference,
-
-      externalPickupAddress: carrierAssignments.externalPickupAddress,
-      externalPickupPostcode: carrierAssignments.externalPickupPostcode,
-
-      externalDestinationName: carrierAssignments.externalDestinationName,
-      externalDestinationAddress: carrierAssignments.externalDestinationAddress,
-      externalDestinationPostcode:
-        carrierAssignments.externalDestinationPostcode,
-
-      externalWasteDescription: carrierAssignments.externalWasteDescription,
-      externalEwcCode: carrierAssignments.externalEwcCode,
-      externalEstimatedWeight:
-        carrierAssignments.externalEstimatedWeight,
-      externalCollectionDate:
-        carrierAssignments.externalCollectionDate,
-      externalNotes: carrierAssignments.externalNotes,
-
-      assignedAt: carrierAssignments.assignedAt,
-      respondedAt: carrierAssignments.respondedAt,
-      collectedAt: carrierAssignments.collectedAt,
-      completedAt: carrierAssignments.completedAt,
-
-      siteName: sites.name,
-
-      listingName: wasteListings.name,
-      listingLocation: wasteListings.location,
-      listingStatus: wasteListings.status,
-    })
-    .from(carrierAssignments)
-    .leftJoin(wasteListings, eq(carrierAssignments.listingId, wasteListings.id))
-    .leftJoin(sites, eq(carrierAssignments.siteId, sites.id))
-    .where(
-      and(
-        eq(carrierAssignments.id, params.assignmentId),
-        eq(
-          carrierAssignments.carrierOrganisationId,
-          currentUser.organisationId,
-        ),
-      ),
-    );
-
-  if (!job) {
+  if (!job || job.jobSource !== "external_manual") {
     notFound();
   }
 
+  if (
+    !isUserInvolved({
+      assignment: job,
+      organisationId: currentUser.organisationId,
+    })
+  ) {
+    notFound();
+  }
+
+  const jobSite = job.siteId
+    ? await database.query.sites.findFirst({
+        where: eq(sites.id, job.siteId),
+      })
+    : null;
+
+  const latestReceipt = await database.query.wasteReceipts.findFirst({
+    where: and(
+      eq(wasteReceipts.assignmentId, job.id),
+      eq(wasteReceipts.organisationId, currentUser.organisationId),
+    ),
+    orderBy: [desc(wasteReceipts.updatedAt)],
+  });
+
+  const receiptItems = latestReceipt
+    ? await database.query.wasteReceiptItems.findMany({
+        where: and(
+          eq(wasteReceiptItems.receiptId, latestReceipt.id),
+          eq(wasteReceiptItems.organisationId, currentUser.organisationId),
+        ),
+      })
+    : [];
+
+  const jobIncidents = await database
+    .select()
+    .from(incidents)
+    .where(eq(incidents.assignmentId, job.id))
+    .orderBy(desc(incidents.incidentDate));
+
+  const unresolvedIncidents = jobIncidents.filter((incident) =>
+    isUnresolvedIncidentStatus(incident.status),
+  );
+
+  const hasUnresolvedIncident = unresolvedIncidents.length > 0;
+  const hasAnyIncident = jobIncidents.length > 0;
+
+  const dwtSettings =
+    await database.query.wasteTrackingOrganisationSettings.findFirst({
+      where: eq(
+        wasteTrackingOrganisationSettings.organisationId,
+        currentUser.organisationId,
+      ),
+    });
+
+  const latestSubmission =
+    await database.query.wasteTrackingSubmissions.findFirst({
+      where: and(
+        eq(wasteTrackingSubmissions.assignmentId, job.id),
+        eq(wasteTrackingSubmissions.organisationId, currentUser.organisationId),
+      ),
+      orderBy: [desc(wasteTrackingSubmissions.createdAt)],
+    });
+
+  const readiness = getReadiness({
+    job,
+    receipt: latestReceipt ?? null,
+    itemCount: receiptItems.length,
+    unresolvedIncidentCount: unresolvedIncidents.length,
+    dwtEnabled: Boolean(dwtSettings?.isEnabled),
+    hasReceiverApiCode: Boolean(dwtSettings?.apiCode),
+  });
+
   const successMessage =
-    searchParams?.success === "created"
-      ? "External job created successfully."
-      : null;
+    resolvedSearchParams?.success === "created"
+      ? "External job and DWT draft created successfully."
+      : resolvedSearchParams?.success === "completed"
+        ? "External job completed. The DWT intake form is now available."
+        : null;
+
+  const jobIsCompleted = job.status === "completed";
+
+  const canReportIncident =
+    !jobIsCompleted &&
+    !hasUnresolvedIncident &&
+    ["accepted", "in_progress"].includes(job.status);
+
+  const canCompleteExternalJob = !jobIsCompleted && !hasUnresolvedIncident;
+
+  const firstUnresolvedIncident = unresolvedIncidents[0] ?? null;
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] pb-10 pl-[22vw] pr-8 pt-[16vh]">
@@ -281,7 +448,7 @@ export default async function CarrierJobDetailPage({
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
-                Carrier job
+                External job
               </p>
 
               <div className="mt-2 flex flex-wrap items-center gap-3">
@@ -297,15 +464,25 @@ export default async function CarrierJobDetailPage({
                   {formatStatus(job.status)}
                 </span>
 
-                <span className="rounded-full border border-black/10 bg-[#f7f3ed] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/45">
-                  {formatJobSource(job.jobSource)}
+                <span
+                  className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${toneClass(
+                    readiness.tone,
+                  )}`}
+                >
+                  {readiness.label}
                 </span>
+
+                {hasUnresolvedIncident && (
+                  <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-red-700">
+                    Completion blocked
+                  </span>
+                )}
               </div>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-black/55">
-                View the operational details for this job. Collection,
-                completion and receipt actions will be connected in the next
-                operational flow step.
+                This is a private external job with a draft DWT receipt attached.
+                Incidents now connect to the normal Waste X incident system and
+                must be resolved before completion.
               </p>
             </div>
 
@@ -325,7 +502,7 @@ export default async function CarrierJobDetailPage({
         </section>
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard label="Site" value={job.siteName ?? "Main Site"} />
+          <SummaryCard label="Site" value={jobSite?.name ?? "Main Site"} />
           <SummaryCard
             label="Collection date"
             value={formatDate(job.externalCollectionDate ?? job.assignedAt)}
@@ -334,6 +511,155 @@ export default async function CarrierJobDetailPage({
           <SummaryCard label="Destination" value={getDestination(job)} />
         </section>
 
+        <section
+          className={`rounded-3xl border p-6 shadow-sm ${toneClass(
+            readiness.tone,
+          )}`}
+        >
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em]">
+                DWT readiness
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-black">
+                {readiness.label}
+              </h2>
+
+              <p className="mt-2 max-w-3xl text-sm leading-6">
+                {readiness.description}
+              </p>
+
+              {readiness.missing.length > 0 && (
+                <ul className="mt-4 list-disc space-y-1 pl-5 text-sm leading-6">
+                  {readiness.missing.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-3">
+              {jobIsCompleted ? (
+                <Link
+                  href={`/home/receiving/intake/${job.id}`}
+                  className="rounded-full bg-black px-5 py-3 text-center text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                >
+                  Open DWT intake →
+                </Link>
+              ) : hasUnresolvedIncident ? (
+                <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+                  <p className="font-semibold">Completion blocked</p>
+
+                  <p className="mt-2 leading-6">
+                    Resolve the open incident before marking this external job
+                    completed.
+                  </p>
+
+                  <Link
+                    href={
+                      firstUnresolvedIncident
+                        ? `/home/operations/incidents/${firstUnresolvedIncident.id}`
+                        : "/home/operations/incidents"
+                    }
+                    className="mt-4 inline-flex rounded-full bg-red-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-600"
+                  >
+                    Resolve incident →
+                  </Link>
+                </div>
+              ) : (
+                <form action={completeExternalCarrierJobAction}>
+                  <input type="hidden" name="assignmentId" value={job.id} />
+
+                  <button
+                    type="submit"
+                    className="w-full rounded-full bg-black px-5 py-3 text-center text-sm font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                  >
+                    Mark job completed
+                  </button>
+                </form>
+              )}
+
+              {canReportIncident && (
+                <AssignmentIncidentModal
+                  assignment={{
+                    assignmentId: job.id,
+                    listingId: job.listingId,
+                    listingName: getJobTitle(job),
+                    assignedAt: job.assignedAt,
+                  }}
+                  hasIncident={hasUnresolvedIncident}
+                />
+              )}
+
+              <Link
+                href={`/home/operations/assignments/${job.id}`}
+                className="rounded-full border border-black/10 bg-white px-5 py-3 text-center text-sm font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600"
+              >
+                View assignment →
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {jobIncidents.length > 0 && (
+          <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
+                  Incidents
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-black">
+                  Linked incident records
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-black/50">
+                  External jobs use the same incident records as normal Waste X
+                  assignments.
+                </p>
+              </div>
+
+              <Link
+                href="/home/operations/incidents"
+                className="rounded-full border border-black/10 bg-[#f7f3ed] px-5 py-3 text-sm font-semibold text-black/55 transition hover:border-orange-300 hover:text-orange-600"
+              >
+                Open incident centre →
+              </Link>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {jobIncidents.map((incident) => (
+                <Link
+                  key={incident.id}
+                  href={`/home/operations/incidents/${incident.id}`}
+                  className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 transition hover:border-orange-300 hover:bg-orange-50"
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-black">
+                        {incident.type}
+                      </p>
+
+                      <p className="mt-1 line-clamp-2 text-sm leading-6 text-black/50">
+                        {incident.summary}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`rounded-full border px-3 py-1 text-xs font-semibold ${getIncidentStatusClass(
+                        incident.status,
+                      )}`}
+                    >
+                      {formatStatus(incident.status)}
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-6">
             <Panel eyebrow="Waste" title="Waste details">
@@ -341,7 +667,7 @@ export default async function CarrierJobDetailPage({
                 label="Description"
                 value={
                   job.externalWasteDescription ||
-                  job.listingName ||
+                  job.listing?.name ||
                   "No waste description added."
                 }
               />
@@ -354,7 +680,7 @@ export default async function CarrierJobDetailPage({
                     : null
                 }
               />
-              <InfoRow label="Listing status" value={job.listingStatus} />
+              <InfoRow label="Receipt item count" value={receiptItems.length} />
             </Panel>
 
             <Panel eyebrow="Movement" title="Pickup and destination">
@@ -365,6 +691,48 @@ export default async function CarrierJobDetailPage({
                 value={formatDate(job.externalCollectionDate)}
               />
               <InfoRow label="Notes" value={job.externalNotes} />
+            </Panel>
+
+            <Panel eyebrow="DWT draft" title="Draft receipt">
+              <InfoRow label="Receipt ID" value={latestReceipt?.id} />
+              <InfoRow
+                label="Receipt status"
+                value={formatStatus(latestReceipt?.status)}
+              />
+              <InfoRow
+                label="Received at"
+                value={formatDateTime(latestReceipt?.receivedAt)}
+              />
+              <InfoRow
+                label="Carrier registration"
+                value={
+                  latestReceipt?.carrierRegistrationNumber ??
+                  latestReceipt?.carrierReasonForNoRegistrationNumber
+                }
+              />
+              <InfoRow
+                label="Carrier name"
+                value={latestReceipt?.carrierOrganisationName}
+              />
+              <InfoRow
+                label="Vehicle registration"
+                value={latestReceipt?.carrierVehicleRegistration}
+              />
+              <InfoRow
+                label="Receiver authorisation"
+                value={latestReceipt?.receiverAuthorisationNumber}
+              />
+              <InfoRow
+                label="Receipt address"
+                value={
+                  latestReceipt
+                    ? getAddress([
+                        latestReceipt.receiptFullAddress,
+                        latestReceipt.receiptPostcode,
+                      ])
+                    : null
+                }
+              />
             </Panel>
           </div>
 
@@ -378,10 +746,7 @@ export default async function CarrierJobDetailPage({
 
             <Panel eyebrow="Timeline" title="Operational timeline">
               <InfoRow label="Assigned" value={formatDateTime(job.assignedAt)} />
-              <InfoRow
-                label="Accepted"
-                value={formatDateTime(job.respondedAt)}
-              />
+              <InfoRow label="Accepted" value={formatDateTime(job.respondedAt)} />
               <InfoRow
                 label="Collected"
                 value={formatDateTime(job.collectedAt)}
@@ -392,20 +757,71 @@ export default async function CarrierJobDetailPage({
               />
             </Panel>
 
-            <div className="rounded-[2rem] border border-black/10 bg-black p-6 text-white shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-400">
-                Next operational step
-              </p>
+            <Panel eyebrow="DWT settings" title="Submission status">
+              <InfoRow
+                label="DWT enabled"
+                value={dwtSettings?.isEnabled ? "Yes" : "No"}
+              />
+              <InfoRow
+                label="Receiver API code"
+                value={dwtSettings?.apiCode ? "Configured" : "Missing"}
+              />
+              <InfoRow
+                label="Environment"
+                value={dwtSettings?.environment ?? "test"}
+              />
+              <InfoRow
+                label="Latest submission"
+                value={formatStatus(latestSubmission?.status)}
+              />
+              <InfoRow
+                label="Waste tracking ID"
+                value={latestSubmission?.wasteTrackingId}
+              />
+            </Panel>
 
-              <h2 className="mt-2 text-lg font-semibold">
-                Collection workflow
-              </h2>
+            {hasUnresolvedIncident && (
+              <div className="rounded-[2rem] border border-red-200 bg-red-50 p-6 text-red-800 shadow-sm">
+                <p className="text-sm font-semibold">
+                  External job blocked by incident
+                </p>
 
-              <p className="mt-2 text-sm leading-6 text-white/60">
-                Next we can add status controls: mark in progress, mark
-                collected, complete job, report incident and generate receipt.
-              </p>
-            </div>
+                <p className="mt-2 text-sm leading-6">
+                  Resolve {unresolvedIncidents.length} unresolved incident
+                  {unresolvedIncidents.length === 1 ? "" : "s"} before job
+                  completion or DWT submission.
+                </p>
+
+                <Link
+                  href={
+                    firstUnresolvedIncident
+                      ? `/home/operations/incidents/${firstUnresolvedIncident.id}`
+                      : "/home/operations/incidents"
+                  }
+                  className="mt-4 inline-flex rounded-full bg-red-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-600"
+                >
+                  Resolve incident →
+                </Link>
+              </div>
+            )}
+
+            {!dwtSettings?.isEnabled && (
+              <div className="rounded-[2rem] border border-orange-200 bg-orange-50 p-6 text-orange-800 shadow-sm">
+                <p className="text-sm font-semibold">DWT settings required</p>
+
+                <p className="mt-2 text-sm leading-6">
+                  Enable Digital Waste Tracking and add the receiver API code in
+                  organisation settings before final submission.
+                </p>
+
+                <Link
+                  href="/home/settings/digital-waste-tracking"
+                  className="mt-4 inline-flex rounded-full bg-orange-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-orange-500"
+                >
+                  Open DWT settings →
+                </Link>
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -463,7 +879,7 @@ function InfoRow({
       </p>
 
       <p className="text-sm leading-6 text-black/65">
-        {value || "Not set"}
+        {value || value === 0 ? value : "Not set"}
       </p>
     </div>
   );

@@ -15,6 +15,10 @@ export type DefaultCarrier = {
   postcode: string;
   emailAddress: string;
   phoneNumber: string;
+  registrationNumber?: string | null;
+  reasonForNoRegistrationNumber?: ReasonForNoRegistrationNumber | "" | null;
+  meansOfTransport?: MeansOfTransport | null;
+  vehicleRegistration?: string | null;
 };
 
 export type DefaultReceiver = {
@@ -23,6 +27,16 @@ export type DefaultReceiver = {
   postcode: string;
   emailAddress: string;
   phoneNumber: string;
+  authorisationNumber?: string | null;
+  regulatoryPositionStatements?: string | null;
+};
+
+export type DefaultMovementDraft = {
+  dateTimeReceived?: string | null;
+  hazardousWasteConsignmentCode?: string | null;
+  reasonForNoConsignmentCode?: ReasonForNoConsignmentCode | "" | null;
+  yourUniqueReference?: string | null;
+  specialHandlingRequirements?: string | null;
 };
 
 export type ReceiveMovementFormProps = {
@@ -35,6 +49,13 @@ export type ReceiveMovementFormProps = {
   defaultReceiverApiCode: string;
   defaultCarrier: DefaultCarrier;
   defaultReceiver: DefaultReceiver;
+
+  /**
+   * Draft data created by External Job + DWT Draft Builder.
+   */
+  receiptId?: string | null;
+  defaultMovement?: DefaultMovementDraft | null;
+  defaultWasteItems?: WasteItemFormState[];
 };
 
 export type FeedbackType = "success" | "warning" | "error" | "info";

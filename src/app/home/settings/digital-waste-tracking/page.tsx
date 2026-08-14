@@ -13,7 +13,7 @@ import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tr
 import {
   type Capability,
   type DepartmentType,
-  hasOperationalPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 import DigitalWasteTrackingSettingsForm from "./DigitalWasteTrackingSettingsForm";
@@ -31,7 +31,7 @@ function canManageDwtSettings(role: string | null | undefined) {
 }
 
 function formatDepartment(type: string | null | undefined) {
-  if (!type) return "No department assigned";
+  if (!type) return "Solo workspace";
 
   if (type === "generator") return "Generator";
   if (type === "carrier") return "Carrier";
@@ -41,11 +41,7 @@ function formatDepartment(type: string | null | undefined) {
   return type;
 }
 
-function StatusBadge({
-  enabled,
-}: {
-  enabled: boolean;
-}) {
+function StatusBadge({ enabled }: { enabled: boolean }) {
   return (
     <span
       className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] ${
@@ -88,17 +84,21 @@ export default async function DigitalWasteTrackingSettingsPage() {
   const departmentType =
     (currentUser.department?.type as DepartmentType | undefined) ?? null;
 
-  const canViewDwt = hasOperationalPermission({
-    capabilities,
-    departmentType,
-    permission: "dwt:view",
-  });
+  const isSoloOrganisation = currentUser.organisation.operatingMode === "solo";
 
-  const canSubmitDwt = hasOperationalPermission({
-    capabilities,
-    departmentType,
-    permission: "dwt:submit_receive_movement",
-  });
+const canViewDwt = hasOperationalPermissionForOrganisation({
+  capabilities,
+  departmentType,
+  permission: "dwt:view",
+  operatingMode: currentUser.organisation.operatingMode,
+});
+
+const canSubmitDwt = hasOperationalPermissionForOrganisation({
+  capabilities,
+  departmentType,
+  permission: "dwt:submit_receive_movement",
+  operatingMode: currentUser.organisation.operatingMode,
+});
 
   const canEdit = canManageDwtSettings(currentUser.role);
 
@@ -182,6 +182,20 @@ export default async function DigitalWasteTrackingSettingsPage() {
         </div>
       </section>
 
+      {/* ================= SOLO NOTICE ================= */}
+      {isSoloOrganisation && (
+        <section className="mt-8 rounded-3xl border border-orange-200 bg-orange-50 p-5 text-orange-800">
+          <p className="text-sm font-semibold">Solo workspace mode</p>
+
+          <p className="mt-2 max-w-4xl text-sm leading-6">
+            This organisation is running in solo mode, so Digital Waste Tracking
+            settings are managed without requiring an active department. Waste X
+            will treat the solo user as the effective compliance/manager
+            operator for DWT workflows.
+          </p>
+        </section>
+      )}
+
       {/* ================= EXPLANATION ================= */}
       <section className="mt-8 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-6">
@@ -235,8 +249,13 @@ export default async function DigitalWasteTrackingSettingsPage() {
               </p>
 
               <p>
+                <span className="font-semibold text-black">Workspace mode:</span>{" "}
+                {currentUser.organisation.operatingMode ?? "team"}
+              </p>
+
+              <p>
                 <span className="font-semibold text-black">Department:</span>{" "}
-                {currentUser.department?.name ?? "No department assigned"} (
+                {currentUser.department?.name ?? "Solo workspace"} (
                 {formatDepartment(currentUser.department?.type)})
               </p>
 
@@ -250,6 +269,15 @@ export default async function DigitalWasteTrackingSettingsPage() {
                   Can submit DWT:
                 </span>{" "}
                 {canSubmitDwt ? "Yes" : "No"}
+              </p>
+
+              <p>
+                <span className="font-semibold text-black">Capabilities:</span>{" "}
+                {capabilities.length > 0
+                  ? capabilities.join(", ")
+                  : isSoloOrganisation
+                    ? "solo effective workflow"
+                    : "none recorded"}
               </p>
             </div>
           </div>

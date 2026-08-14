@@ -19,9 +19,13 @@ import { resolveSiteFilterForOrganisation } from "@/modules/sites/data-access/re
 ========================================================= */
 
 type PageProps = {
-  searchParams?: {
-    siteId?: string;
-  };
+  searchParams?:
+    | Promise<{
+        siteId?: string;
+      }>
+    | {
+        siteId?: string;
+      };
 };
 
 type AssignmentStatus =
@@ -91,7 +95,7 @@ function formatMode(value: string | null | undefined) {
 }
 
 function formatJobSource(value: string | null | undefined) {
-  if (value === "external_manual") return "External Job";
+  if (value === "external_manual") return "External Assignment";
   if (value === "internal_operation") return "Internal Operation";
   if (value === "wastex_marketplace") return "Waste X Marketplace";
 
@@ -135,7 +139,34 @@ function getStatusClass(status: string | null | undefined) {
   }
 }
 
-function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
+/* =========================================================
+   WORKFLOW HELPERS
+========================================================= */
+
+function isGeneratorOnlyHandoff({
+  assignment,
+  orgId,
+  isSoloOrganisation,
+}: {
+  assignment: AssignmentRow;
+  orgId: string;
+  isSoloOrganisation: boolean;
+}) {
+  return (
+    isSoloOrganisation &&
+    (assignment.organisationId === orgId ||
+      assignment.assignedByOrganisationId === orgId) &&
+    assignment.managerOrganisationId !== null &&
+    assignment.managerOrganisationId !== orgId &&
+    assignment.carrierOrganisationId !== orgId
+  );
+}
+
+function getWorkflowMessage(
+  assignment: AssignmentRow,
+  orgId: string,
+  isSoloOrganisation: boolean,
+) {
   const isGenerator =
     assignment.organisationId === orgId ||
     assignment.assignedByOrganisationId === orgId;
@@ -145,6 +176,16 @@ function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
 
   const managerAccepted = Boolean(assignment.managerAcceptedAt);
   const carrierAssigned = Boolean(assignment.carrierOrganisationId);
+
+  if (
+    isGeneratorOnlyHandoff({
+      assignment,
+      orgId,
+      isSoloOrganisation,
+    })
+  ) {
+    return "Generator handoff complete. The assigned manager now owns collection, receipt, DWT intake and completion.";
+  }
 
   if (assignment.status === "completed") {
     return "Workflow completed. Waste receipt and assignment completion have been recorded.";
@@ -171,8 +212,20 @@ function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
   }
 
   if (assignment.status === "accepted") {
+    if (
+      isSoloOrganisation &&
+      isManager &&
+      !assignment.carrierOrganisationId
+    ) {
+      return "Solo manager job accepted. Open the assignment to report an incident or complete the job.";
+    }
+
     if (isCarrier) {
       return "Carrier accepted. Open the assignment to verify collection.";
+    }
+
+    if (isManager) {
+      return "Manager accepted. Open the assignment to continue the workflow.";
     }
 
     return "Carrier accepted. Collection verification is now available.";
@@ -193,11 +246,13 @@ function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
 
     if (managerAccepted && !carrierAssigned) {
       if (isManager) {
-        return "Manager accepted. Assign a carrier organisation next.";
+        return isSoloOrganisation
+          ? "Manager accepted. Open assignment to complete or report incident."
+          : "Manager accepted. Assign a carrier organisation next.";
       }
 
       if (isGenerator) {
-        return "Manager accepted. Waiting for carrier assignment.";
+        return "Generator handoff complete. Waiting for the manager to continue the workflow.";
       }
 
       return "Waiting for carrier assignment.";
@@ -219,6 +274,27 @@ function getWorkflowMessage(assignment: AssignmentRow, orgId: string) {
   return "Assignment is awaiting the next workflow action.";
 }
 
+function getCarrierDisplayName({
+  assignment,
+  orgId,
+  isSoloOrganisation,
+}: {
+  assignment: AssignmentRow;
+  orgId: string;
+  isSoloOrganisation: boolean;
+}) {
+  if (
+    isSoloOrganisation &&
+    assignment.managerOrganisationId === orgId &&
+    !assignment.carrierOrganisationId &&
+    assignment.status === "accepted"
+  ) {
+    return "Solo workspace";
+  }
+
+  return assignment.carrierOrgName ?? "Not assigned";
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -236,11 +312,23 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
     );
   }
 
+  const resolvedSearchParams = searchParams ? await searchParams : {};
   const orgId = session.user.organisationId;
+
+  const currentOrganisation = await database.query.organisations.findFirst({
+    where: eq(organisations.id, orgId),
+    columns: {
+      id: true,
+      operatingMode: true,
+      capabilities: true,
+    },
+  });
+
+  const isSoloOrganisation = currentOrganisation?.operatingMode === "solo";
 
   const siteFilter = await resolveSiteFilterForOrganisation({
     organisationId: orgId,
-    requestedSiteId: searchParams?.siteId,
+    requestedSiteId: resolvedSearchParams?.siteId,
     createDefaultIfMissing: true,
   });
 
@@ -248,13 +336,35 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
   const managerOrg = alias(organisations, "managerOrg");
   const carrierOrg = alias(organisations, "carrierOrg");
 
-  const visibilityWhere =
+  const standardVisibilityWhere =
     or(
       eq(carrierAssignments.organisationId, orgId),
       eq(carrierAssignments.assignedByOrganisationId, orgId),
       eq(carrierAssignments.managerOrganisationId, orgId),
       eq(carrierAssignments.carrierOrganisationId, orgId),
     ) ?? eq(carrierAssignments.organisationId, orgId);
+
+  /*
+    Solo rule:
+    The main Assignments page is responsibility-based.
+
+    For solo users, this page should show:
+    - jobs they are responsible for as manager
+    - jobs they are responsible for as carrier
+    - self-managed jobs where they are manager/carrier
+
+    It should not show generator-only records after the solo user has handed
+    that waste listing to another manager.
+  */
+  const soloActiveResponsibilityWhere =
+    or(
+      eq(carrierAssignments.managerOrganisationId, orgId),
+      eq(carrierAssignments.carrierOrganisationId, orgId),
+    ) ?? eq(carrierAssignments.managerOrganisationId, orgId);
+
+  const visibilityWhere = isSoloOrganisation
+    ? soloActiveResponsibilityWhere
+    : standardVisibilityWhere;
 
   const siteWhere = siteFilter.selectedSiteId
     ? or(
@@ -362,6 +472,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
 
   const carrierNeedsResponse = assignments.filter(
     (assignment) =>
+      !isSoloOrganisation &&
       assignment.status === "pending" &&
       assignment.carrierOrganisationId === orgId &&
       Boolean(assignment.managerAcceptedAt),
@@ -369,6 +480,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
 
   const waitingForCarrierAssignment = assignments.filter(
     (assignment) =>
+      !isSoloOrganisation &&
       assignment.status === "pending" &&
       assignment.managerOrganisationId === orgId &&
       Boolean(assignment.managerAcceptedAt) &&
@@ -402,14 +514,15 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
               </p>
 
               <h1 className="mt-3 text-3xl font-semibold">
-                Assignments Overview
+                {isSoloOrganisation
+                  ? "Active Responsibility"
+                  : "Assignments Overview"}
               </h1>
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Track internal and external assignment operations across the
-                generator, manager, carrier and compliance workflow. Assignments
-                become the operational source of truth once a waste listing is
-                awarded or directly assigned.
+                {isSoloOrganisation
+                  ? "This view shows assignments where your solo workspace is actively responsible as the manager or carrier. Waste records you generated and handed off to another manager are no longer your operational responsibility here."
+                  : "Track internal and external assignment operations across the generator, manager, carrier and compliance workflow. Assignments become the operational source of truth once a waste listing is awarded or directly assigned."}
               </p>
 
               <p className="mt-4 inline-flex rounded-full border border-orange-400/20 bg-orange-500/10 px-4 py-2 text-xs font-semibold text-orange-300">
@@ -447,13 +560,21 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
           <AttentionCard
             title="Carrier Responses"
             value={carrierNeedsResponse.length}
-            detail="Carrier jobs waiting for accept/reject."
+            detail={
+              isSoloOrganisation
+                ? "Skipped for solo manager workflow."
+                : "Carrier jobs waiting for accept/reject."
+            }
           />
 
           <AttentionCard
             title="Carrier Assignment"
             value={waitingForCarrierAssignment.length}
-            detail="Manager accepted jobs needing a carrier."
+            detail={
+              isSoloOrganisation
+                ? "Skipped where solo workspace is responsible."
+                : "Manager accepted jobs needing a carrier."
+            }
           />
 
           <AttentionCard
@@ -467,7 +588,11 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
         <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <AssignmentSection
             title="Active Assignments"
-            description="Accepted or in-progress assignments currently moving through collection, receipt or completion."
+            description={
+              isSoloOrganisation
+                ? "Accepted or in-progress assignments where your solo workspace is responsible as manager or carrier."
+                : "Accepted or in-progress assignments currently moving through collection, receipt or completion."
+            }
             href="/home/operations/assignments/active"
             hrefLabel="Open active view"
           >
@@ -477,6 +602,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
                   key={`${assignment.id}-active`}
                   assignment={assignment}
                   orgId={orgId}
+                  isSoloOrganisation={isSoloOrganisation}
                 />
               ))
             ) : (
@@ -486,7 +612,11 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
 
           <AssignmentSection
             title="Pending Workflow Actions"
-            description="Assignments waiting for manager response, carrier assignment or carrier response."
+            description={
+              isSoloOrganisation
+                ? "Assignments waiting for your manager response."
+                : "Assignments waiting for manager response, carrier assignment or carrier response."
+            }
             href="/home/operations/assignments/active"
             hrefLabel="Review pending"
           >
@@ -496,6 +626,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
                   key={`${assignment.id}-pending`}
                   assignment={assignment}
                   orgId={orgId}
+                  isSoloOrganisation={isSoloOrganisation}
                 />
               ))
             ) : (
@@ -505,7 +636,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
 
           <AssignmentSection
             title="Recently Completed"
-            description="Completed assignments where collection and receipt have been recorded."
+            description="Completed assignments where receipt or completion has been recorded."
             href="/home/operations/assignments/completed"
             hrefLabel="View completed"
           >
@@ -515,6 +646,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
                   key={`${assignment.id}-completed`}
                   assignment={assignment}
                   orgId={orgId}
+                  isSoloOrganisation={isSoloOrganisation}
                 />
               ))
             ) : (
@@ -534,6 +666,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
                   key={`${assignment.id}-incident`}
                   assignment={assignment}
                   orgId={orgId}
+                  isSoloOrganisation={isSoloOrganisation}
                   showIncident
                 />
               ))
@@ -551,12 +684,15 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
               </p>
 
               <h2 className="mt-2 text-xl font-semibold text-black">
-                All Visible Assignments
+                {isSoloOrganisation
+                  ? "Active Responsibility Records"
+                  : "All Visible Assignments"}
               </h2>
 
               <p className="mt-2 max-w-2xl text-sm text-black/45">
-                This list includes assignments where your organisation is the
-                generator-side owner, assigning organisation, manager or carrier.
+                {isSoloOrganisation
+                  ? "This list excludes generator-side records that your solo workspace has already handed off to another manager."
+                  : "This list includes assignments where your organisation is the generator-side owner, assigning organisation, manager or carrier."}
               </p>
             </div>
 
@@ -572,11 +708,18 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
                   key={`${assignment.id}-row`}
                   assignment={assignment}
                   orgId={orgId}
+                  isSoloOrganisation={isSoloOrganisation}
                 />
               ))}
             </div>
           ) : (
-            <Empty text="No assignments found for this site view." />
+            <Empty
+              text={
+                isSoloOrganisation
+                  ? "No active responsibility assignments found for this site view."
+                  : "No assignments found for this site view."
+              }
+            />
           )}
         </section>
       </div>
@@ -621,6 +764,7 @@ function AttentionCard({
       >
         {title}
       </p>
+
       <p
         className={`mt-3 text-3xl font-semibold ${
           danger ? "text-red-700" : "text-black"
@@ -628,6 +772,7 @@ function AttentionCard({
       >
         {value}
       </p>
+
       <p className={`mt-2 text-sm ${danger ? "text-red-600" : "text-black/45"}`}>
         {detail}
       </p>
@@ -672,13 +817,19 @@ function AssignmentSection({
 function AssignmentItem({
   assignment,
   orgId,
+  isSoloOrganisation,
   showIncident = false,
 }: {
   assignment: AssignmentRow;
   orgId: string;
+  isSoloOrganisation: boolean;
   showIncident?: boolean;
 }) {
-  const workflowMessage = getWorkflowMessage(assignment, orgId);
+  const workflowMessage = getWorkflowMessage(
+    assignment,
+    orgId,
+    isSoloOrganisation,
+  );
 
   return (
     <Link
@@ -711,7 +862,11 @@ function AssignmentItem({
         <MiniDetail label="Site" value={assignment.siteName ?? "Not assigned"} />
         <MiniDetail
           label="Carrier"
-          value={assignment.carrierOrgName ?? "Not assigned"}
+          value={getCarrierDisplayName({
+            assignment,
+            orgId,
+            isSoloOrganisation,
+          })}
         />
         <MiniDetail label="Assigned" value={formatDate(assignment.assignedAt)} />
       </div>
@@ -734,11 +889,17 @@ function AssignmentItem({
 function AssignmentRow({
   assignment,
   orgId,
+  isSoloOrganisation,
 }: {
   assignment: AssignmentRow;
   orgId: string;
+  isSoloOrganisation: boolean;
 }) {
-  const workflowMessage = getWorkflowMessage(assignment, orgId);
+  const workflowMessage = getWorkflowMessage(
+    assignment,
+    orgId,
+    isSoloOrganisation,
+  );
 
   return (
     <Link

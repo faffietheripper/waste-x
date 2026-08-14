@@ -17,6 +17,15 @@ import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 import { createDefaultSiteForOrganisation } from "@/modules/sites/data-access/createDefaultSiteForOrganisation";
 
 /* =========================================
+   TYPES
+========================================= */
+
+type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
+type Capability = "generator" | "carrier" | "manager";
+
+const SOLO_CAPABILITIES: Capability[] = ["generator", "carrier", "manager"];
+
+/* =========================================
    GET ALL ORGANISATIONS (WITH SEARCH)
 ========================================= */
 
@@ -112,24 +121,35 @@ async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
     (department) => department.type,
   );
 
-  const defaultDepartments = [
+  const defaultDepartments: {
+    id: string;
+    organisationId: string;
+    name: string;
+    type: DepartmentType;
+  }[] = [
     {
       id: crypto.randomUUID(),
       organisationId: orgId,
       name: "Generator Operations",
-      type: "generator" as const,
+      type: "generator",
+    },
+    {
+      id: crypto.randomUUID(),
+      organisationId: orgId,
+      name: "Waste Manager Operations",
+      type: "manager",
     },
     {
       id: crypto.randomUUID(),
       organisationId: orgId,
       name: "Carrier Operations",
-      type: "carrier" as const,
+      type: "carrier",
     },
     {
       id: crypto.randomUUID(),
       organisationId: orgId,
       name: "Compliance",
-      type: "compliance" as const,
+      type: "compliance",
     },
   ];
 
@@ -146,29 +166,58 @@ async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
     .from(departments)
     .where(eq(departments.organisationId, orgId));
 
+  const generatorDepartment = allDepartments.find(
+    (department) => department.type === "generator",
+  );
+
+  const managerDepartment = allDepartments.find(
+    (department) => department.type === "manager",
+  );
+
+  const carrierDepartment = allDepartments.find(
+    (department) => department.type === "carrier",
+  );
+
   const complianceDepartment = allDepartments.find(
     (department) => department.type === "compliance",
   );
+
+  if (!generatorDepartment) {
+    throw new Error("Failed to create generator department.");
+  }
+
+  if (!managerDepartment) {
+    throw new Error("Failed to create manager department.");
+  }
+
+  if (!carrierDepartment) {
+    throw new Error("Failed to create carrier department.");
+  }
 
   if (!complianceDepartment) {
     throw new Error("Failed to create compliance department.");
   }
 
   return {
+    generatorDepartmentId: generatorDepartment.id,
+    managerDepartmentId: managerDepartment.id,
+    carrierDepartmentId: carrierDepartment.id,
     complianceDepartmentId: complianceDepartment.id,
   };
 }
 
 /* =========================================
-   ASSIGN FIRST ADMIN TO COMPLIANCE
+   ASSIGN FIRST ADMIN TO DEFAULT DEPARTMENT
 ========================================= */
 
-async function assignFirstAdminToComplianceDepartment({
+async function assignFirstAdminToDefaultDepartment({
   orgId,
-  complianceDepartmentId,
+  defaultDepartmentId,
+  forceForSolo,
 }: {
   orgId: string;
-  complianceDepartmentId: string;
+  defaultDepartmentId: string;
+  forceForSolo: boolean;
 }) {
   const firstAdmin = await database.query.users.findFirst({
     where: and(
@@ -179,12 +228,21 @@ async function assignFirstAdminToComplianceDepartment({
 
   if (!firstAdmin) return;
 
-  if (firstAdmin.departmentId) return;
+  /*
+    Team orgs:
+    - do not override existing department.
+
+    Solo orgs:
+    - force first admin into Generator so they can immediately create waste records.
+  */
+  if (firstAdmin.departmentId && !forceForSolo) return;
+
+  if (firstAdmin.departmentId === defaultDepartmentId) return;
 
   await database
     .update(users)
     .set({
-      departmentId: complianceDepartmentId,
+      departmentId: defaultDepartmentId,
     })
     .where(eq(users.id, firstAdmin.id));
 }
@@ -211,20 +269,37 @@ export async function approveOrganisation(formData: FormData) {
     throw new Error("Organisation not found");
   }
 
+  const isSoloOrganisation = organisation.operatingMode === "solo";
+
+  const currentCapabilities =
+    (organisation.capabilities as Capability[] | null) ?? [];
+
+  const approvedCapabilities = isSoloOrganisation
+    ? Array.from(new Set<Capability>([...currentCapabilities, ...SOLO_CAPABILITIES]))
+    : currentCapabilities;
+
   await database
     .update(organisations)
     .set({
       status: "ACTIVE",
       approvedAt: new Date(),
+      capabilities: approvedCapabilities,
     })
     .where(eq(organisations.id, orgId));
 
-  const { complianceDepartmentId } =
-    await ensureDefaultDepartmentsForOrganisation(orgId);
-
-  await assignFirstAdminToComplianceDepartment({
-    orgId,
+  const {
+    generatorDepartmentId,
     complianceDepartmentId,
+  } = await ensureDefaultDepartmentsForOrganisation(orgId);
+
+  const defaultAdminDepartmentId = isSoloOrganisation
+    ? generatorDepartmentId
+    : complianceDepartmentId;
+
+  await assignFirstAdminToDefaultDepartment({
+    orgId,
+    defaultDepartmentId: defaultAdminDepartmentId,
+    forceForSolo: isSoloOrganisation,
   });
 
   /*

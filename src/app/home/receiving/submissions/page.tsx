@@ -8,7 +8,7 @@ import { redirect } from "next/navigation";
 import {
   type Capability,
   type DepartmentType,
-  hasOperationalPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 import type { DefraValidationResult } from "@/modules/digital-waste-tracking/types/receiveMovement.types";
@@ -390,12 +390,8 @@ export default async function ReceivingSubmissionsPage({
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  if (!currentUser.department) {
-    redirect("/home/settings/departments?reason=no-active-department");
-  }
-
   const currentOrganisation = currentUser.organisation;
-  const currentDepartment = currentUser.department;
+  const currentDepartment = currentUser.department ?? null;
   const organisationId = currentUser.organisationId;
 
   const siteFilter = await resolveSiteFilterForOrganisation({
@@ -415,24 +411,27 @@ export default async function ReceivingSubmissionsPage({
     (currentOrganisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentDepartment.type as DepartmentType | undefined) ?? null;
+    (currentDepartment?.type as DepartmentType | undefined) ?? null;
 
-  const canViewReceiving = hasOperationalPermission({
+  const canViewReceiving = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "receiving:view",
+    operatingMode: currentOrganisation.operatingMode,
   });
 
-  const canViewDwt = hasOperationalPermission({
+  const canViewDwt = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "dwt:view",
+    operatingMode: currentOrganisation.operatingMode,
   });
 
-  const canSubmitDwt = hasOperationalPermission({
+  const canSubmitDwt = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "dwt:submit_receive_movement",
+    operatingMode: currentOrganisation.operatingMode,
   });
 
   if (!canViewReceiving && !canViewDwt && !canSubmitDwt) {
@@ -448,7 +447,7 @@ export default async function ReceivingSubmissionsPage({
           </h1>
 
           <p className="mt-4 max-w-2xl text-sm leading-6 text-black/55">
-            Your active department does not currently have permission to view
+            Your current workspace does not currently have permission to view
             Digital Waste Tracking submissions.
           </p>
         </section>

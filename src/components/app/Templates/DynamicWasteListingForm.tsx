@@ -1,8 +1,14 @@
-// src/components/app/Listings/DynamicWasteListingForm.tsx
+// src/components/app/Templates/DynamicWasteListingForm.tsx
 
 "use client";
 
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
 
 import { createListingAction } from "@/modules/listings/actions/createListingAction";
@@ -10,6 +16,17 @@ import { createUploadUrlAction } from "@/modules/shared/actions/createUploadUrls
 import { DatePickerDemo } from "@/components/DatePicker";
 import { Input } from "@/components/ui/input";
 import { useAction } from "@/lib/actions/useAction";
+import {
+  createBlankDwtListingProfile,
+  formatDwtHazardAnswer,
+  getDwtListingProfileReadiness,
+  normaliseDwtListingProfile,
+  safeParseDwtListingProfile,
+  type DwtHazardAnswer,
+  type DwtListingProfile,
+  type DwtPhysicalForm,
+  type DwtWeightMetric,
+} from "@/modules/digital-waste-tracking/core/dwtListingProfile";
 
 /* =========================================================
    TYPES
@@ -35,6 +52,9 @@ interface TemplateSection {
 
 interface Template {
   id: string;
+  name?: string;
+  version?: number;
+  dwtProfileJson?: string | null;
   sections: TemplateSection[];
 }
 
@@ -85,9 +105,7 @@ function parseOptions(optionsJson: string | null | undefined) {
 
     if (!Array.isArray(parsed)) return [];
 
-    return parsed
-      .map((option) => String(option).trim())
-      .filter(Boolean);
+    return parsed.map((option) => String(option).trim()).filter(Boolean);
   } catch {
     return [];
   }
@@ -153,6 +171,20 @@ function getFieldTypeLabel(type: TemplateFieldType) {
   }
 }
 
+function createDwtSnapshot(params: {
+  profile: DwtListingProfile;
+  templateId: string;
+  templateVersion?: number;
+}) {
+  return normaliseDwtListingProfile({
+    ...params.profile,
+    templateId: params.templateId,
+    templateVersion: params.templateVersion ?? 1,
+    capturedAt: new Date().toISOString(),
+    capturedFrom: "listing_create_form",
+  });
+}
+
 /* =========================================================
    COMPONENT
 ========================================================= */
@@ -164,6 +196,10 @@ export default function DynamicWasteListingForm({
 }) {
   const router = useRouter();
   const run = useAction();
+
+  const initialDwtProfile = useMemo(() => {
+    return safeParseDwtListingProfile(template.dwtProfileJson);
+  }, [template.dwtProfileJson]);
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
 
@@ -184,6 +220,22 @@ export default function DynamicWasteListingForm({
   const [allowedCarrierIds, setAllowedCarrierIds] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+
+  const [dwtProfile, setDwtProfile] =
+    useState<DwtListingProfile>(initialDwtProfile);
+
+  const dwtReadiness = useMemo(() => {
+    return getDwtListingProfileReadiness(dwtProfile);
+  }, [dwtProfile]);
+
+  function updateDwtProfile(updates: Partial<DwtListingProfile>) {
+    setDwtProfile((previous) =>
+      normaliseDwtListingProfile({
+        ...previous,
+        ...updates,
+      }),
+    );
+  }
 
   function handleChange(key: string, value: unknown) {
     setFormValues((previousValues) => ({
@@ -228,10 +280,6 @@ export default function DynamicWasteListingForm({
     );
   }
 
-  /* =========================================================
-     VALIDATION
-  ========================================================= */
-
   function validate(): string | null {
     if (!projectName.trim()) {
       return "Project name is required.";
@@ -270,10 +318,6 @@ export default function DynamicWasteListingForm({
     return null;
   }
 
-  /* =========================================================
-     RESET
-  ========================================================= */
-
   function resetForm() {
     setFormValues({});
     setProjectName("");
@@ -287,11 +331,8 @@ export default function DynamicWasteListingForm({
     setMarketMode("open_market");
     setAllowedCarrierIds("");
     setListingType("waste_collection");
+    setDwtProfile(initialDwtProfile);
   }
-
-  /* =========================================================
-     SUBMIT
-  ========================================================= */
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -359,6 +400,11 @@ export default function DynamicWasteListingForm({
         createListingAction({
           templateId: template.id,
           templateData: formValues,
+          dwtSnapshot: createDwtSnapshot({
+            profile: dwtProfile,
+            templateId: template.id,
+            templateVersion: template.version,
+          }),
 
           name: projectName,
           location,
@@ -383,7 +429,7 @@ export default function DynamicWasteListingForm({
 
       const createdListingId = getCreatedListingId(result);
 
-      alert("✅ Listing created successfully");
+      alert(getActionMessage(result, "✅ Listing created successfully"));
 
       resetForm();
 
@@ -406,14 +452,8 @@ export default function DynamicWasteListingForm({
     }
   }
 
-  /* =========================================================
-     UI
-  ========================================================= */
-
   return (
     <form onSubmit={handleSubmit} className="max-w-5xl space-y-8">
-      {/* ================= TEMPLATE FIELDS ================= */}
-
       {template.sections.map((section) => (
         <section
           key={section.id}
@@ -451,8 +491,6 @@ export default function DynamicWasteListingForm({
           )}
         </section>
       ))}
-
-      {/* ================= BEHAVIOUR ================= */}
 
       <section className="rounded-[1.75rem] border border-black/10 bg-white p-6 shadow-sm">
         <div className="border-b border-black/10 pb-5">
@@ -531,8 +569,6 @@ export default function DynamicWasteListingForm({
         </div>
       </section>
 
-      {/* ================= PROJECT ================= */}
-
       <section className="rounded-[1.75rem] border border-black/10 bg-white p-6 shadow-sm">
         <div className="border-b border-black/10 pb-5">
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">
@@ -596,7 +632,13 @@ export default function DynamicWasteListingForm({
         </div>
       </section>
 
-      {/* ================= SUBMIT ================= */}
+      <DwtPrefillSection
+        dwtProfile={dwtProfile}
+        dwtReadiness={dwtReadiness}
+        onChange={updateDwtProfile}
+        onClear={() => setDwtProfile(createBlankDwtListingProfile())}
+        onResetToTemplate={() => setDwtProfile(initialDwtProfile)}
+      />
 
       <section className="sticky bottom-4 z-20 rounded-[1.75rem] border border-black/10 bg-black p-5 shadow-2xl">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -604,7 +646,8 @@ export default function DynamicWasteListingForm({
             <p className="text-sm font-semibold text-white">Create listing</p>
 
             <p className="mt-1 text-sm leading-6 text-white/45">
-              This will create the listing using the selected template structure.
+              This creates the listing and saves an optional DWT prefill
+              snapshot. Missing DWT fields can still be completed later.
             </p>
           </div>
 
@@ -618,6 +661,293 @@ export default function DynamicWasteListingForm({
         </div>
       </section>
     </form>
+  );
+}
+
+/* =========================================================
+   DWT SECTION
+========================================================= */
+
+function DwtPrefillSection({
+  dwtProfile,
+  dwtReadiness,
+  onChange,
+  onClear,
+  onResetToTemplate,
+}: {
+  dwtProfile: DwtListingProfile;
+  dwtReadiness: ReturnType<typeof getDwtListingProfileReadiness>;
+  onChange: (updates: Partial<DwtListingProfile>) => void;
+  onClear: () => void;
+  onResetToTemplate: () => void;
+}) {
+  const badgeClass =
+    dwtReadiness.tone === "success"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : dwtReadiness.tone === "warning"
+        ? "border-orange-200 bg-orange-50 text-orange-700"
+        : "border-black/10 bg-[#fbfaf7] text-black/50";
+
+  return (
+    <section className="rounded-[1.75rem] border border-orange-200 bg-orange-50/60 p-6 shadow-sm">
+      <div className="flex flex-col gap-4 border-b border-orange-200 pb-5 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-700">
+            Waste & DWT Prefill
+          </p>
+
+          <h3 className="mt-2 text-xl font-semibold text-black">
+            Compliance-mapped waste details
+          </h3>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-orange-900/65">
+            Optional. Add whatever is known now so the manager or receiver gets
+            a cleaner Digital Waste Tracking draft later.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <span
+            className={`rounded-full border px-4 py-2 text-xs font-semibold ${badgeClass}`}
+          >
+            {dwtReadiness.label}
+          </span>
+
+          <button
+            type="button"
+            onClick={onResetToTemplate}
+            className="rounded-full border border-orange-200 bg-white px-4 py-2 text-xs font-semibold text-orange-700 transition hover:border-orange-400"
+          >
+            Reset to template
+          </button>
+
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/45 transition hover:border-red-300 hover:text-red-600"
+          >
+            Clear DWT fields
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-5 md:grid-cols-2">
+        <FieldShell
+          label="EWC code(s)"
+          helper="Example: 17 09 04. Separate multiple codes with commas."
+        >
+          <input
+            className={inputClass}
+            value={dwtProfile.ewcCodes}
+            onChange={(event) => onChange({ ewcCodes: event.target.value })}
+            placeholder="17 09 04"
+          />
+        </FieldShell>
+
+        <FieldShell label="Physical form">
+          <select
+            className={inputClass}
+            value={dwtProfile.physicalForm}
+            onChange={(event) =>
+              onChange({
+                physicalForm: event.target.value as DwtPhysicalForm,
+              })
+            }
+          >
+            <option value="">Choose if known</option>
+            <option value="Solid">Solid</option>
+            <option value="Mixed">Mixed</option>
+            <option value="Liquid">Liquid</option>
+            <option value="Sludge">Sludge</option>
+            <option value="Powder">Powder</option>
+            <option value="Gas">Gas</option>
+          </select>
+        </FieldShell>
+
+        <div className="md:col-span-2">
+          <FieldShell
+            label="DWT waste description"
+            helper="This can be more compliance-focused than the public project name."
+          >
+            <textarea
+              className={`${inputClass} min-h-24`}
+              value={dwtProfile.wasteDescription}
+              onChange={(event) =>
+                onChange({ wasteDescription: event.target.value })
+              }
+              placeholder="Describe the waste for Digital Waste Tracking."
+            />
+          </FieldShell>
+        </div>
+
+        <FieldShell label="Container type">
+          <input
+            className={inputClass}
+            value={dwtProfile.typeOfContainers}
+            onChange={(event) =>
+              onChange({ typeOfContainers: event.target.value })
+            }
+            placeholder="Skip, bag, drum, loose load"
+          />
+        </FieldShell>
+
+        <FieldShell label="Number of containers">
+          <input
+            className={inputClass}
+            inputMode="numeric"
+            value={dwtProfile.numberOfContainers}
+            onChange={(event) =>
+              onChange({ numberOfContainers: event.target.value })
+            }
+            placeholder="1"
+          />
+        </FieldShell>
+
+        <FieldShell label="Estimated weight">
+          <input
+            className={inputClass}
+            inputMode="decimal"
+            value={dwtProfile.weightAmount}
+            onChange={(event) => onChange({ weightAmount: event.target.value })}
+            placeholder="2.5"
+          />
+        </FieldShell>
+
+        <FieldShell label="Weight unit">
+          <select
+            className={inputClass}
+            value={dwtProfile.weightMetric}
+            onChange={(event) =>
+              onChange({ weightMetric: event.target.value as DwtWeightMetric })
+            }
+          >
+            <option value="Tonnes">Tonnes</option>
+            <option value="Kilograms">Kilograms</option>
+            <option value="Grams">Grams</option>
+          </select>
+        </FieldShell>
+
+        <FieldShell label="Weight type">
+          <select
+            className={inputClass}
+            value={dwtProfile.weightIsEstimate ? "estimate" : "actual"}
+            onChange={(event) =>
+              onChange({ weightIsEstimate: event.target.value === "estimate" })
+            }
+          >
+            <option value="estimate">Estimated</option>
+            <option value="actual">Actual</option>
+          </select>
+        </FieldShell>
+
+        <FieldShell label="Could contain POPs?">
+          <select
+            className={inputClass}
+            value={dwtProfile.containsPops}
+            onChange={(event) =>
+              onChange({ containsPops: event.target.value as DwtHazardAnswer })
+            }
+          >
+            <option value="">Not set</option>
+            <option value="no">{formatDwtHazardAnswer("no")}</option>
+            <option value="yes">{formatDwtHazardAnswer("yes")}</option>
+            <option value="unknown">
+              {formatDwtHazardAnswer("unknown")}
+            </option>
+          </select>
+        </FieldShell>
+
+        <FieldShell label="Could be hazardous?">
+          <select
+            className={inputClass}
+            value={dwtProfile.containsHazardous}
+            onChange={(event) =>
+              onChange({
+                containsHazardous: event.target.value as DwtHazardAnswer,
+              })
+            }
+          >
+            <option value="">Not set</option>
+            <option value="no">{formatDwtHazardAnswer("no")}</option>
+            <option value="yes">{formatDwtHazardAnswer("yes")}</option>
+            <option value="unknown">
+              {formatDwtHazardAnswer("unknown")}
+            </option>
+          </select>
+        </FieldShell>
+
+        {dwtProfile.containsHazardous === "yes" && (
+          <FieldShell
+            label="Hazardous property codes"
+            helper="Example: HP1, HP3. Separate multiple codes with commas."
+          >
+            <input
+              className={inputClass}
+              value={dwtProfile.hazardousHazCodes}
+              onChange={(event) =>
+                onChange({ hazardousHazCodes: event.target.value })
+              }
+              placeholder="HP codes"
+            />
+          </FieldShell>
+        )}
+
+        <FieldShell
+          label="Recovery/disposal code"
+          helper="Optional. Example: R5, R13, D15."
+        >
+          <input
+            className={inputClass}
+            value={dwtProfile.disposalOrRecoveryCode}
+            onChange={(event) =>
+              onChange({ disposalOrRecoveryCode: event.target.value })
+            }
+            placeholder="R5"
+          />
+        </FieldShell>
+
+        <div className="md:col-span-2">
+          <FieldShell label="Special handling requirements">
+            <textarea
+              className={`${inputClass} min-h-24`}
+              value={dwtProfile.specialHandlingRequirements}
+              onChange={(event) =>
+                onChange({ specialHandlingRequirements: event.target.value })
+              }
+              placeholder="Access notes, contamination concerns, PPE, quarantine instructions or compliance notes."
+            />
+          </FieldShell>
+        </div>
+      </div>
+
+      {(dwtReadiness.missing.length > 0 || dwtReadiness.warnings.length > 0) && (
+        <div className="mt-6 rounded-2xl border border-orange-200 bg-white p-5">
+          <p className="text-sm font-semibold text-black">
+            DWT readiness summary
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-black/50">
+            This does not block listing creation. Waste X will show these gaps
+            later to the manager/receiver before final submission.
+          </p>
+
+          {dwtReadiness.missing.length > 0 && (
+            <p className="mt-3 text-sm leading-6 text-black/55">
+              <span className="font-semibold text-black">Missing:</span>{" "}
+              {dwtReadiness.missing.join(", ")}
+            </p>
+          )}
+
+          {dwtReadiness.warnings.length > 0 && (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-orange-800">
+              {dwtReadiness.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -703,8 +1033,7 @@ function DynamicTemplateField({
   }
 
   if (field.fieldType === "boolean") {
-    const selectedValue =
-      typeof value === "boolean" ? value : null;
+    const selectedValue = typeof value === "boolean" ? value : null;
 
     return (
       <FieldShell
@@ -785,7 +1114,7 @@ function FieldShell({
   required?: boolean;
   helper?: string | null;
   meta?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div>

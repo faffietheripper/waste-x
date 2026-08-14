@@ -1,6 +1,6 @@
 import { database } from "@/db/database";
 import { incidents, carrierAssignments, wasteListings } from "@/db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 export async function createIncident({
   assignmentId,
@@ -30,16 +30,43 @@ export async function createIncident({
   const [assignment] = await database
     .select()
     .from(carrierAssignments)
-    .where(
-      and(
-        eq(carrierAssignments.id, assignmentId),
-        eq(carrierAssignments.carrierOrganisationId, organisationId),
-        inArray(carrierAssignments.status, ["accepted", "in_progress"]),
-      ),
-    );
+    .where(eq(carrierAssignments.id, assignmentId))
+    .limit(1);
 
   if (!assignment) {
     throw new Error("INVALID_ASSIGNMENT");
+  }
+
+  const organisationIsInvolved =
+    assignment.organisationId === organisationId ||
+    assignment.assignedByOrganisationId === organisationId ||
+    assignment.managerOrganisationId === organisationId ||
+    assignment.carrierOrganisationId === organisationId;
+
+  if (!organisationIsInvolved) {
+    throw new Error("INVALID_ASSIGNMENT");
+  }
+
+  const incidentAllowedStatuses = ["accepted", "in_progress"];
+
+  if (!incidentAllowedStatuses.includes(assignment.status)) {
+    throw new Error("INVALID_ASSIGNMENT_STATUS");
+  }
+
+  const [existingOpenIncident] = await database
+    .select({
+      id: incidents.id,
+      status: incidents.status,
+    })
+    .from(incidents)
+    .where(eq(incidents.assignmentId, assignment.id))
+    .limit(1);
+
+  if (
+    existingOpenIncident &&
+    ["open", "under_review"].includes(existingOpenIncident.status)
+  ) {
+    throw new Error("OPEN_INCIDENT_ALREADY_EXISTS");
   }
 
   const listing = await database.query.wasteListings.findFirst({

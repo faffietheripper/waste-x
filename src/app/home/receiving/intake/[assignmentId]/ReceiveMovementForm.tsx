@@ -32,56 +32,14 @@ import {
   createDefaultWasteItem,
   type BrokerDealerFormState,
   type FormIssue,
-  type PatExpectedErrorOverride,
-  type PatScenarioId,
   type ReceiveMovementFormProps,
   type SubmitFeedback,
   type WasteItemFormState,
 } from "./receiveMovementFormTypes";
 
-import {
-  getPatScenarioTemplate,
-  PAT_SCENARIO_OPTIONS,
-} from "./receiveMovementPatScenarios";
-
-/* =========================================================
-   PAT / TESTING SETTINGS
-========================================================= */
-
-/*
-  This user-facing receiving form must not show PAT quick-fill tools.
-
-  The PAT helpers remain in the file for now so we can re-enable them later
-  from a dedicated admin/PAT testing route without rebuilding the payload logic.
-
-  Real users manually complete the same fields that PAT quick-fill used to fill:
-  waste items, broker/dealer, hazardous details, POPs, carrier details and
-  receiving site details.
-*/
-const SHOW_PAT_TOOLS_IN_USER_FORM = false;
-
-const EXPECTED_DEFRA_ERROR_PAT_SCENARIOS = new Set<PatScenarioId>([
-  "C01",
-  "H02",
-]);
-
 /* =========================================================
    HELPERS
 ========================================================= */
-
-function detectPatScenarioId(
-  ...values: Array<string | null | undefined>
-): PatScenarioId | null {
-  const joined = values.filter(Boolean).join(" ");
-
-  const match = joined.match(
-    /\b(R01|R02|R03|R04|R05|R07|C01|C02|B01|P01|H01|H02|H03|X01)\b/i,
-  );
-
-  if (!match?.[1]) return null;
-
-  return match[1].toUpperCase() as PatScenarioId;
-}
 
 function splitCodeList(value: string): string[] {
   return value
@@ -116,6 +74,20 @@ function nowAsIsoLocalInputValue() {
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
 
   return now.toISOString().slice(0, 16);
+}
+
+function isoDateTimeToLocalInputValue(value: string | null | undefined) {
+  if (!value) return nowAsIsoLocalInputValue();
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return nowAsIsoLocalInputValue();
+  }
+
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+
+  return date.toISOString().slice(0, 16);
 }
 
 function localDateTimeInputToIso(value: string) {
@@ -180,29 +152,14 @@ function sectionForKey(key: string) {
     return "Movement received";
   }
 
-  if (key.startsWith("wasteItems")) {
-    return "Waste received";
-  }
-
-  if (key.startsWith("carrier")) {
-    return "Carrier used";
-  }
-
-  if (key.startsWith("brokerOrDealer")) {
-    return "Broker / dealer";
-  }
-
+  if (key.startsWith("wasteItems")) return "Waste received";
+  if (key.startsWith("carrier")) return "Carrier used";
+  if (key.startsWith("brokerOrDealer")) return "Broker / dealer";
   if (key.startsWith("receiver") || key.startsWith("receipt")) {
     return "Receiving site";
   }
-
-  if (key.startsWith("assignment")) {
-    return "Assignment checks";
-  }
-
-  if (key.startsWith("defra")) {
-    return "Waste Tracking Service";
-  }
+  if (key.startsWith("assignment")) return "Assignment checks";
+  if (key.startsWith("defra")) return "Waste Tracking Service";
 
   return "Submission";
 }
@@ -262,12 +219,13 @@ export default function ReceiveMovementForm({
   defaultReceiverApiCode,
   defaultCarrier,
   defaultReceiver,
+  receiptId = null,
+  defaultMovement = null,
+  defaultWasteItems = [],
 }: ReceiveMovementFormProps) {
   const [isPending, startTransition] = useTransition();
 
   const feedbackRef = useRef<HTMLDivElement | null>(null);
-
-  const showPatTools = SHOW_PAT_TOOLS_IN_USER_FORM;
 
   const [submitFeedback, setSubmitFeedback] =
     useState<SubmitFeedback | null>(null);
@@ -284,48 +242,48 @@ export default function ReceiveMovementForm({
     string | null
   >(null);
 
-  const [selectedPatScenarioId, setSelectedPatScenarioId] = useState<
-    PatScenarioId | ""
-  >("");
-
-  const [patExpectedErrorOverride, setPatExpectedErrorOverride] =
-    useState<PatExpectedErrorOverride>("");
-
   /* Movement */
   const [receiverApiCode, setReceiverApiCode] = useState(
     defaultReceiverApiCode,
   );
 
   const [dateTimeReceived, setDateTimeReceived] = useState(
-    nowAsIsoLocalInputValue(),
+    isoDateTimeToLocalInputValue(defaultMovement?.dateTimeReceived ?? null),
   );
 
   const [hazardousWasteConsignmentCode, setHazardousWasteConsignmentCode] =
-    useState("");
+    useState(defaultMovement?.hazardousWasteConsignmentCode ?? "");
 
   const [reasonForNoConsignmentCode, setReasonForNoConsignmentCode] =
-    useState<ReasonForNoConsignmentCode | "">("");
+    useState<ReasonForNoConsignmentCode | "">(
+      defaultMovement?.reasonForNoConsignmentCode ?? "",
+    );
 
   const [yourUniqueReference, setYourUniqueReference] = useState(
-    `WX-${assignmentId.slice(0, 8)}`,
+    defaultMovement?.yourUniqueReference ?? `WX-${assignmentId.slice(0, 8)}`,
   );
 
   const [specialHandlingRequirements, setSpecialHandlingRequirements] =
-    useState("");
+    useState(defaultMovement?.specialHandlingRequirements ?? "");
 
   /* Waste items */
-  const [wasteItems, setWasteItems] = useState<WasteItemFormState[]>([
-    createDefaultWasteItem(listingName),
-  ]);
+  const [wasteItems, setWasteItems] = useState<WasteItemFormState[]>(
+    defaultWasteItems.length > 0
+      ? defaultWasteItems
+      : [createDefaultWasteItem(listingName)],
+  );
 
   /* Carrier */
-  const [carrierRegistrationNumber, setCarrierRegistrationNumber] =
-    useState("");
+  const [carrierRegistrationNumber, setCarrierRegistrationNumber] = useState(
+    defaultCarrier.registrationNumber ?? "",
+  );
 
   const [
     carrierReasonForNoRegistrationNumber,
     setCarrierReasonForNoRegistrationNumber,
-  ] = useState<ReasonForNoRegistrationNumber | "">("");
+  ] = useState<ReasonForNoRegistrationNumber | "">(
+    defaultCarrier.reasonForNoRegistrationNumber ?? "",
+  );
 
   const [carrierOrganisationName, setCarrierOrganisationName] = useState(
     defaultCarrier.organisationName,
@@ -348,10 +306,11 @@ export default function ReceiveMovementForm({
   );
 
   const [carrierMeansOfTransport, setCarrierMeansOfTransport] =
-    useState<MeansOfTransport>("Road");
+    useState<MeansOfTransport>(defaultCarrier.meansOfTransport ?? "Road");
 
-  const [carrierVehicleRegistration, setCarrierVehicleRegistration] =
-    useState("");
+  const [carrierVehicleRegistration, setCarrierVehicleRegistration] = useState(
+    defaultCarrier.vehicleRegistration ?? "",
+  );
 
   /* Broker / dealer */
   const [brokerDealerEnabled, setBrokerDealerEnabled] = useState(false);
@@ -374,9 +333,11 @@ export default function ReceiveMovementForm({
   );
 
   const [receiverAuthorisationNumber, setReceiverAuthorisationNumber] =
-    useState("");
+    useState(defaultReceiver.authorisationNumber ?? "");
 
-  const [receiverRpsNumbers, setReceiverRpsNumbers] = useState("");
+  const [receiverRpsNumbers, setReceiverRpsNumbers] = useState(
+    defaultReceiver.regulatoryPositionStatements ?? "",
+  );
 
   /* Receipt */
   const [receiptFullAddress, setReceiptFullAddress] = useState(
@@ -393,35 +354,13 @@ export default function ReceiveMovementForm({
     return defaultReceiverApiCode.trim().length > 0;
   }, [defaultReceiverApiCode]);
 
-  const detectedPatScenarioId = useMemo(() => {
-    if (!showPatTools) return null;
-
-    return detectPatScenarioId(
-      listingName,
-      yourUniqueReference,
-      specialHandlingRequirements,
+  const containsHazardousWaste = useMemo(() => {
+    return wasteItems.some(
+      (item) =>
+        item.containsHazardous ||
+        splitCodeList(item.ewcCodes).some((code) => code.endsWith("*")),
     );
-  }, [showPatTools, listingName, yourUniqueReference, specialHandlingRequirements]);
-
-  const activePatScenarioId = useMemo<PatScenarioId | null>(() => {
-    if (!showPatTools) return null;
-
-    if (patExpectedErrorOverride) return patExpectedErrorOverride;
-
-    return detectedPatScenarioId;
-  }, [showPatTools, patExpectedErrorOverride, detectedPatScenarioId]);
-
-  const isExpectedDefraErrorPatTest = useMemo(() => {
-    return activePatScenarioId
-      ? EXPECTED_DEFRA_ERROR_PAT_SCENARIOS.has(activePatScenarioId)
-      : false;
-  }, [activePatScenarioId]);
-
-  const allowMissingCarrierRegistrationForPat =
-    showPatTools && activePatScenarioId === "C01";
-
-  const allowMissingHazardousConsignmentForPat =
-    showPatTools && activePatScenarioId === "H02";
+  }, [wasteItems]);
 
   function issueMessagesFor(keys: string[]) {
     return issues
@@ -471,68 +410,6 @@ export default function ReceiveMovementForm({
       });
       return;
     }
-
-    jumpToFeedback();
-  }
-
-  function applyPatScenario(scenarioId: PatScenarioId) {
-    const template = getPatScenarioTemplate(scenarioId);
-
-    setSelectedPatScenarioId(scenarioId);
-
-    setYourUniqueReference(template.yourUniqueReference);
-    setSpecialHandlingRequirements(template.specialHandlingRequirements);
-    setHazardousWasteConsignmentCode(
-      template.hazardousWasteConsignmentCode,
-    );
-    setReasonForNoConsignmentCode(template.reasonForNoConsignmentCode);
-
-    setWasteItems(template.wasteItems);
-
-    setCarrierRegistrationNumber(template.carrierRegistrationNumber);
-    setCarrierReasonForNoRegistrationNumber(
-      template.carrierReasonForNoRegistrationNumber,
-    );
-    setCarrierOrganisationName(template.carrierOrganisationName);
-    setCarrierFullAddress(template.carrierFullAddress);
-    setCarrierPostcode(template.carrierPostcode);
-    setCarrierEmailAddress(template.carrierEmailAddress);
-    setCarrierPhoneNumber(template.carrierPhoneNumber);
-    setCarrierMeansOfTransport(template.carrierMeansOfTransport);
-    setCarrierVehicleRegistration(template.carrierVehicleRegistration);
-
-    setReceiverSiteName(template.receiverSiteName);
-    setReceiverAuthorisationNumber(template.receiverAuthorisationNumber);
-    setReceiverEmailAddress(template.receiverEmailAddress);
-    setReceiverPhoneNumber(template.receiverPhoneNumber);
-    setReceiptFullAddress(template.receiptFullAddress);
-    setReceiptPostcode(template.receiptPostcode);
-
-    setBrokerDealerEnabled(template.brokerDealerEnabled);
-    setBrokerOrDealer(template.brokerOrDealer);
-
-    setPatExpectedErrorOverride(template.expectedErrorScenarioId ?? "");
-
-    setSubmitFeedback({
-      type: template.expectedResult === "error" ? "warning" : "info",
-      title: `${template.scenarioId} loaded`,
-      message:
-        template.expectedResult === "error"
-          ? "This PAT scenario is expected to fail at DEFRA. Submit the invalid payload and use the returned rejection as evidence."
-          : "This PAT scenario has been loaded into the form. Review the values and submit to DEFRA test/sandbox.",
-      details: [
-        template.label,
-        template.description,
-        `Expected result: ${
-          template.expectedResult === "error"
-            ? "Expected error / no WTID"
-            : "WTID returned"
-        }`,
-      ],
-    });
-
-    setIssues([]);
-    setWarnings([]);
 
     jumpToFeedback();
   }
@@ -614,14 +491,6 @@ export default function ReceiveMovementForm({
       yourUniqueReference: yourUniqueReference.trim() || null,
 
       otherReferencesForMovement: [
-        ...(showPatTools && activePatScenarioId
-          ? [
-              {
-                label: "DEFRA PAT Scenario",
-                reference: activePatScenarioId,
-              },
-            ]
-          : []),
         {
           label: "Waste X Assignment",
           reference: assignmentId,
@@ -630,6 +499,14 @@ export default function ReceiveMovementForm({
           label: "Waste X Listing",
           reference: String(listingId),
         },
+        ...(receiptId
+          ? [
+              {
+                label: "Waste X Receipt Draft",
+                reference: receiptId,
+              },
+            ]
+          : []),
       ],
 
       specialHandlingRequirements:
@@ -713,15 +590,8 @@ export default function ReceiveMovementForm({
       addIssue("dateTimeReceived", "Date and time received is required.");
     }
 
-    const containsHazardousWaste = wasteItems.some(
-      (item) =>
-        item.containsHazardous ||
-        splitCodeList(item.ewcCodes).some((code) => code.endsWith("*")),
-    );
-
     if (
       containsHazardousWaste &&
-      !allowMissingHazardousConsignmentForPat &&
       !hazardousWasteConsignmentCode.trim() &&
       !reasonForNoConsignmentCode
     ) {
@@ -856,7 +726,6 @@ export default function ReceiveMovementForm({
     });
 
     if (
-      !allowMissingCarrierRegistrationForPat &&
       !carrierRegistrationNumber.trim() &&
       !carrierReasonForNoRegistrationNumber
     ) {
@@ -967,13 +836,9 @@ export default function ReceiveMovementForm({
     startTransition(async () => {
       const result = await submitReceiveMovementAction({
         assignmentId,
+        receiptId: receiptId ?? null,
         wasteTrackingId: wasteTrackingId || null,
-        patExpectedErrorScenarioId:
-          showPatTools &&
-          isExpectedDefraErrorPatTest &&
-          (activePatScenarioId === "C01" || activePatScenarioId === "H02")
-            ? activePatScenarioId
-            : null,
+        patExpectedErrorScenarioId: null,
         receiveMovementInput: buildInput(),
       });
 
@@ -985,40 +850,25 @@ export default function ReceiveMovementForm({
 
         const serverWarnings = result.warnings?.map(mapDefraIssue) ?? [];
 
-        const isExpectedPatRejection =
-          showPatTools && isExpectedDefraErrorPatTest && serverIssues.length > 0;
-
         setLastSubmissionId(result.submissionId ?? null);
         setLastSubmissionStatus(result.status ?? null);
         setIssues(serverIssues);
         setWarnings(serverWarnings);
 
         setSubmitFeedback({
-          type: isExpectedPatRejection ? "warning" : "error",
-          isExpectedPatRejection,
-          title: isExpectedPatRejection
-            ? `Expected DEFRA rejection recorded (${activePatScenarioId})`
-            : "Submission not successful",
-          message: isExpectedPatRejection
-            ? "This is the correct result for this DEFRA PAT scenario. Waste X allowed the invalid test payload through and the Waste Tracking Service rejected it as expected."
-            : result.message ||
-              "Waste X could not complete the Digital Waste Tracking submission.",
-          details: isExpectedPatRejection
-            ? [
-                "No Waste Tracking ID is expected for this scenario.",
-                "Use the submission ID, tested time, HTTP status and error message as PAT evidence.",
-                result.submissionId
-                  ? `Submission record: ${result.submissionId}`
-                  : "No submission ID was returned.",
-              ]
-            : [
-                serverIssues.length > 0
-                  ? `${serverIssues.length} issue${
-                      serverIssues.length === 1 ? "" : "s"
-                    } need attention.`
-                  : "The request failed before a detailed validation list was returned.",
-                "Review the issue list below.",
-              ],
+          type: "error",
+          title: "Submission not successful",
+          message:
+            result.message ||
+            "Waste X could not complete the Digital Waste Tracking submission.",
+          details: [
+            serverIssues.length > 0
+              ? `${serverIssues.length} issue${
+                  serverIssues.length === 1 ? "" : "s"
+                } need attention.`
+              : "The request failed before a detailed validation list was returned.",
+            "Review the issue list below.",
+          ],
         });
 
         jumpToFeedback();
@@ -1053,6 +903,9 @@ export default function ReceiveMovementForm({
             ? `Waste tracking ID: ${result.wasteTrackingId}`
             : "Waste tracking ID was not returned in this response.",
           `Submission record: ${result.submissionId}`,
+          receiptId
+            ? `Receipt draft linked: ${receiptId}`
+            : "No receipt draft ID was passed.",
         ],
       });
 
@@ -1096,28 +949,26 @@ export default function ReceiveMovementForm({
 
       <ReceiverApiCodeNotice hasSavedReceiverApiCode={hasSavedReceiverApiCode} />
 
-      {showPatTools && (
-        <>
-          <PatQuickFillPanel
-            selectedPatScenarioId={selectedPatScenarioId}
-            onSelectedPatScenarioIdChange={setSelectedPatScenarioId}
-            onApply={() => {
-              if (!selectedPatScenarioId) return;
-              applyPatScenario(selectedPatScenarioId);
-            }}
-          />
+      {receiptId && (
+        <section className="mt-6 rounded-3xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-800">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
+            Draft connected
+          </p>
 
-          <PatExpectedErrorOverridePanel
-            detectedScenarioId={detectedPatScenarioId}
-            activeScenarioId={activePatScenarioId}
-            override={patExpectedErrorOverride}
-            onOverrideChange={setPatExpectedErrorOverride}
-          />
+          <h3 className="mt-2 text-lg font-semibold">
+            External job draft has been loaded
+          </h3>
 
-          {isExpectedDefraErrorPatTest && (
-            <PatExpectedErrorNotice scenarioId={activePatScenarioId} />
-          )}
-        </>
+          <p className="mt-2 max-w-3xl text-sm leading-6 opacity-80">
+            Waste X has pre-filled this form from the draft receipt created by
+            the external job builder. Review the data, complete any missing
+            fields, then submit.
+          </p>
+
+          <p className="mt-3 break-all text-xs opacity-70">
+            Receipt draft: {receiptId}
+          </p>
+        </section>
       )}
 
       <div className="mt-8 space-y-8">
@@ -1181,9 +1032,7 @@ export default function ReceiveMovementForm({
             <Field
               label="Hazardous consignment code"
               required={
-                wasteItems.some((item) => item.containsHazardous) &&
-                !reasonForNoConsignmentCode &&
-                !allowMissingHazardousConsignmentForPat
+                containsHazardousWaste && !reasonForNoConsignmentCode
               }
               helper="Only required for hazardous waste unless a valid reason is selected."
               error={issueMessagesFor(["hazardousWasteConsignmentCode"])}
@@ -1201,9 +1050,8 @@ export default function ReceiveMovementForm({
             <Field
               label="Reason if there is no consignment code"
               required={
-                wasteItems.some((item) => item.containsHazardous) &&
-                !hazardousWasteConsignmentCode.trim() &&
-                !allowMissingHazardousConsignmentForPat
+                containsHazardousWaste &&
+                !hazardousWasteConsignmentCode.trim()
               }
               helper="Only choose this when hazardous waste has no consignment code."
               error={issueMessagesFor(["reasonForNoConsignmentCode"])}
@@ -1283,10 +1131,7 @@ export default function ReceiveMovementForm({
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Field
               label="Carrier registration number"
-              required={
-                !carrierReasonForNoRegistrationNumber &&
-                !allowMissingCarrierRegistrationForPat
-              }
+              required={!carrierReasonForNoRegistrationNumber}
               helper="Add the carrier registration number, or choose a reason if there is no registration number."
               error={issueMessagesFor(["carrier.registrationNumber"])}
             >
@@ -1302,10 +1147,7 @@ export default function ReceiveMovementForm({
 
             <Field
               label="Reason if there is no registration number"
-              required={
-                !carrierRegistrationNumber.trim() &&
-                !allowMissingCarrierRegistrationForPat
-              }
+              required={!carrierRegistrationNumber.trim()}
               error={issueMessagesFor([
                 "carrier.reasonForNoRegistrationNumber",
               ])}
@@ -1563,13 +1405,6 @@ export default function ReceiveMovementForm({
               Waste X will validate the record, send it to the Waste Tracking
               Service and save the response for your audit trail.
             </p>
-
-            {showPatTools && isExpectedDefraErrorPatTest && (
-              <p className="mt-3 rounded-2xl border border-orange-400/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                PAT {activePatScenarioId} is expected to fail. Submit this only
-                while using the DEFRA test/sandbox environment.
-              </p>
-            )}
           </div>
 
           <button
@@ -1646,179 +1481,6 @@ function ReceiverApiCodeNotice({
           </Link>
         </div>
       </div>
-    </section>
-  );
-}
-
-function PatQuickFillPanel({
-  selectedPatScenarioId,
-  onSelectedPatScenarioIdChange,
-  onApply,
-}: {
-  selectedPatScenarioId: PatScenarioId | "";
-  onSelectedPatScenarioIdChange: (value: PatScenarioId | "") => void;
-  onApply: () => void;
-}) {
-  const selectedTemplate = selectedPatScenarioId
-    ? getPatScenarioTemplate(selectedPatScenarioId)
-    : null;
-
-  return (
-    <section className="mt-6 rounded-3xl border border-black/10 bg-black p-5 text-white">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-400">
-            DEFRA PAT quick-fill
-          </p>
-
-          <h3 className="mt-2 text-lg font-semibold">
-            Load one of the 14 PAT scenarios
-          </h3>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-white/55">
-            Select a scenario and Waste X will fill the waste items, POPs,
-            hazardous components, disposal/recovery codes, broker/dealer and
-            carrier settings for that test.
-          </p>
-
-          {selectedTemplate && (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-white/70">
-              <p className="font-semibold text-white">
-                {selectedTemplate.label}
-              </p>
-              <p className="mt-1">{selectedTemplate.description}</p>
-              <p className="mt-1">
-                Expected:{" "}
-                {selectedTemplate.expectedResult === "error"
-                  ? "Error / no WTID"
-                  : "WTID returned"}
-              </p>
-            </div>
-          )}
-        </div>
-
-        <div className="grid w-full gap-3 lg:max-w-md">
-          <select
-            value={selectedPatScenarioId}
-            onChange={(event) =>
-              onSelectedPatScenarioIdChange(
-                event.target.value as PatScenarioId | "",
-              )
-            }
-            className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm font-semibold text-black outline-none"
-          >
-            <option value="">Choose PAT scenario</option>
-            {PAT_SCENARIO_OPTIONS.map((scenario) => (
-              <option key={scenario.id} value={scenario.id}>
-                {scenario.label}
-              </option>
-            ))}
-          </select>
-
-          <button
-            type="button"
-            disabled={!selectedPatScenarioId}
-            onClick={onApply}
-            className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:bg-white/20 disabled:text-white/40"
-          >
-            Apply scenario data
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function PatExpectedErrorOverridePanel({
-  detectedScenarioId,
-  activeScenarioId,
-  override,
-  onOverrideChange,
-}: {
-  detectedScenarioId: PatScenarioId | null;
-  activeScenarioId: PatScenarioId | null;
-  override: PatExpectedErrorOverride;
-  onOverrideChange: (value: PatExpectedErrorOverride) => void;
-}) {
-  return (
-    <section className="mt-6 rounded-3xl border border-orange-200 bg-orange-50 p-5 text-orange-900">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
-            DEFRA PAT expected-error override
-          </p>
-
-          <h3 className="mt-2 text-lg font-semibold">
-            Only use for C01 and H02
-          </h3>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6">
-            This lets intentionally invalid PAT payloads reach DEFRA so their
-            API can reject them and Waste X can save the evidence.
-          </p>
-
-          <p className="mt-3 text-xs leading-5 opacity-75">
-            Detected scenario:{" "}
-            <span className="font-semibold">
-              {detectedScenarioId ?? "None detected"}
-            </span>
-            . Active scenario:{" "}
-            <span className="font-semibold">
-              {activeScenarioId ?? "Normal submission"}
-            </span>
-            .
-          </p>
-        </div>
-
-        <div className="w-full max-w-xs">
-          <label className="block">
-            <span className="mb-2 block text-xs font-semibold opacity-75">
-              PAT override
-            </span>
-
-            <select
-              value={override}
-              onChange={(event) =>
-                onOverrideChange(event.target.value as PatExpectedErrorOverride)
-              }
-              className="w-full rounded-2xl border border-orange-200 bg-white px-4 py-3 text-sm font-semibold text-black outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
-            >
-              <option value="">Auto / normal submission</option>
-              <option value="C01">
-                C01 - no carrier registration and no reason
-              </option>
-              <option value="H02">
-                H02 - no hazardous consignment code and no reason
-              </option>
-            </select>
-          </label>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function PatExpectedErrorNotice({
-  scenarioId,
-}: {
-  scenarioId: PatScenarioId | null;
-}) {
-  if (!scenarioId) return null;
-
-  return (
-    <section className="mt-6 rounded-3xl border border-red-200 bg-red-50 p-5 text-red-800">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] opacity-70">
-        DEFRA PAT expected-error test
-      </p>
-
-      <h3 className="mt-2 text-lg font-semibold">
-        {scenarioId} is expected to be rejected
-      </h3>
-
-      <p className="mt-2 max-w-3xl text-sm leading-6">
-        Do not fix the intentionally invalid field for this scenario. Submit it
-        and use DEFRA’s rejection as evidence.
-      </p>
     </section>
   );
 }
@@ -1982,66 +1644,32 @@ function FeedbackPanel({
       )}
 
       {issues.length > 0 && (
-        <div
-          className={`mt-5 rounded-2xl border bg-white/60 p-5 ${
-            feedback?.isExpectedPatRejection
-              ? "border-orange-200"
-              : "border-red-200"
-          }`}
-        >
+        <div className="mt-5 rounded-2xl border border-red-200 bg-white/60 p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p
-                className={`text-sm font-semibold ${
-                  feedback?.isExpectedPatRejection
-                    ? "text-orange-900"
-                    : "text-red-800"
-                }`}
-              >
-                {feedback?.isExpectedPatRejection
-                  ? "DEFRA returned the expected rejection"
-                  : "What needs fixing"}
+              <p className="text-sm font-semibold text-red-800">
+                What needs fixing
               </p>
 
-              <p
-                className={`mt-1 text-sm leading-6 ${
-                  feedback?.isExpectedPatRejection
-                    ? "text-orange-800/80"
-                    : "text-red-700/80"
-                }`}
-              >
-                {feedback?.isExpectedPatRejection
-                  ? "Do not fix this form for this scenario. This error is the evidence."
-                  : "Fix these issues and submit again."}
+              <p className="mt-1 text-sm leading-6 text-red-700/80">
+                Fix these issues and submit again.
               </p>
             </div>
 
-            {!feedback?.isExpectedPatRejection && (
-              <button
-                type="button"
-                onClick={onJumpToFirstIssue}
-                className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
-              >
-                Jump to first issue
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onJumpToFirstIssue}
+              className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
+            >
+              Jump to first issue
+            </button>
           </div>
 
-          <ul
-            className={`mt-4 space-y-2 text-sm leading-6 ${
-              feedback?.isExpectedPatRejection
-                ? "text-orange-900"
-                : "text-red-800"
-            }`}
-          >
+          <ul className="mt-4 space-y-2 text-sm leading-6 text-red-800">
             {issues.map((issue, index) => (
               <li
                 key={`${issue.key}-${index}`}
-                className={`rounded-2xl px-4 py-3 ${
-                  feedback?.isExpectedPatRejection
-                    ? "bg-orange-50"
-                    : "bg-red-50"
-                }`}
+                className="rounded-2xl bg-red-50 px-4 py-3"
               >
                 <span className="font-semibold">{issue.section}:</span>{" "}
                 {issue.message}

@@ -14,7 +14,7 @@ import { redirect } from "next/navigation";
 import {
   type Capability,
   type DepartmentType,
-  hasOperationalPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 /* =========================================================
@@ -305,27 +305,28 @@ export default async function ReceivingIntakePage() {
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  if (!currentUser.department) {
-    redirect("/home/settings/departments?reason=no-active-department");
-  }
-
   /*
-    Keep narrowed values in constants.
-    This prevents TypeScript from losing the null check inside nested JSX maps.
+    Solo mode is a one-person full workflow mode.
+    It should not be blocked just because there is no active department.
   */
   const currentOrganisation = currentUser.organisation;
-  const currentDepartment = currentUser.department;
+  const isSoloOrganisation = currentOrganisation.operatingMode === "solo";
+
+  if (!currentUser.department && !isSoloOrganisation) {
+    redirect("/home/settings/departments?reason=no-active-department");
+  }
 
   const capabilities =
     (currentOrganisation.capabilities as Capability[] | null) ?? [];
 
   const departmentType =
-    (currentDepartment.type as DepartmentType | undefined) ?? null;
+    (currentUser.department?.type as DepartmentType | undefined) ?? null;
 
-  const canViewReceiving = hasOperationalPermission({
+  const canViewReceiving = hasOperationalPermissionForOrganisation({
     capabilities,
     departmentType,
     permission: "receiving:view",
+    operatingMode: currentOrganisation.operatingMode,
   });
 
   if (!canViewReceiving) {
@@ -341,9 +342,9 @@ export default async function ReceivingIntakePage() {
           </h1>
 
           <p className="mt-4 max-w-2xl text-sm leading-6 text-black/55">
-            Your active department does not currently have permission to view
-            receiving intake records. Switch department or contact an
-            administrator if this does not look right.
+            Your current workspace does not currently have permission to view
+            receiving intake records. Contact an administrator if this does not
+            look right.
           </p>
         </section>
       </main>
@@ -352,22 +353,34 @@ export default async function ReceivingIntakePage() {
 
   const organisationId = currentUser.organisationId;
 
-  const assignments = await database.query.carrierAssignments.findMany({
-    where: or(
+/*
+  Solo DWT intake rule:
+  The intake queue is for jobs this solo workspace is responsible for
+  as the manager/receiver.
+
+  It should NOT show generator-side records that were handed off to
+  another manager. Those belong under My Waste Listings / Reports.
+*/
+const intakeVisibilityWhere = isSoloOrganisation
+  ? eq(carrierAssignments.managerOrganisationId, organisationId)
+  : or(
       eq(carrierAssignments.organisationId, organisationId),
       eq(carrierAssignments.assignedByOrganisationId, organisationId),
       eq(carrierAssignments.managerOrganisationId, organisationId),
       eq(carrierAssignments.carrierOrganisationId, organisationId),
-    ),
-    with: {
-      listing: true,
-      carrierOrganisation: true,
-      managerOrganisation: true,
-      assignedByOrganisation: true,
-    },
-    orderBy: [desc(carrierAssignments.assignedAt)],
-    limit: 80,
-  });
+    );
+
+const assignments = await database.query.carrierAssignments.findMany({
+  where: intakeVisibilityWhere,
+  with: {
+    listing: true,
+    carrierOrganisation: true,
+    managerOrganisation: true,
+    assignedByOrganisation: true,
+  },
+  orderBy: [desc(carrierAssignments.assignedAt)],
+  limit: 80,
+});
 
   const assignmentIds = assignments.map((assignment) => assignment.id);
 

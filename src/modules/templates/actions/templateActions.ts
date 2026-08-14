@@ -1,19 +1,21 @@
 "use server";
 
 import { requireOrgUser } from "@/lib/access/require-org-user";
+import type { DwtListingProfile } from "@/modules/digital-waste-tracking/core/dwtListingProfile";
 import {
-  createTemplateCore,
-  getOrgTemplatesCore,
-  addSectionCore,
-  deleteSectionCore,
   addFieldCore,
-  updateFieldCore,
-  deleteFieldCore,
-  toggleTemplateLockCore,
-  reorderSectionsCore,
-  reorderFieldsCore,
+  addSectionCore,
   cloneTemplateCore,
+  createTemplateCore,
+  deleteFieldCore,
+  deleteSectionCore,
   ensureTemplateEditable,
+  getOrgTemplatesCore,
+  reorderFieldsCore,
+  reorderSectionsCore,
+  toggleTemplateLockCore,
+  updateFieldCore,
+  updateTemplateDwtProfileCore,
 } from "@/modules/templates/core/templateCore";
 
 /* =========================================================
@@ -35,6 +37,23 @@ export async function getOrgTemplatesAction() {
   const user = await requireOrgUser();
 
   return getOrgTemplatesCore(user.organisationId);
+}
+
+/* =========================================================
+   DWT PROFILE
+========================================================= */
+
+export async function updateTemplateDwtProfileAction(input: {
+  templateId: string;
+  profile: Partial<DwtListingProfile> | null;
+}) {
+  const user = await requireOrgUser();
+
+  return updateTemplateDwtProfileCore({
+    templateId: input.templateId,
+    organisationId: user.organisationId,
+    profile: input.profile,
+  });
 }
 
 /* =========================================================

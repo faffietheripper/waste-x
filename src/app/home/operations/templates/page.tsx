@@ -7,9 +7,12 @@ import {
 } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import Link from "next/link";
-
+import {
+  getDwtListingProfileReadiness,
+  safeParseDwtListingProfile,
+} from "@/modules/digital-waste-tracking/core/dwtListingProfile";
 import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
-import { hasOperationalPermission } from "@/modules/auth/core/permissions";
+import { hasOperationalPermissionForOrganisation } from "@/modules/auth/core/permissions";
 
 /* =========================================================
    TYPES
@@ -65,7 +68,7 @@ export default async function TemplatesPage() {
   /*
     PAGE PERMISSION GUARD
 
-    Only users with template:view can access this page.
+    Only workspaces with template:view can access this page.
 
     With the updated permission matrix:
     - generator department can view templates
@@ -78,16 +81,18 @@ export default async function TemplatesPage() {
 
   const organisationId = context.user.organisationId!;
 
-  const canCreateTemplates = hasOperationalPermission({
+  const canCreateTemplates = hasOperationalPermissionForOrganisation({
     capabilities: context.capabilities,
-    departmentType: context.departmentType,
+    departmentType: context.storedDepartmentType ?? context.departmentType,
     permission: "template:create",
+    operatingMode: context.organisation?.operatingMode ?? null,
   });
 
-  const canEditTemplates = hasOperationalPermission({
+  const canEditTemplates = hasOperationalPermissionForOrganisation({
     capabilities: context.capabilities,
-    departmentType: context.departmentType,
+    departmentType: context.storedDepartmentType ?? context.departmentType,
     permission: "template:edit",
+    operatingMode: context.organisation?.operatingMode ?? null,
   });
 
   const templates = await database.query.listingTemplates.findMany({
@@ -174,7 +179,7 @@ export default async function TemplatesPage() {
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <HeaderPill>Department: {context.department.name}</HeaderPill>
+                <HeaderPill>Department: {context.departmentLabel}</HeaderPill>
                 <HeaderPill>Permission: template:view</HeaderPill>
                 <HeaderPill>
                   Edit Access: {canEditTemplates ? "Yes" : "No"}
@@ -374,6 +379,15 @@ function TemplateCard({
   const listingUsageCount = stats?.listingUsageCount ?? 0;
 
   const canOpenEditor = canEdit && template.isActive && !template.isLocked;
+const dwtProfile = safeParseDwtListingProfile(template.dwtProfileJson);
+const dwtReadiness = getDwtListingProfileReadiness(dwtProfile);
+
+const dwtBadgeClass =
+  dwtReadiness.tone === "success"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : dwtReadiness.tone === "warning"
+      ? "border-orange-200 bg-orange-50 text-orange-700"
+      : "border-black/10 bg-[#fbfaf7] text-black/50";
 
   return (
     <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-md">
@@ -401,6 +415,11 @@ function TemplateCard({
         >
           {getTemplateStatusLabel(template)}
         </span>
+        <span
+  className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${dwtBadgeClass}`}
+>
+  {dwtReadiness.label}
+</span>
       </div>
 
       <div className="mt-5 grid grid-cols-3 gap-3 text-sm">

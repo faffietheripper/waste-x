@@ -4,7 +4,7 @@ import { eq, and } from "drizzle-orm";
 import Link from "next/link";
 
 import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
-import { hasOperationalPermission } from "@/modules/auth/core/permissions";
+import { hasOperationalPermissionForOrganisation } from "@/modules/auth/core/permissions";
 
 /* =========================================================
    TYPES
@@ -121,15 +121,18 @@ function getStatusClass(status: string | null | undefined) {
    PAGE
 ========================================================= */
 
+type ListingsPageProps = {
+  searchParams?: Promise<{ status?: string }> | { status?: string };
+};
+
 export default async function ListingsPage({
   searchParams,
-}: {
-  searchParams: { status?: string };
-}) {
+}: ListingsPageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : {};
   /* =========================================================
      PAGE PERMISSION GUARD
 
-     Only departments with listing:view can access this page.
+     Only workspaces with listing:view can access this page.
 
      Under the updated matrix:
      - generator can access
@@ -142,13 +145,14 @@ export default async function ListingsPage({
 
   const organisationId = context.user.organisationId!;
 
-  const canCreateListings = hasOperationalPermission({
+  const canCreateListings = hasOperationalPermissionForOrganisation({
     capabilities: context.capabilities,
-    departmentType: context.departmentType,
+    departmentType: context.storedDepartmentType ?? context.departmentType,
     permission: "listing:create",
+    operatingMode: context.organisation?.operatingMode ?? null,
   });
 
-  const status = (searchParams.status || "all") as StatusFilter;
+  const status = (resolvedSearchParams.status || "all") as StatusFilter;
 
   const filters = [eq(wasteListings.organisationId, organisationId)];
 
@@ -196,13 +200,13 @@ export default async function ListingsPage({
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
                 Manage waste listings created by your organisation. This area is
-                restricted to generator departments because waste listing
+                available to generator workspaces because waste listing
                 creation is a generator-side responsibility.
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
                 <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
-                  Department: {context.department.name}
+                  Department: {context.departmentLabel}
                 </span>
 
                 <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-4 py-2 text-xs font-medium text-orange-300">

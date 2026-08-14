@@ -7,7 +7,7 @@ import { requireOperationalPermission } from "@/modules/auth/core/requireOperati
 
 type Input = {
   listingId: number;
-  departmentId: string;
+  departmentId?: string | null;
 };
 
 export const assignInternalCarrierAction = withErrorHandling(

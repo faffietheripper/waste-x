@@ -1,9 +1,10 @@
 "use client";
 
-import { useToast } from "@/components/ui/use-toast";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+
 import { useAction } from "@/lib/actions/useAction";
+import { useToast } from "@/components/ui/use-toast";
 import { selectBidAction } from "@/modules/bids/actions/selectBidAction";
 
 interface AssignListingButtonProps {
@@ -16,7 +17,6 @@ interface AssignListingButtonProps {
    * In the manager-first workflow this is being used as an assignment lock.
    */
   assignedCarrierOrganisationId?: string | null;
-
   assignedManagerOrganisationId?: string | null;
 
   declinedOffer?: boolean;
@@ -32,10 +32,11 @@ export default function AssignListingButton({
   declinedOffer = false,
   cancelledJob = false,
 }: AssignListingButtonProps) {
-  const { toast } = useToast();
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
   const run = useAction();
+  const { toast } = useToast();
+
+  const [loading, setLoading] = useState(false);
 
   const alreadyAssigned =
     !!assignedManagerOrganisationId || !!assignedCarrierOrganisationId;
@@ -65,7 +66,7 @@ export default function AssignListingButton({
       }
 
       toast({
-        title: "Manager Assigned",
+        title: "Manager assigned",
         description:
           result.message ||
           "The winning bid organisation has been assigned as the waste manager.",
@@ -73,11 +74,11 @@ export default function AssignListingButton({
 
       router.refresh();
     } catch (error: any) {
-      console.error(error);
+      console.error("ASSIGN LISTING ERROR:", error);
 
       toast({
-        title: "Assignment Failed",
-        description: error.message || "Something went wrong.",
+        title: "Assignment failed",
+        description: error?.message || "Something went wrong.",
         variant: "destructive",
       });
     } finally {
@@ -87,16 +88,17 @@ export default function AssignListingButton({
 
   function getLabel() {
     if (loading) return "Assigning...";
-    if (declinedOffer) return "Offer Declined";
-    if (cancelledJob) return "Job Cancelled";
-    if (offerAccepted) return "Offer Accepted";
-    if (alreadyAssigned) return "Manager Assigned";
+    if (declinedOffer) return "Offer declined";
+    if (cancelledJob) return "Job cancelled";
+    if (offerAccepted) return "Offer accepted";
+    if (alreadyAssigned) return "Manager assigned";
 
     return "Assign Manager";
   }
 
   return (
     <button
+      type="button"
       onClick={handleAssign}
       disabled={isDisabled}
       className={`rounded-md px-4 py-2 text-sm font-medium transition ${

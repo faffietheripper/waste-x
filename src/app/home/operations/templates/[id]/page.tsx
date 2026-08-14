@@ -129,7 +129,7 @@ export default async function TemplateEditor({
 
           <div className="flex flex-wrap gap-3">
             <span className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-black/45">
-              Active department: {context.department.name}
+              Active department: {context.departmentLabel}
             </span>
 
             <span
@@ -180,7 +180,7 @@ export default async function TemplateEditor({
                 </HeaderPill>
 
                 <HeaderPill>
-                  Department: {context.department.name}
+                  Department: {context.departmentLabel}
                 </HeaderPill>
               </div>
             </div>

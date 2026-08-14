@@ -12,8 +12,14 @@ export const OPERATING_MODES = [
   "enterprise",
 ] as const satisfies readonly OrganisationOperatingMode[];
 
+export const SOLO_DEFAULT_CAPABILITIES: OrganisationCapability[] = [
+  "generator",
+  "carrier",
+  "manager",
+];
+
 export const OPERATING_MODE_LABELS: Record<OrganisationOperatingMode, string> = {
-  solo: "Solo Mode",
+  solo: "Solo Operator",
   team: "Team Mode",
   multi_site: "Multi-Site Mode",
   carrier_ops: "Carrier Operations",
@@ -25,7 +31,7 @@ export const OPERATING_MODE_DESCRIPTIONS: Record<
   string
 > = {
   solo:
-    "For one-person or very small operators who need simple waste records without department complexity.",
+    "For one-person operators who need to run the full waste workflow themselves without team or department complexity.",
   team:
     "For small teams using departments, assignments, receipts, incidents and reports.",
   multi_site:
@@ -64,7 +70,39 @@ export function getOrganisationOperatingMode(
 export function getOrganisationCapabilities(
   organisation: OrganisationModeInput | null | undefined,
 ): OrganisationCapability[] {
+  const mode = getOrganisationOperatingMode(organisation);
+
+  /*
+    Solo mode means one person may operate the whole workflow.
+
+    We still respect stored capabilities when present, but if a solo org has
+    no capabilities recorded, we treat it as full single-operator access.
+  */
+  if (mode === "solo" && (!organisation?.capabilities?.length)) {
+    return SOLO_DEFAULT_CAPABILITIES;
+  }
+
   return organisation?.capabilities ?? [];
+}
+
+export function getEffectiveOrganisationCapabilities(
+  organisation: OrganisationModeInput | null | undefined,
+): OrganisationCapability[] {
+  const mode = getOrganisationOperatingMode(organisation);
+
+  /*
+    Product decision:
+    solo = full single-operator workflow.
+
+    This is intentionally different from getOrganisationCapabilities().
+    It is used for navigation/permissions where solo users need access to
+    generator + carrier + manager processes without department switching.
+  */
+  if (mode === "solo") {
+    return SOLO_DEFAULT_CAPABILITIES;
+  }
+
+  return getOrganisationCapabilities(organisation);
 }
 
 export function hasCapability(
@@ -72,6 +110,13 @@ export function hasCapability(
   capability: OrganisationCapability,
 ) {
   return getOrganisationCapabilities(organisation).includes(capability);
+}
+
+export function hasEffectiveCapability(
+  organisation: OrganisationModeInput | null | undefined,
+  capability: OrganisationCapability,
+) {
+  return getEffectiveOrganisationCapabilities(organisation).includes(capability);
 }
 
 export function isSoloMode(
@@ -115,32 +160,36 @@ export function isAdvancedOperatingMode(
 export function shouldShowDepartments(
   organisation: OrganisationModeInput | null | undefined,
 ) {
-  const mode = getOrganisationOperatingMode(organisation);
-
-  return mode !== "solo";
+  /*
+    Solo users should not need department management or department switching.
+    They still get workflow access through effective capabilities.
+  */
+  return !isSoloMode(organisation);
 }
 
 export function shouldShowActiveDepartmentSwitcher(
   organisation: OrganisationModeInput | null | undefined,
 ) {
-  const mode = getOrganisationOperatingMode(organisation);
-
-  return mode !== "solo";
+  return !isSoloMode(organisation);
 }
 
 export function shouldShowTeamMembers(
   organisation: OrganisationModeInput | null | undefined,
 ) {
-  const mode = getOrganisationOperatingMode(organisation);
-
-  return mode !== "solo";
+  return !isSoloMode(organisation);
 }
 
 export function shouldShowSiteSwitcher(context: OrganisationModeContext) {
   const mode = getOrganisationOperatingMode(context);
   const siteCount = context.siteCount ?? 0;
 
-  if (mode === "solo") return false;
+  /*
+    Solo operators can still have multiple working locations, but we only show
+    the switcher when there is actually more than one site.
+  */
+  if (mode === "solo") {
+    return siteCount > 1;
+  }
 
   return siteCount > 1;
 }
@@ -148,14 +197,11 @@ export function shouldShowSiteSwitcher(context: OrganisationModeContext) {
 export function shouldShowSiteSettings(
   organisation: OrganisationModeInput | null | undefined,
 ) {
-  const mode = getOrganisationOperatingMode(organisation);
-
   /*
-    Even solo organisations can view their Main Site, but the UI should stay
-    simple. Site settings become more important for carrier_ops, multi_site and
-    enterprise.
+    Solo users should still be able to manage their Main Site and add sites if
+    needed. We hide complexity in the UI, not by blocking access.
   */
-  return mode !== "solo";
+  return true;
 }
 
 export function shouldShowExternalJobs(
@@ -164,39 +210,107 @@ export function shouldShowExternalJobs(
   const mode = getOrganisationOperatingMode(organisation);
 
   return (
+    mode === "solo" ||
     mode === "carrier_ops" ||
     mode === "multi_site" ||
     mode === "enterprise" ||
-    hasCapability(organisation, "carrier")
+    hasEffectiveCapability(organisation, "carrier")
   );
 }
 
 export function shouldShowMarketplace(
   organisation: OrganisationModeInput | null | undefined,
 ) {
-  const mode = getOrganisationOperatingMode(organisation);
-
-  if (mode === "solo") {
-    return (
-      hasCapability(organisation, "generator") ||
-      hasCapability(organisation, "manager")
-    );
+  /*
+    Solo users should be able to create/list/assign work. Do not hide the
+    marketplace or listing flow just because they are one-person businesses.
+  */
+  if (isSoloMode(organisation)) {
+    return true;
   }
 
-  return true;
+  return (
+    hasEffectiveCapability(organisation, "generator") ||
+    hasEffectiveCapability(organisation, "manager") ||
+    hasEffectiveCapability(organisation, "carrier")
+  );
 }
 
 export function shouldShowCarrierHub(
   organisation: OrganisationModeInput | null | undefined,
 ) {
+  /*
+    Solo users need a simplified jobs/collections view rather than being blocked.
+  */
+  if (isSoloMode(organisation)) {
+    return true;
+  }
+
   const mode = getOrganisationOperatingMode(organisation);
 
   return (
     mode === "team" ||
     mode === "multi_site" ||
     mode === "enterprise" ||
-    hasCapability(organisation, "manager")
+    mode === "carrier_ops" ||
+    hasEffectiveCapability(organisation, "manager") ||
+    hasEffectiveCapability(organisation, "carrier")
   );
+}
+
+export function shouldShowReceiving(
+  organisation: OrganisationModeInput | null | undefined,
+) {
+  if (isSoloMode(organisation)) {
+    return true;
+  }
+
+  return (
+    hasEffectiveCapability(organisation, "manager") ||
+    getOrganisationOperatingMode(organisation) === "enterprise" ||
+    getOrganisationOperatingMode(organisation) === "multi_site"
+  );
+}
+
+export function shouldShowDwtSubmissions(
+  organisation: OrganisationModeInput | null | undefined,
+) {
+  if (isSoloMode(organisation)) {
+    return true;
+  }
+
+  return (
+    hasEffectiveCapability(organisation, "manager") ||
+    getOrganisationOperatingMode(organisation) === "enterprise" ||
+    getOrganisationOperatingMode(organisation) === "multi_site"
+  );
+}
+
+export function shouldShowIncidents(
+  organisation: OrganisationModeInput | null | undefined,
+) {
+  if (isSoloMode(organisation)) {
+    return true;
+  }
+
+  return (
+    hasEffectiveCapability(organisation, "generator") ||
+    hasEffectiveCapability(organisation, "manager") ||
+    hasEffectiveCapability(organisation, "carrier")
+  );
+}
+
+export function shouldShowReports(
+  organisation: OrganisationModeInput | null | undefined,
+) {
+  /*
+    Reports are a core reason a one-person operator would use Waste X.
+  */
+  if (isSoloMode(organisation)) {
+    return true;
+  }
+
+  return true;
 }
 
 export function shouldShowAdvancedCompliance(
@@ -210,6 +324,10 @@ export function shouldShowAdvancedCompliance(
 export function shouldUseSimplifiedNavigation(
   organisation: OrganisationModeInput | null | undefined,
 ) {
+  /*
+    Simplified navigation does NOT mean restricted navigation.
+    It means solo-friendly labels and fewer team/admin concepts.
+  */
   return isSoloMode(organisation);
 }
 

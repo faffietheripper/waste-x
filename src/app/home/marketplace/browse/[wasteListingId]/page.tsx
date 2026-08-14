@@ -1,12 +1,20 @@
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users, carrierAssignments } from "@/db/schema";
+import { users, carrierAssignments, wasteListings } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
+
+import {
+  formatDwtHazardAnswer,
+  getDwtListingProfileReadiness,
+  safeParseDwtListingProfile,
+  type DwtListingProfile,
+} from "@/modules/digital-waste-tracking/core/dwtListingProfile";
 
 import PlaceBid from "@/components/app/MarketPlace/PlaceBid";
 import InternalAssignPanel from "@/components/app/Listings/InternalAssignPanel";
 import BidWinner from "@/components/app/BidWinner";
 import AssignListingButton from "@/components/app/Listings/AssignListingButton";
+import StartSelfManagedJobButton from "@/components/app/Listings/StartSelfManagedJobButton";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -30,7 +38,8 @@ import {
   type Capability,
   type DepartmentType,
   type Permission,
-  hasOperationalPermission,
+  getEffectiveDepartmentTypeForPermission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 /* =========================================================
@@ -38,9 +47,9 @@ import {
 ========================================================= */
 
 type ListingPageParams = {
-  params: {
+  params: Promise<{
     wasteListingId: string;
-  };
+  }>;
 };
 
 /* =========================================================
@@ -210,7 +219,8 @@ function parseAllowedCarrierIds(value: unknown) {
 ========================================================= */
 
 export default async function ListingPage({ params }: ListingPageParams) {
-  const listingId = Number(params.wasteListingId);
+  const { wasteListingId } = await params;
+  const listingId = Number(wasteListingId);
 
   if (!listingId || Number.isNaN(listingId)) {
     notFound();
@@ -238,22 +248,42 @@ export default async function ListingPage({ params }: ListingPageParams) {
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  if (!user.department) {
+  const currentOrganisation = user.organisation;
+  const isSoloOrganisation = currentOrganisation.operatingMode === "solo";
+
+  if (!user.department && !isSoloOrganisation) {
     redirect("/home/settings/departments?reason=no-active-department");
   }
 
   const userOrg = user.organisationId;
 
   const capabilities =
-    (user.organisation.capabilities as Capability[] | null) ?? [];
+    (currentOrganisation.capabilities as Capability[] | null) ?? [];
 
-  const departmentType = user.department.type as DepartmentType;
+  const departmentType =
+    (user.department?.type as DepartmentType | undefined) ?? null;
+
+  const effectiveBidDepartmentType = getEffectiveDepartmentTypeForPermission({
+    operatingMode: currentOrganisation.operatingMode,
+    departmentType,
+    permission: "listing:bid",
+  });
+
+  const effectiveAssignCarrierDepartmentType =
+    getEffectiveDepartmentTypeForPermission({
+      operatingMode: currentOrganisation.operatingMode,
+      departmentType,
+      permission: "assignment:assign_carrier",
+    });
+
+  const displayDepartmentType = effectiveBidDepartmentType ?? departmentType;
 
   function can(permission: Permission) {
-    return hasOperationalPermission({
+    return hasOperationalPermissionForOrganisation({
       capabilities,
       departmentType,
       permission,
+      operatingMode: currentOrganisation.operatingMode,
     });
   }
 
@@ -363,7 +393,7 @@ export default async function ListingPage({ params }: ListingPageParams) {
   ========================================================= */
 
   const isExternalManagerWorkflow =
-    departmentType === "manager" &&
+    effectiveAssignCarrierDepartmentType === "manager" &&
     !isOwner &&
     Boolean(existingAssignment) &&
     existingAssignment?.managerOrganisationId === userOrg &&
@@ -451,13 +481,23 @@ export default async function ListingPage({ params }: ListingPageParams) {
     !isAssignmentLocked &&
     isBiddableMarket;
 
-  const canAssignInternal =
-    canDirectAssignByDepartment &&
-    isOwner &&
-    !isAssignmentLocked &&
-    isInternal;
+ const canAssignInternal =
+  canDirectAssignByDepartment &&
+  isOwner &&
+  !isAssignmentLocked &&
+  isInternal &&
+  !isSoloOrganisation;
 
-  const showInternalAssignmentPanel = isInternal && isOwner;
+const canStartSelfManagedJob =
+  isSoloOrganisation &&
+  canDirectAssignByDepartment &&
+  isOwner &&
+  listing.status === "open" &&
+  !isAssignmentLocked &&
+  !existingAssignment &&
+  !listing.assignedCarrierOrganisationId;
+
+const showInternalAssignmentPanel = isInternal && isOwner && !isSoloOrganisation;
 
   const showManagerCarrierHubPrompt =
     managerCanAssignExternalCarrier && Boolean(existingAssignment);
@@ -488,6 +528,22 @@ export default async function ListingPage({ params }: ListingPageParams) {
     : {};
 
   const templateSections = templateDataRecord?.template?.sections ?? [];
+
+const [listingDwtSnapshotRecord] = await database
+  .select({
+    dwtSnapshotJson: wasteListings.dwtSnapshotJson,
+  })
+  .from(wasteListings)
+  .where(eq(wasteListings.id, listing.id))
+  .limit(1);
+
+const dwtSnapshot = safeParseDwtListingProfile(
+  (listing as { dwtSnapshotJson?: string | null }).dwtSnapshotJson ??
+    listingDwtSnapshotRecord?.dwtSnapshotJson ??
+    null,
+);
+
+const dwtReadiness = getDwtListingProfileReadiness(dwtSnapshot);
 
   /* =========================================================
      UI
@@ -522,8 +578,19 @@ export default async function ListingPage({ params }: ListingPageParams) {
                   </Badge>
 
                   <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100">
-                    {formatDepartment(departmentType)}
+                    {formatDepartment(displayDepartmentType)}
                   </Badge>
+                  <Badge
+  className={
+    dwtReadiness.tone === "success"
+      ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
+      : dwtReadiness.tone === "warning"
+        ? "bg-orange-100 text-orange-700 hover:bg-orange-100"
+        : "bg-gray-100 text-gray-600 hover:bg-gray-100"
+  }
+>
+  {dwtReadiness.label}
+</Badge>
 
                   {bidOver && !isAssignmentLocked && (
                     <Badge className="bg-red-500 text-white">
@@ -613,7 +680,7 @@ export default async function ListingPage({ params }: ListingPageParams) {
 
             {!canBidByDepartment && !isOwner && !isExternalManagerWorkflow && (
               <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
-                Your current department can view this record, but it cannot bid
+                Your current workspace can view this record, but it cannot bid
                 on marketplace listings.
               </div>
             )}
@@ -622,11 +689,15 @@ export default async function ListingPage({ params }: ListingPageParams) {
               !canAssignBidByDepartment &&
               !canDirectAssignByDepartment && (
                 <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
-                  Your department can view this listing, but it cannot assign
+                  Your current workspace can view this listing, but it cannot assign
                   work or perform operational listing actions.
                 </div>
               )}
           </section>
+          <DwtListingPrefillPanel
+  profile={dwtSnapshot}
+  readiness={dwtReadiness}
+/>
 
           {/* IMAGES */}
           {fileKeys.length > 0 ? (
@@ -744,8 +815,31 @@ export default async function ListingPage({ params }: ListingPageParams) {
         {/* =====================================================
             RIGHT SIDEBAR
         ===================================================== */}
-        <aside className="sticky top-32 col-span-2 h-fit space-y-6">
-          {/* MANAGER CARRIER HUB PROMPT FOR EXTERNAL MARKETPLACE JOB */}
+       <aside className="sticky top-32 col-span-2 h-fit space-y-6">
+  {/* SOLO SELF-MANAGED JOB */}
+  {canStartSelfManagedJob && (
+    <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+      <p className="text-xs uppercase tracking-[0.25em] text-orange-700">
+        Solo workflow
+      </p>
+
+      <h2 className="mt-3 text-xl font-semibold text-black">
+        Start self-managed job
+      </h2>
+
+      <p className="mt-2 text-sm leading-6 text-orange-900/75">
+        Because this is a solo organisation, you can act as the generator,
+        manager and carrier for this listing. Waste X will create the assignment
+        and send you straight into the operational workflow.
+      </p>
+
+      <div className="mt-5">
+        <StartSelfManagedJobButton listingId={listing.id} />
+      </div>
+    </section>
+  )}
+
+  {/* MANAGER CARRIER HUB PROMPT FOR EXTERNAL MARKETPLACE JOB */}
           {showManagerCarrierHubPrompt && existingAssignment && (
             <section className="rounded-3xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
               <p className="text-xs uppercase tracking-[0.25em] text-orange-700">
@@ -829,7 +923,7 @@ export default async function ListingPage({ params }: ListingPageParams) {
               ) : isAssignmentLocked ? (
                 <AssignedNotice />
               ) : (
-                <DepartmentBlockedNotice message="Your current department cannot directly assign internal carrier departments." />
+                <DepartmentBlockedNotice message="Your current workspace cannot directly assign internal carrier departments." />
               )}
             </section>
           )}
@@ -1050,7 +1144,7 @@ function BidBlockedNotice({
 
   if (!canBidByDepartment) {
     message =
-      "Your current department is not allowed to place marketplace bids.";
+      "Your current workspace is not allowed to place marketplace bids.";
   } else if (isAssignmentLocked) {
     message =
       "This listing has already been assigned, so new bids are no longer accepted.";
@@ -1066,6 +1160,134 @@ function BidBlockedNotice({
   return (
     <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
       {message}
+    </div>
+  );
+}
+
+function DwtListingPrefillPanel({
+  profile,
+  readiness,
+}: {
+  profile: DwtListingProfile;
+  readiness: ReturnType<typeof getDwtListingProfileReadiness>;
+}) {
+  const panelClass =
+    readiness.tone === "success"
+      ? "border-emerald-200 bg-emerald-50"
+      : readiness.tone === "warning"
+        ? "border-orange-200 bg-orange-50"
+        : "border-black/10 bg-white";
+
+  const textClass =
+    readiness.tone === "success"
+      ? "text-emerald-800"
+      : readiness.tone === "warning"
+        ? "text-orange-800"
+        : "text-black/60";
+
+  return (
+    <section className={`rounded-3xl border p-8 shadow-sm ${panelClass}`}>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
+            Waste & DWT Prefill
+          </p>
+
+          <h2 className="mt-2 text-2xl font-semibold text-black">
+            Compliance readiness for this listing
+          </h2>
+
+          <p className={`mt-2 max-w-3xl text-sm leading-6 ${textClass}`}>
+            This information was captured from the template/listing form to help
+            the manager or receiver prefill the Digital Waste Tracking intake
+            later. It does not replace final receiver confirmation.
+          </p>
+        </div>
+
+        <span className="rounded-full border border-current/20 bg-white/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-black/60">
+          {readiness.completedFields}/{readiness.totalFields} fields
+        </span>
+      </div>
+
+      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <DwtInfo label="EWC code(s)" value={profile.ewcCodes} />
+        <DwtInfo label="Physical form" value={profile.physicalForm} />
+        <DwtInfo label="Container type" value={profile.typeOfContainers} />
+        <DwtInfo
+          label="Containers"
+          value={profile.numberOfContainers}
+        />
+        <DwtInfo
+          label="Estimated weight"
+          value={
+            profile.weightAmount
+              ? `${profile.weightAmount} ${profile.weightMetric}${
+                  profile.weightIsEstimate ? " estimated" : ""
+                }`
+              : ""
+          }
+        />
+        <DwtInfo
+          label="POPs"
+          value={formatDwtHazardAnswer(profile.containsPops)}
+        />
+        <DwtInfo
+          label="Hazardous"
+          value={formatDwtHazardAnswer(profile.containsHazardous)}
+        />
+        <DwtInfo
+          label="Recovery/disposal"
+          value={profile.disposalOrRecoveryCode}
+        />
+      </div>
+
+      {profile.wasteDescription && (
+        <div className="mt-5 rounded-2xl border border-black/10 bg-white/70 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/35">
+            DWT waste description
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-black/65">
+            {profile.wasteDescription}
+          </p>
+        </div>
+      )}
+
+      {(readiness.missing.length > 0 || readiness.warnings.length > 0) && (
+        <div className="mt-5 rounded-2xl border border-black/10 bg-white/70 p-4">
+          <p className="text-sm font-semibold text-black">
+            Still needed before final DWT submission
+          </p>
+
+          {readiness.missing.length > 0 && (
+            <p className="mt-2 text-sm leading-6 text-black/55">
+              {readiness.missing.join(", ")}
+            </p>
+          )}
+
+          {readiness.warnings.length > 0 && (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-orange-800">
+              {readiness.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DwtInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/35">
+        {label}
+      </p>
+
+      <p className="mt-2 text-sm font-semibold text-black/70">
+        {value || "Not set"}
+      </p>
     </div>
   );
 }

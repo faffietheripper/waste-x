@@ -12,6 +12,13 @@ export type DepartmentType =
   | "manager"
   | "compliance";
 
+export type OrganisationOperatingMode =
+  | "solo"
+  | "team"
+  | "multi_site"
+  | "carrier_ops"
+  | "enterprise";
+
 export type Permission =
   /* Listings owned by generator */
   | "listing:view"
@@ -70,6 +77,122 @@ export type Permission =
   | "notification:view";
 
 /* =========================================================
+   SOLO MODE HELPERS
+
+   Solo mode means:
+   - one user can operate generator, carrier, manager and compliance workflows
+   - there is no required active department
+   - Waste X resolves a synthetic department type based on the action
+========================================================= */
+
+const SOLO_EFFECTIVE_CAPABILITIES: Capability[] = [
+  "generator",
+  "carrier",
+  "manager",
+];
+
+function isSoloOperatingMode(
+  operatingMode: OrganisationOperatingMode | string | null | undefined,
+) {
+  return operatingMode === "solo";
+}
+
+function getSoloEffectiveCapabilities(capabilities: Capability[]) {
+  return Array.from(
+    new Set<Capability>([...capabilities, ...SOLO_EFFECTIVE_CAPABILITIES]),
+  );
+}
+
+function getSoloEffectiveDepartmentType(permission: Permission): DepartmentType {
+  /*
+    Listings and templates are generator-side workflows.
+  */
+  if (permission.startsWith("template:")) {
+    return "generator";
+  }
+
+  if (
+    permission === "listing:view" ||
+    permission === "listing:create" ||
+    permission === "listing:edit" ||
+    permission === "listing:assign" ||
+    permission === "listing:direct_assign"
+  ) {
+    return "generator";
+  }
+
+  /*
+    Marketplace bidding is manager-side.
+  */
+  if (permission === "marketplace:view" || permission === "listing:bid") {
+    return "manager";
+  }
+
+  /*
+    Assignment permissions are split by operational perspective.
+  */
+  if (
+    permission === "assignment:accept" ||
+    permission === "assignment:reject" ||
+    permission === "assignment:verify_collection"
+  ) {
+    return "carrier";
+  }
+
+  if (
+    permission === "assignment:assign_carrier" ||
+    permission === "assignment:receive_waste" ||
+    permission === "assignment:verify_receipt"
+  ) {
+    return "manager";
+  }
+
+  if (permission === "assignment:view") {
+    return "generator";
+  }
+
+  if (permission === "assignment:cancel" || permission === "assignment:complete") {
+    return "generator";
+  }
+
+  /*
+    Receiving is manager-side.
+  */
+  if (permission.startsWith("receiving:")) {
+    return "manager";
+  }
+
+  /*
+    DWT submission is a formal compliance event.
+    Compliance can submit/update DWT in this MVP.
+  */
+  if (permission.startsWith("dwt:")) {
+    return "compliance";
+  }
+
+  /*
+    Solo can report incidents from the operational/carrier side,
+    and can review/resolve incidents from the compliance side.
+  */
+  if (permission === "incident:create") {
+    return "carrier";
+  }
+
+  if (permission === "incident:view" || permission === "incident:resolve") {
+    return "compliance";
+  }
+
+  /*
+    Compliance and audit records.
+  */
+  if (permission.startsWith("compliance:")) {
+    return "compliance";
+  }
+
+  return "compliance";
+}
+
+/* =========================================================
    ORGANISATION CAPABILITY → PERMISSIONS
 
    This answers:
@@ -78,7 +201,7 @@ export type Permission =
    Important:
    - Capabilities are organisation-level.
    - They do not mean every user can do the action.
-   - The active department still needs the same permission.
+   - The active/effective department still needs the same permission.
 ========================================================= */
 
 const capabilityPermissions: Record<Capability, Permission[]> = {
@@ -92,17 +215,7 @@ const capabilityPermissions: Record<Capability, Permission[]> = {
     "listing:view",
     "listing:create",
     "listing:edit",
-
-    /*
-      Allows generator-owned listings to be assigned to an external
-      winning bid / external business.
-    */
     "listing:assign",
-
-    /*
-      Allows direct/internal assignment flows, such as assigning to an
-      internal carrier/logistics department.
-    */
     "listing:direct_assign",
 
     /* Assignments */
@@ -182,13 +295,7 @@ const capabilityPermissions: Record<Capability, Permission[]> = {
    DEPARTMENT → PERMISSIONS
 
    This answers:
-   What is this user allowed to do from their active department?
-
-   Important:
-   - The organisation can have multiple capabilities.
-   - The active department controls the current operational perspective.
-   - For generator/carrier/manager departments, capability and department
-     must both allow the permission.
+   What is this user allowed to do from their active/effective department?
 ========================================================= */
 
 const departmentPermissions: Record<DepartmentType, Permission[]> = {
@@ -202,17 +309,7 @@ const departmentPermissions: Record<DepartmentType, Permission[]> = {
     "listing:view",
     "listing:create",
     "listing:edit",
-
-    /*
-      Allows the generator department to assign its own listing to
-      an external winning bid / external business.
-    */
     "listing:assign",
-
-    /*
-      Allows the generator department to use direct/internal assignment
-      flows where appropriate.
-    */
     "listing:direct_assign",
 
     /* Assignments */
@@ -297,9 +394,6 @@ const departmentPermissions: Record<DepartmentType, Permission[]> = {
     /*
       Compliance can submit/update DWT records because the government
       submission is a formal compliance event.
-      If you later want compliance to be view-only, remove:
-      - dwt:submit_receive_movement
-      - dwt:update_receive_movement
     */
     "dwt:view",
     "dwt:submit_receive_movement",
@@ -341,7 +435,7 @@ export function hasPermission(
 /* =========================================================
    DEPARTMENT CHECK
 
-   Checks only the active department layer.
+   Checks only the active/effective department layer.
 ========================================================= */
 
 export function departmentHasPermission({
@@ -364,7 +458,7 @@ export function departmentHasPermission({
    Rule:
    - generator / carrier / manager departments need both:
      1. organisation capability
-     2. active department permission
+     2. active/effective department permission
 
    - compliance is internal oversight and does not need to exist
      as an organisation capability.
@@ -383,11 +477,7 @@ export function hasOperationalPermission({
 
   /*
     Compliance is internal oversight.
-
     It does not need to exist as an organisation capability.
-    A compliance department can review and manage compliance records
-    for its organisation, but it cannot perform generator/carrier/manager
-    operational work unless explicitly listed in compliance permissions.
   */
   if (departmentType === "compliance") {
     return departmentHasPermission({
@@ -400,6 +490,70 @@ export function hasOperationalPermission({
     hasPermission(capabilities, permission) &&
     departmentHasPermission({
       departmentType,
+      permission,
+    })
+  );
+}
+
+/* =========================================================
+   SOLO-AWARE HELPERS
+
+   These are the preferred helpers for new pages/actions.
+========================================================= */
+
+export function getEffectiveDepartmentTypeForPermission({
+  operatingMode,
+  departmentType,
+  permission,
+}: {
+  operatingMode?: OrganisationOperatingMode | string | null;
+  departmentType: DepartmentType | null | undefined;
+  permission: Permission;
+}): DepartmentType | null {
+  if (isSoloOperatingMode(operatingMode)) {
+    return getSoloEffectiveDepartmentType(permission);
+  }
+
+  return departmentType ?? null;
+}
+
+export function hasOperationalPermissionForOrganisation({
+  capabilities,
+  departmentType,
+  permission,
+  operatingMode,
+}: {
+  capabilities: Capability[];
+  departmentType: DepartmentType | null | undefined;
+  permission: Permission;
+  operatingMode?: OrganisationOperatingMode | string | null;
+}) {
+  if (!isSoloOperatingMode(operatingMode)) {
+    return hasOperationalPermission({
+      capabilities,
+      departmentType,
+      permission,
+    });
+  }
+
+  const effectiveCapabilities = getSoloEffectiveCapabilities(capabilities);
+  const effectiveDepartmentType = getSoloEffectiveDepartmentType(permission);
+
+  /*
+    Compliance does not require a matching organisation capability.
+    In solo mode this gives the solo operator compliance oversight powers.
+  */
+  if (effectiveDepartmentType === "compliance") {
+    return departmentHasPermission({
+      departmentType: effectiveDepartmentType,
+      permission,
+    });
+  }
+
+  return (
+    hasPermission(effectiveCapabilities, permission) &&
+    departmentHasPermission({
+      departmentType: effectiveDepartmentType,
       permission,
     })
   );
@@ -424,10 +578,30 @@ export function getDepartmentPermissions(
 export function getEffectiveOperationalPermissions({
   capabilities,
   departmentType,
+  operatingMode,
 }: {
   capabilities: Capability[];
   departmentType: DepartmentType | null | undefined;
+  operatingMode?: OrganisationOperatingMode | string | null;
 }): Permission[] {
+  if (isSoloOperatingMode(operatingMode)) {
+    const effectiveCapabilities = getSoloEffectiveCapabilities(capabilities);
+
+    const capabilityAllowed = new Set<Permission>();
+
+    for (const capability of effectiveCapabilities) {
+      for (const permission of capabilityPermissions[capability] ?? []) {
+        capabilityAllowed.add(permission);
+      }
+    }
+
+    for (const permission of departmentPermissions.compliance ?? []) {
+      capabilityAllowed.add(permission);
+    }
+
+    return Array.from(capabilityAllowed);
+  }
+
   if (!departmentType) return [];
 
   const departmentAllowed = departmentPermissions[departmentType] ?? [];

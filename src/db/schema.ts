@@ -541,6 +541,7 @@ export const wasteListings = pgTable("bb_waste_listing", {
 
   templateId: text("templateId").notNull(),
   templateVersion: integer("templateVersion").notNull(),
+  dwtSnapshotJson: text("dwtSnapshotJson"),
 
   /* ===============================
      CORE DATA
@@ -1615,6 +1616,7 @@ export const listingTemplates = pgTable(
 
     name: text("name").notNull(),
     description: text("description"),
+    dwtProfileJson: text("dwtProfileJson"),
 
     version: integer("version").notNull().default(1),
 

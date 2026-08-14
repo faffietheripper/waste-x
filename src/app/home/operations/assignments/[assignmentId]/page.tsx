@@ -1,6 +1,4 @@
-
-
-
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 
@@ -11,11 +9,13 @@ import VerificationPanel from "@/components/app/Assignments/VerificationPanel";
 import AssignmentCompliancePanel from "@/components/app/Assignments/AssignmentCompliancePanel";
 import AssignmentIncidentModal from "@/components/app/Assignments/AssignmentIncidentModal";
 import ManagerReceiptPanel from "@/components/app/Assignments/ManagerReceiptPanel";
+import SoloManagerCompletionPanel from "@/components/app/Assignments/SoloManagerCompletionPanel";
 
 import { requireOperationalPermission } from "@/modules/auth/core/requireOperationalPermission";
 import {
   type DepartmentType,
-  hasOperationalPermission,
+  type Permission,
+  hasOperationalPermissionForOrganisation,
 } from "@/modules/auth/core/permissions";
 
 import { getLatestWasteTrackingSubmissionByAssignment } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingSubmissionByAssignment";
@@ -25,7 +25,6 @@ import { getLatestWasteTrackingSubmissionByAssignment } from "@/modules/digital-
 ========================================================= */
 
 type AssignmentPerspective = "generator" | "manager" | "carrier" | "compliance";
-
 
 /* =========================================================
    FORMATTERS
@@ -110,17 +109,20 @@ function getCollectionStatus({
   codeGeneratedAt,
   codeUsedAt,
   collectedAt,
+  completedAt,
   status,
 }: {
   verificationCode: string | null | undefined;
   codeGeneratedAt: Date | string | null | undefined;
   codeUsedAt: Date | string | null | undefined;
   collectedAt: Date | string | null | undefined;
+  completedAt: Date | string | null | undefined;
   status: string | null | undefined;
 }) {
   if (
     codeUsedAt ||
     collectedAt ||
+    completedAt ||
     status === "in_progress" ||
     status === "completed"
   ) {
@@ -188,12 +190,6 @@ function getPerspective({
     return "generator";
   }
 
-  /*
-    IMPORTANT:
-    Internal jobs may not have managerOrganisationId populated.
-    If the active department is manager and the organisation is involved in
-    the assignment, treat the user as the manager-side operator.
-  */
   if (
     departmentType === "manager" &&
     (assignment.managerOrganisationId === organisationId ||
@@ -202,16 +198,37 @@ function getPerspective({
     return "manager";
   }
 
-  /*
-    Carrier department should control collection-side actions.
-    This covers external carrier orgs and internal same-org carrier departments.
-  */
   if (
     departmentType === "carrier" &&
     (assignment.carrierOrganisationId === organisationId ||
       organisationIsInAssignment({ assignment, organisationId }))
   ) {
     return "carrier";
+  }
+
+  return "compliance";
+}
+
+function getSoloPerspective({
+  assignment,
+  organisationId,
+}: {
+  assignment: any;
+  organisationId: string;
+}): AssignmentPerspective {
+  if (assignment.managerOrganisationId === organisationId) {
+    return "manager";
+  }
+
+  if (assignment.carrierOrganisationId === organisationId) {
+    return "carrier";
+  }
+
+  if (
+    assignment.organisationId === organisationId ||
+    assignment.assignedByOrganisationId === organisationId
+  ) {
+    return "generator";
   }
 
   return "compliance";
@@ -246,7 +263,6 @@ function getWorkflowMessage({
   if (assignment.status === "completed") {
     return "The manager has confirmed receipt and this assignment is complete. If needed, review or update the Digital Waste Tracking receive movement record.";
   }
-
 
   if (
     managerAccepted &&
@@ -336,10 +352,20 @@ function getWorkflowMessage({
 function getCollectionCodeDisplay({
   assignment,
   perspective,
+  isSoloOrganisation,
 }: {
   assignment: any;
   perspective: AssignmentPerspective;
+  isSoloOrganisation: boolean;
 }) {
+  if (isSoloOrganisation && assignment.status === "completed") {
+    return "Not required for solo workflow";
+  }
+
+  if (isSoloOrganisation && !assignment.verificationCode) {
+    return "Not required for solo workflow";
+  }
+
   if (!assignment.verificationCode) return "Not generated";
 
   if (perspective === "generator") {
@@ -374,14 +400,27 @@ function getCollectionCodeDisplay({
 export default async function AssignmentDetailPage({
   params,
 }: {
-  params: { assignmentId: string };
+  params: Promise<{ assignmentId: string }>;
 }) {
+  const { assignmentId } = await params;
+
   const context = await requireOperationalPermission("assignment:view");
 
   const organisationId = context.user.organisationId!;
   const departmentType = context.departmentType as DepartmentType;
+  const operatingMode = context.organisation?.operatingMode ?? null;
+  const isSoloOrganisation = Boolean(context.isSoloOrganisation);
 
-  const assignment = await getAssignmentById(params.assignmentId);
+  function can(permission: Permission) {
+    return hasOperationalPermissionForOrganisation({
+      capabilities: context.capabilities,
+      departmentType: context.storedDepartmentType ?? context.departmentType,
+      permission,
+      operatingMode,
+    });
+  }
+
+  const assignment = await getAssignmentById(assignmentId);
 
   if (!assignment) {
     notFound();
@@ -391,81 +430,46 @@ export default async function AssignmentDetailPage({
     notFound();
   }
 
-  const perspective = getPerspective({
+  const basePerspective = getPerspective({
     assignment,
     organisationId,
     departmentType,
   });
 
+  const perspective: AssignmentPerspective = isSoloOrganisation
+    ? getSoloPerspective({
+        assignment,
+        organisationId,
+      })
+    : basePerspective;
+
   const isGeneratorForAssignment = perspective === "generator";
+
   const isManagerForAssignment = perspective === "manager";
+
   const isCarrierForAssignment = perspective === "carrier";
 
-  const canAcceptAssignment = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "assignment:accept",
-  });
+  const canAcceptAssignment = can("assignment:accept");
 
-  const canRejectAssignment = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "assignment:reject",
-  });
+  const canRejectAssignment = can("assignment:reject");
 
-  const canCancelAssignment = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "assignment:cancel",
-  });
+  const canCancelAssignment = can("assignment:cancel");
 
-  const canAssignCarrier = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "assignment:assign_carrier",
-  });
+  const canAssignCarrier = can("assignment:assign_carrier");
 
-  const canVerifyCollection = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "assignment:verify_collection",
-  });
+  const canVerifyCollection = can("assignment:verify_collection");
 
-  const canReceiveWaste = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "assignment:receive_waste",
-  });
+  const canReceiveWaste = can("assignment:receive_waste");
 
-  const canViewReceiving = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "receiving:view",
-  });
+  const canViewReceiving = can("receiving:view");
 
-  const canSubmitDwt = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "dwt:submit_receive_movement",
-  });
+  const canSubmitDwt = can("dwt:submit_receive_movement");
 
-  const canViewDwt = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "dwt:view",
-  });
+  const canViewDwt = can("dwt:view");
 
-  const canCreateIncident = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "incident:create",
-  });
+  const canCreateIncident = can("incident:create");
 
-  const canViewCompliance = hasOperationalPermission({
-    capabilities: context.capabilities,
-    departmentType,
-    permission: "compliance:view",
-  });
+  const canViewCompliance = can("compliance:view");
 
   const latestDwtSubmission =
     await getLatestWasteTrackingSubmissionByAssignment({
@@ -482,6 +486,7 @@ export default async function AssignmentDetailPage({
   const collectionVerified = Boolean(
     assignment.collectedAt ||
       assignment.codeUsedAt ||
+      assignment.completedAt ||
       assignment.status === "in_progress" ||
       assignment.status === "completed",
   );
@@ -491,38 +496,50 @@ export default async function AssignmentDetailPage({
     assignment.status === "cancelled" ||
     assignment.status === "rejected";
 
-  /*
-    Generator can only cancel before collection.
-  */
+  const soloGeneratorHasHandedOffAssignment =
+    isSoloOrganisation &&
+    perspective === "generator" &&
+    Boolean(assignment.managerOrganisationId) &&
+    assignment.managerOrganisationId !== organisationId;
+
   const generatorCanCancelAssignment =
+    !soloGeneratorHasHandedOffAssignment &&
     isGeneratorForAssignment &&
     canCancelAssignment &&
     !collectionVerified &&
     ["pending", "accepted"].includes(assignment.status);
 
-  /*
-    Manager accepts/rejects the original manager-side assignment.
-  */
   const managerCanRespondToAssignment =
     isManagerForAssignment &&
     assignment.status === "pending" &&
     !assignment.managerAcceptedAt &&
     (canAcceptAssignment || canRejectAssignment);
 
-  /*
-    Carrier accepts/rejects once carrier is assigned.
-  */
   const carrierCanRespondToAssignment =
+    !isSoloOrganisation &&
     isCarrierForAssignment &&
     assignment.status === "pending" &&
     Boolean(assignment.managerAcceptedAt) &&
     Boolean(assignment.carrierOrganisationId) &&
     (canAcceptAssignment || canRejectAssignment);
 
-  /*
-    Manager assigns carrier after manager has accepted.
-  */
+  const soloManagerCanOperateWithoutCarrier =
+    isSoloOrganisation &&
+    isManagerForAssignment &&
+    assignment.managerOrganisationId === organisationId &&
+    Boolean(assignment.managerAcceptedAt) &&
+    !assignment.carrierOrganisationId &&
+    assignment.status === "accepted" &&
+    !jobIsClosed;
+
+  const soloManagerCanCompleteJob =
+    soloManagerCanOperateWithoutCarrier && !hasUnresolvedIncident;
+
+  const soloManagerCanReportIncident =
+    soloManagerCanOperateWithoutCarrier && canCreateIncident;
+
   const managerNeedsCarrier =
+    !isSoloOrganisation &&
     isManagerForAssignment &&
     !jobIsClosed &&
     Boolean(assignment.managerAcceptedAt) &&
@@ -531,11 +548,8 @@ export default async function AssignmentDetailPage({
 
   const managerCanAssignCarrier = managerNeedsCarrier && canAssignCarrier;
 
-  /*
-    Carrier verifies collection before collection has been recorded.
-    This is the form that should show on the accepted carrier page.
-  */
   const carrierCanVerifyCollection =
+    !isSoloOrganisation &&
     isCarrierForAssignment &&
     canVerifyCollection &&
     !collectionVerified &&
@@ -544,6 +558,7 @@ export default async function AssignmentDetailPage({
     Boolean(assignment.verificationCode);
 
   const carrierVerifyBlockedByMissingCode =
+    !isSoloOrganisation &&
     isCarrierForAssignment &&
     canVerifyCollection &&
     !collectionVerified &&
@@ -551,22 +566,16 @@ export default async function AssignmentDetailPage({
     assignment.status === "accepted" &&
     !assignment.verificationCode;
 
-  /*
-    Carrier reports incident after collection has been verified.
-    This is the button that should show on the in-progress carrier page.
-  */
   const carrierCanReportIncident =
+    !isSoloOrganisation &&
     isCarrierForAssignment &&
     canCreateIncident &&
     collectionVerified &&
     !jobIsClosed &&
     assignment.status === "in_progress";
 
-  /*
-    Manager confirms receipt after carrier collection verification.
-    This is the form that should show on the in-progress manager page.
-  */
   const managerCanConfirmReceipt =
+    !isSoloOrganisation &&
     isManagerForAssignment &&
     canReceiveWaste &&
     collectionVerified &&
@@ -576,6 +585,7 @@ export default async function AssignmentDetailPage({
     Boolean(assignment.verificationCode);
 
   const managerReceiptBlockedByIncident =
+    !isSoloOrganisation &&
     isManagerForAssignment &&
     canReceiveWaste &&
     collectionVerified &&
@@ -584,6 +594,7 @@ export default async function AssignmentDetailPage({
     hasUnresolvedIncident;
 
   const managerReceiptBlockedByMissingCode =
+    !isSoloOrganisation &&
     isManagerForAssignment &&
     canReceiveWaste &&
     collectionVerified &&
@@ -592,10 +603,14 @@ export default async function AssignmentDetailPage({
     !hasUnresolvedIncident &&
     !assignment.verificationCode;
 
-  const showCompliancePanel = perspective === "compliance" && canViewCompliance;
+  const showCompliancePanel =
+    !soloGeneratorHasHandedOffAssignment &&
+    perspective === "compliance" &&
+    canViewCompliance;
 
   const showDigitalWasteTrackingPanel =
-    canViewReceiving || canViewDwt || canSubmitDwt;
+    !soloGeneratorHasHandedOffAssignment &&
+    (canViewReceiving || canViewDwt || canSubmitDwt);
 
   const showAssignmentActions =
     generatorCanCancelAssignment ||
@@ -603,6 +618,7 @@ export default async function AssignmentDetailPage({
     carrierCanRespondToAssignment;
 
   const showNoActions =
+    !soloGeneratorHasHandedOffAssignment &&
     !showAssignmentActions &&
     !managerNeedsCarrier &&
     !managerCanAssignCarrier &&
@@ -612,36 +628,43 @@ export default async function AssignmentDetailPage({
     !managerReceiptBlockedByIncident &&
     !managerReceiptBlockedByMissingCode &&
     !carrierCanReportIncident &&
+    !soloManagerCanCompleteJob &&
+    !soloManagerCanReportIncident &&
     !showCompliancePanel &&
     !showDigitalWasteTrackingPanel;
 
-  const workflowMessage = getWorkflowMessage({
-    assignment,
-    perspective,
-    collectionVerified,
-    hasUnresolvedIncident,
-  });
+  const workflowMessage = soloGeneratorHasHandedOffAssignment
+    ? "Generator handoff complete. Your solo workspace created the waste record and assigned the manager. The manager or receiving operator is now responsible for collection, receipt, DWT intake and completion."
+    : soloManagerCanOperateWithoutCarrier
+      ? hasUnresolvedIncident
+        ? "This solo-managed assignment has an unresolved incident. Resolve the incident before completing the job or starting the Digital Waste Tracking receive movement."
+        : "You have accepted this marketplace job as the manager. Because this is a solo workspace with carrier capability, you can report an incident or complete the job directly. After completion, Digital Waste Tracking intake will unlock."
+      : getWorkflowMessage({
+          assignment,
+          perspective,
+          collectionVerified,
+          hasUnresolvedIncident,
+        });
 
   const collectionStatus = getCollectionStatus({
     verificationCode: assignment.verificationCode,
     codeGeneratedAt: assignment.codeGeneratedAt,
     codeUsedAt: assignment.codeUsedAt,
     collectedAt: assignment.collectedAt,
+    completedAt: assignment.completedAt,
     status: assignment.status,
   });
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] pl-[24vw] px-12 py-32">
+    <main className="min-h-screen bg-[#f7f3ed] px-12 py-32 pl-[24vw]">
       <div className="space-y-8">
-        {/* BACK */}
         <Link
-          href="/home/operations/assignments/active"
+          href="/home/operations/assignments"
           className="text-sm font-medium text-black/45 transition hover:text-orange-600"
         >
           ← Back to assignments
         </Link>
 
-        {/* HEADER */}
         <section className="rounded-3xl border border-black/10 bg-black p-8 text-white shadow-sm">
           <div className="flex items-start justify-between gap-6">
             <div>
@@ -658,9 +681,16 @@ export default async function AssignmentDetailPage({
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <HeaderPill>Department: {context.department.name}</HeaderPill>
+                <HeaderPill>Workspace: {context.departmentLabel}</HeaderPill>
                 <HeaderPill>Perspective: {formatLabel(perspective)}</HeaderPill>
-                <HeaderPill>Permission: assignment:view</HeaderPill>
+
+                {isSoloOrganisation && (
+                  <HeaderPill>Solo: full workflow access</HeaderPill>
+                )}
+
+                {soloGeneratorHasHandedOffAssignment && (
+                  <HeaderPill>Generator handoff complete</HeaderPill>
+                )}
 
                 {showDigitalWasteTrackingPanel && (
                   <HeaderPill>
@@ -683,14 +713,20 @@ export default async function AssignmentDetailPage({
               </span>
 
               <span
-                className={`rounded-full border px-4 py-2 text-xs font-semibold ${getCollectionStatusClass(
-                  collectionStatus,
-                )}`}
+                className={`rounded-full border px-4 py-2 text-xs font-semibold ${
+                  soloGeneratorHasHandedOffAssignment
+                    ? "border-blue-300 bg-blue-100 text-blue-700"
+                    : getCollectionStatusClass(collectionStatus)
+                }`}
               >
-                {collectionStatus}
+                {soloGeneratorHasHandedOffAssignment
+                  ? "Generator handoff complete"
+                  : isSoloOrganisation && assignment.status === "accepted"
+                    ? "Solo completion available"
+                    : collectionStatus}
               </span>
 
-              {latestDwtSubmission && (
+              {latestDwtSubmission && showDigitalWasteTrackingPanel && (
                 <span
                   className={`rounded-full border px-4 py-2 text-xs font-semibold ${getDwtStatusClass(
                     latestDwtSubmission.status,
@@ -711,17 +747,20 @@ export default async function AssignmentDetailPage({
           <ManagerNeedsCarrierPanel listingId={assignment.listingId} />
         )}
 
-        {/* PERMISSION / ACTION SUMMARY */}
         <section className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-6">
           <PermissionCard
             label="Carrier Hub"
             allowed={managerCanAssignCarrier}
             note={
-              managerNeedsCarrier
-                ? canAssignCarrier
-                  ? "Choose carrier in Carrier Hub"
-                  : "No assign-carrier permission"
-                : "Only needed after manager accepts"
+              soloGeneratorHasHandedOffAssignment
+                ? "Manager responsibility now"
+                : isSoloOrganisation
+                  ? "Skipped in solo workflow"
+                  : managerNeedsCarrier
+                    ? canAssignCarrier
+                      ? "Choose carrier in Carrier Hub"
+                      : "No assign-carrier permission"
+                    : "Only needed after manager accepts"
             }
           />
 
@@ -729,21 +768,29 @@ export default async function AssignmentDetailPage({
             label="Verify Collection"
             allowed={carrierCanVerifyCollection}
             note={
-              carrierVerifyBlockedByMissingCode
-                ? "Collection code missing"
-                : "Carrier only before collection"
+              soloGeneratorHasHandedOffAssignment
+                ? "Manager/carrier responsibility"
+                : isSoloOrganisation
+                  ? "Skipped in solo workflow"
+                  : carrierVerifyBlockedByMissingCode
+                    ? "Collection code missing"
+                    : "Carrier only before collection"
             }
           />
 
           <PermissionCard
-            label="Confirm Receipt"
-            allowed={managerCanConfirmReceipt}
+            label="Complete Job"
+            allowed={soloManagerCanCompleteJob || managerCanConfirmReceipt}
             note={
-              managerReceiptBlockedByIncident
-                ? "Blocked by unresolved incident"
-                : managerReceiptBlockedByMissingCode
-                  ? "Verification code missing"
-                  : "Manager only after collection"
+              soloGeneratorHasHandedOffAssignment
+                ? "Manager/receiver responsibility"
+                : soloManagerCanCompleteJob
+                  ? "Solo manager can complete directly"
+                  : managerReceiptBlockedByIncident
+                    ? "Blocked by unresolved incident"
+                    : managerReceiptBlockedByMissingCode
+                      ? "Verification code missing"
+                      : "Available after collection"
             }
           />
 
@@ -751,13 +798,15 @@ export default async function AssignmentDetailPage({
             label="DWT Intake"
             allowed={showDigitalWasteTrackingPanel && collectionVerified}
             note={
-              !showDigitalWasteTrackingPanel
-                ? "No DWT permission"
-                : !collectionVerified
-                  ? "Available after collection"
-                  : latestDwtSubmission
-                    ? `Latest: ${formatLabel(latestDwtSubmission.status)}`
-                    : "Ready for receive movement"
+              soloGeneratorHasHandedOffAssignment
+                ? "Handled by manager/receiver"
+                : !showDigitalWasteTrackingPanel
+                  ? "No DWT permission"
+                  : !collectionVerified
+                    ? "Available after completion"
+                    : latestDwtSubmission
+                      ? `Latest: ${formatLabel(latestDwtSubmission.status)}`
+                      : "Ready for receive movement"
             }
           />
 
@@ -765,28 +814,33 @@ export default async function AssignmentDetailPage({
             label="Cancel Assignment"
             allowed={generatorCanCancelAssignment}
             note={
-              isGeneratorForAssignment && collectionVerified
-                ? "Locked after collection"
-                : "Generator only before collection"
+              soloGeneratorHasHandedOffAssignment
+                ? "Handoff already complete"
+                : isSoloOrganisation
+                  ? "Solo manager should complete or report incident"
+                  : isGeneratorForAssignment && collectionVerified
+                    ? "Locked after collection"
+                    : "Generator only before collection"
             }
           />
 
           <PermissionCard
             label="Report Incident"
-            allowed={carrierCanReportIncident}
+            allowed={carrierCanReportIncident || soloManagerCanReportIncident}
             note={
-              isCarrierForAssignment && !collectionVerified
-                ? "Available after collection verification"
-                : "Carrier-side issue reporting"
+              soloGeneratorHasHandedOffAssignment
+                ? "Manager/carrier-side only"
+                : soloManagerCanReportIncident
+                  ? "Available before solo completion"
+                  : isCarrierForAssignment && !collectionVerified
+                    ? "Available after collection verification"
+                    : "Carrier-side issue reporting"
             }
           />
         </section>
 
-        {/* GRID */}
         <div className="grid grid-cols-6 gap-8">
-          {/* LEFT */}
           <section className="col-span-4 space-y-8">
-            {/* PARTIES */}
             <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
               <h2 className="text-xl font-semibold text-black">
                 Assignment Parties
@@ -812,15 +866,20 @@ export default async function AssignmentDetailPage({
 
                 <InfoCard
                   label="Carrier"
-                  value={getOrganisationName(
-                    assignment.carrierOrg,
-                    "Not assigned yet",
-                  )}
+                  value={
+                    isSoloOrganisation &&
+                    assignment.managerOrganisationId === organisationId &&
+                    !assignment.carrierOrg
+                      ? "Handled by solo workspace"
+                      : getOrganisationName(
+                          assignment.carrierOrg,
+                          "Not assigned yet",
+                        )
+                  }
                 />
               </div>
             </div>
 
-            {/* ASSIGNMENT INFO */}
             <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
               <h2 className="text-xl font-semibold text-black">
                 Assignment Details
@@ -855,12 +914,20 @@ export default async function AssignmentDetailPage({
 
                 <Detail
                   label="Carrier Assigned At"
-                  value={formatDate(assignment.carrierAssignedAt)}
+                  value={
+                    isSoloOrganisation && !assignment.carrierAssignedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.carrierAssignedAt)
+                  }
                 />
 
                 <Detail
                   label="Carrier Responded At"
-                  value={formatDate(assignment.respondedAt)}
+                  value={
+                    isSoloOrganisation && !assignment.respondedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.respondedAt)
+                  }
                 />
 
                 <Detail
@@ -878,32 +945,65 @@ export default async function AssignmentDetailPage({
                   value={getCollectionCodeDisplay({
                     assignment,
                     perspective,
+                    isSoloOrganisation,
                   })}
                   breakAll={perspective === "generator"}
                 />
 
                 <Detail
                   label="Code Generated At"
-                  value={formatDate(assignment.codeGeneratedAt)}
+                  value={
+                    isSoloOrganisation && !assignment.codeGeneratedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.codeGeneratedAt)
+                  }
                 />
 
                 <Detail
                   label="Code Used At"
-                  value={formatDate(assignment.codeUsedAt)}
+                  value={
+                    isSoloOrganisation && !assignment.codeUsedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.codeUsedAt)
+                  }
                 />
               </div>
 
-              {isGeneratorForAssignment && collectionVerified && (
-                <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-800">
-                  <p className="font-semibold">Cancellation locked</p>
+              {soloGeneratorHasHandedOffAssignment && (
+                <div className="mt-6 rounded-2xl border border-blue-200 bg-blue-50 p-5 text-sm leading-6 text-blue-800">
+                  <p className="font-semibold">Generator handoff complete</p>
                   <p className="mt-1">
-                    The carrier has already verified collection or the job is in
-                    progress. This assignment can no longer be cancelled by the
-                    generator. If something has gone wrong, the carrier should
-                    report an incident.
+                    Your part as the waste generator is complete. The assigned
+                    manager is now responsible for operational movement,
+                    collection/receipt records, DWT intake and completion.
                   </p>
                 </div>
               )}
+
+              {soloManagerCanOperateWithoutCarrier && (
+                <div className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-5 text-sm leading-6 text-green-800">
+                  <p className="font-semibold">Solo workflow ready</p>
+                  <p className="mt-1">
+                    This job has been accepted by your solo workspace. You can
+                    report an incident if something went wrong, or complete the
+                    job directly and move into Digital Waste Tracking.
+                  </p>
+                </div>
+              )}
+
+              {isGeneratorForAssignment &&
+                collectionVerified &&
+                !isSoloOrganisation && (
+                  <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-800">
+                    <p className="font-semibold">Cancellation locked</p>
+                    <p className="mt-1">
+                      The carrier has already verified collection or the job is
+                      in progress. This assignment can no longer be cancelled by
+                      the generator. If something has gone wrong, the carrier
+                      should report an incident.
+                    </p>
+                  </div>
+                )}
 
               {carrierCanVerifyCollection && (
                 <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-800">
@@ -943,8 +1043,8 @@ export default async function AssignmentDetailPage({
                   <p className="font-semibold">Completion blocked</p>
                   <p className="mt-1">
                     This assignment has an unresolved incident. The manager
-                    cannot confirm receipt or complete the job until the incident
-                    has been resolved.
+                    cannot confirm receipt or complete the job until the
+                    incident has been resolved.
                   </p>
                 </div>
               )}
@@ -960,7 +1060,6 @@ export default async function AssignmentDetailPage({
               )}
             </div>
 
-            {/* DIGITAL WASTE TRACKING SUMMARY */}
             {showDigitalWasteTrackingPanel && (
               <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -1017,8 +1116,8 @@ export default async function AssignmentDetailPage({
                   <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-800">
                     <p className="font-semibold">DWT intake not ready</p>
                     <p className="mt-1">
-                      The carrier must verify collection before the receive
-                      movement can be submitted.
+                      Complete the job before the receive movement can be
+                      submitted.
                     </p>
                   </div>
                 )}
@@ -1055,7 +1154,6 @@ export default async function AssignmentDetailPage({
               </div>
             )}
 
-            {/* OPERATIONAL TIMELINE */}
             <div className="rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
               <h2 className="text-xl font-semibold text-black">
                 Operational Timeline
@@ -1080,35 +1178,76 @@ export default async function AssignmentDetailPage({
                 />
 
                 <TimelineItem
-                  title="Carrier Assigned"
-                  date={formatDate(assignment.carrierAssignedAt)}
-                  active={Boolean(assignment.carrierAssignedAt)}
-                />
-
-                <TimelineItem
-                  title="Carrier Response"
-                  date={formatDate(assignment.respondedAt)}
-                  active={Boolean(assignment.respondedAt)}
-                />
-
-                <TimelineItem
-                  title="Verification Code Generated"
-                  date={formatDate(assignment.codeGeneratedAt)}
-                  active={Boolean(assignment.codeGeneratedAt)}
-                />
-
-                <TimelineItem
-                  title="Carrier Verified Collection"
-                  date={formatDate(assignment.collectedAt)}
+                  title={
+                    isSoloOrganisation && isManagerForAssignment
+                      ? "Carrier Assignment Skipped"
+                      : "Carrier Assigned"
+                  }
+                  date={
+                    isSoloOrganisation &&
+                    isManagerForAssignment &&
+                    !assignment.carrierAssignedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.carrierAssignedAt)
+                  }
                   active={Boolean(
-                    assignment.collectedAt || assignment.codeUsedAt,
+                    assignment.carrierAssignedAt ||
+                      (isSoloOrganisation && isManagerForAssignment),
                   )}
                 />
 
                 <TimelineItem
-                  title="Verification Code Used"
-                  date={formatDate(assignment.codeUsedAt)}
-                  active={Boolean(assignment.codeUsedAt)}
+                  title={
+                    isSoloOrganisation && isManagerForAssignment
+                      ? "Carrier Response Skipped"
+                      : "Carrier Response"
+                  }
+                  date={
+                    isSoloOrganisation &&
+                    isManagerForAssignment &&
+                    !assignment.respondedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.respondedAt)
+                  }
+                  active={Boolean(
+                    assignment.respondedAt ||
+                      (isSoloOrganisation && isManagerForAssignment),
+                  )}
+                />
+
+                <TimelineItem
+                  title={
+                    isSoloOrganisation && isManagerForAssignment
+                      ? "Verification Code Skipped"
+                      : "Verification Code Generated"
+                  }
+                  date={
+                    isSoloOrganisation &&
+                    isManagerForAssignment &&
+                    !assignment.codeGeneratedAt
+                      ? "Not required for solo workflow"
+                      : formatDate(assignment.codeGeneratedAt)
+                  }
+                  active={Boolean(
+                    assignment.codeGeneratedAt ||
+                      (isSoloOrganisation && isManagerForAssignment),
+                  )}
+                />
+
+                <TimelineItem
+                  title={
+                    isSoloOrganisation && isManagerForAssignment
+                      ? "Solo Job Completed"
+                      : "Carrier Verified Collection"
+                  }
+                  date={formatDate(
+                    assignment.collectedAt ?? assignment.completedAt,
+                  )}
+                  active={Boolean(
+                    assignment.collectedAt ||
+                      assignment.codeUsedAt ||
+                      assignment.completedAt,
+                  )}
                 />
 
                 <TimelineItem
@@ -1126,7 +1265,6 @@ export default async function AssignmentDetailPage({
             </div>
           </section>
 
-          {/* RIGHT */}
           <aside className="col-span-2 space-y-6">
             {showAssignmentActions && (
               <AssignmentActions
@@ -1138,6 +1276,82 @@ export default async function AssignmentDetailPage({
                 carrierOrganisationId={assignment.carrierOrganisationId}
                 viewerOrganisationId={organisationId}
               />
+            )}
+
+            {soloGeneratorHasHandedOffAssignment && (
+              <div className="rounded-3xl border border-blue-200 bg-blue-50 p-6 text-sm text-blue-800 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-blue-700">
+                  Generator handoff
+                </p>
+
+                <h3 className="mt-3 text-lg font-semibold text-black">
+                  Your part is complete
+                </h3>
+
+                <p className="mt-2 leading-6">
+                  You created the waste record and handed it to the assigned
+                  manager. Collection, receipt, DWT intake and completion now
+                  sit with the manager or receiving operator.
+                </p>
+
+                <Link
+                  href="/home/operations/listings"
+                  className="mt-5 block rounded-2xl bg-black p-4 text-center font-semibold text-orange-400 transition hover:bg-orange-500 hover:text-black"
+                >
+                  Back to My Waste Listings →
+                </Link>
+              </div>
+            )}
+
+            {soloManagerCanOperateWithoutCarrier && (
+              <div className="space-y-4">
+                <div className="rounded-3xl border border-orange-200 bg-orange-50 p-6 text-sm shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-orange-700">
+                    Incident option
+                  </p>
+
+                  <h3 className="mt-3 text-lg font-semibold text-black">
+                    Report an issue before completion
+                  </h3>
+
+                  <p className="mt-2 leading-6 text-orange-900/75">
+                    If there was contamination, missing paperwork, an access
+                    issue, damaged load, safety concern or another operational
+                    problem, report an incident before completing this job.
+                  </p>
+
+                  <div className="mt-5">
+                    {soloManagerCanReportIncident ? (
+                      <AssignmentIncidentModal
+                        assignment={{
+                          assignmentId: assignment.id,
+                          listingId: assignment.listingId,
+                          listingName:
+                            assignment.listing?.name ?? "Assignment",
+                          assignedAt: assignment.assignedAt,
+                        }}
+                        hasIncident={assignment.hasIncident}
+                      />
+                    ) : (
+                      <p className="rounded-2xl border border-orange-200 bg-white p-4 text-sm text-orange-900/75">
+                        You do not currently have permission to report incidents.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {soloManagerCanCompleteJob ? (
+                  <SoloManagerCompletionPanel assignmentId={assignment.id} />
+                ) : (
+                  <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-800 shadow-sm">
+                    <p className="font-semibold">Completion blocked</p>
+                    <p className="mt-2 leading-6">
+                      Resolve the linked incident before completing this
+                      solo-managed job.
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
 
             {managerNeedsCarrier && (
@@ -1202,7 +1416,7 @@ export default async function AssignmentDetailPage({
               <AssignmentCompliancePanel assignment={assignment} />
             )}
 
-            {carrierCanReportIncident && (
+            {carrierCanReportIncident && !soloManagerCanReportIncident && (
               <AssignmentIncidentModal
                 assignment={{
                   assignmentId: assignment.id,
@@ -1221,14 +1435,13 @@ export default async function AssignmentDetailPage({
                 </p>
 
                 <p className="mt-2 leading-6">
-                  Your active department can view this assignment, but there are
+                  Your active workspace can view this assignment, but there are
                   no operational actions available for the current status and
                   permission context.
                 </p>
               </div>
             )}
 
-            {/* QUICK LINKS */}
             <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
               <p className="text-xs uppercase tracking-[0.25em] text-orange-600">
                 Related Records
@@ -1251,7 +1464,7 @@ export default async function AssignmentDetailPage({
                   </Link>
                 )}
 
-                {canViewReceiving && (
+                {canViewReceiving && !soloGeneratorHasHandedOffAssignment && (
                   <Link
                     href={`/home/receiving/intake/${assignment.id}`}
                     className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
@@ -1260,16 +1473,17 @@ export default async function AssignmentDetailPage({
                   </Link>
                 )}
 
-                {(canViewDwt || canSubmitDwt || canViewReceiving) && (
-                  <Link
-                    href="/home/receiving/submissions"
-                    className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
-                  >
-                    DWT Submissions →
-                  </Link>
-                )}
+                {(canViewDwt || canSubmitDwt || canViewReceiving) &&
+                  !soloGeneratorHasHandedOffAssignment && (
+                    <Link
+                      href="/home/receiving/submissions"
+                      className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
+                    >
+                      DWT Submissions →
+                    </Link>
+                  )}
 
-                {canViewDwt && (
+                {canViewDwt && !soloGeneratorHasHandedOffAssignment && (
                   <Link
                     href="/home/compliance/digital-waste-tracking"
                     className="block rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 text-sm font-semibold text-black transition hover:border-orange-300 hover:text-orange-600"
@@ -1322,7 +1536,7 @@ function CarrierHubSidebarPanel({
       </h3>
 
       <p className="mt-2 leading-6 text-orange-900/75">
-        Carrier assignment now happens in the Carrier Hub so managers can review
+        Carrier assignment happens in the Carrier Hub so managers can review
         workload, incident risk, contact details and carrier suitability before
         choosing who gets the job.
       </p>
@@ -1339,7 +1553,7 @@ function CarrierHubSidebarPanel({
           <div className="rounded-2xl border border-orange-200 bg-white p-4 text-sm leading-6 text-orange-900/75">
             <p className="font-semibold text-black">Permission required</p>
             <p className="mt-1">
-              Your active department can view this assignment, but it does not
+              Your active workspace can view this assignment, but it does not
               currently have permission to assign the carrier.
             </p>
           </div>
@@ -1375,9 +1589,8 @@ function ManagerNeedsCarrierPanel({
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-orange-900/75">
             This job has been accepted, but it cannot move into collection until
-            a carrier is selected. Carrier assignment now happens in the Carrier
-            Hub so you can compare the available carriers properly before
-            choosing one.
+            a carrier is selected. Carrier assignment happens in the Carrier Hub
+            so you can compare available carriers before choosing one.
           </p>
         </div>
 
@@ -1394,7 +1607,7 @@ function ManagerNeedsCarrierPanel({
   );
 }
 
-function HeaderPill({ children }: { children: React.ReactNode }) {
+function HeaderPill({ children }: { children: ReactNode }) {
   return (
     <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70">
       {children}
@@ -1543,10 +1756,9 @@ function DigitalWasteTrackingSidebarPanel({
 
       {!collectionVerified && (
         <div className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-orange-800">
-          <p className="font-semibold">Waiting for collection</p>
+          <p className="font-semibold">Waiting for completion</p>
           <p className="mt-1 leading-6">
-            DWT receive movement submission unlocks after collection is
-            verified.
+            DWT receive movement submission unlocks after the job is completed.
           </p>
         </div>
       )}

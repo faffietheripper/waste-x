@@ -95,7 +95,7 @@ export default async function CreateTemplatePage({
 
           <div className="mt-6 flex flex-wrap gap-3">
             <HeaderPill>Organisation: {context.organisation.teamName}</HeaderPill>
-            <HeaderPill>Department: {context.department.name}</HeaderPill>
+            <HeaderPill>Department: {context.departmentLabel}</HeaderPill>
             <HeaderPill>Permission: template:create</HeaderPill>
           </div>
         </section>
