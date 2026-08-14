@@ -1,8 +1,11 @@
+// src/modules/auth/core/requireOperationalPermission.ts
+
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
+
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
 
 import {
   type Capability,
@@ -19,11 +22,19 @@ type OperationalDepartmentContext = {
   isSyntheticSoloDepartment: boolean;
 };
 
+type OperationalUser = typeof users.$inferSelect & {
+  organisation: any;
+  department:
+    | {
+        id: string;
+        name: string;
+        type: string;
+      }
+    | null;
+};
+
 type OperationalPermissionContext = {
-  user: typeof users.$inferSelect & {
-    organisation: any;
-    department: any;
-  };
+  user: OperationalUser;
   organisation: any;
   department: OperationalDepartmentContext;
   departmentLabel: string;
@@ -32,6 +43,14 @@ type OperationalPermissionContext = {
   storedDepartmentType: DepartmentType | null;
   isSoloOrganisation: boolean;
 };
+
+/* =========================================================
+   SOLO HELPERS
+========================================================= */
+
+function isSoloOperatingMode(value: unknown) {
+  return String(value ?? "").toLowerCase() === "solo";
+}
 
 function getSoloEffectiveCapabilities(capabilities: Capability[]) {
   const next = new Set<Capability>(capabilities);
@@ -43,14 +62,33 @@ function getSoloEffectiveCapabilities(capabilities: Capability[]) {
   return Array.from(next);
 }
 
-function formatDepartmentName(type: DepartmentType) {
-  if (type === "generator") return "Solo Generator Workspace";
-  if (type === "carrier") return "Solo Carrier Workspace";
-  if (type === "manager") return "Solo Manager Workspace";
-  if (type === "compliance") return "Solo Compliance Workspace";
+function getSoloDepartmentTypeForPermission(permission: Permission) {
+  /*
+    HARD SOLO BYPASS
 
-  return "Solo Workspace";
+    Solo mode must not trust user.departmentId or user.department.type.
+
+    Even if the database says the user is in Compliance, solo workflow should
+    behave as a full single-operator workspace.
+
+    Access is driven by:
+    - organisation.operatingMode = "solo"
+    - effective capabilities = generator + carrier + manager
+    - the permission being requested
+  */
+
+  return (
+    getEffectiveDepartmentTypeForPermission({
+      operatingMode: "solo",
+      departmentType: "generator",
+      permission,
+    }) ?? "generator"
+  );
 }
+
+/* =========================================================
+   REQUIRE OPERATIONAL PERMISSION
+========================================================= */
 
 export async function requireOperationalPermission(
   permission: Permission,
@@ -61,23 +99,32 @@ export async function requireOperationalPermission(
     redirect("/login");
   }
 
-  const user = await database.query.users.findFirst({
+  const user = (await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
     with: {
       organisation: true,
       department: true,
     },
-  });
+  })) as OperationalUser | undefined;
 
   if (!user?.organisationId || !user.organisation) {
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  const isSoloOrganisation = user.organisation.operatingMode === "solo";
+  const isSoloOrganisation = isSoloOperatingMode(user.organisation.operatingMode);
 
+  /*
+    Team organisations still require a real department.
+    Solo organisations do not. They get a synthetic solo workspace below.
+  */
   if (!user.department && !isSoloOrganisation) {
     redirect("/home/settings/departments?reason=no-active-department");
   }
+
+  const storedDepartment = user.department;
+
+  const storedDepartmentType =
+    (storedDepartment?.type as DepartmentType | undefined) ?? null;
 
   const storedCapabilities =
     (user.organisation.capabilities as Capability[] | null) ?? [];
@@ -86,22 +133,26 @@ export async function requireOperationalPermission(
     ? getSoloEffectiveCapabilities(storedCapabilities)
     : storedCapabilities;
 
-  const storedDepartmentType =
-    (user.department?.type as DepartmentType | undefined) ?? null;
-
-  const departmentType = getEffectiveDepartmentTypeForPermission({
-    operatingMode: user.organisation.operatingMode,
-    departmentType: storedDepartmentType,
-    permission,
-  });
+  const departmentType = isSoloOrganisation
+    ? getSoloDepartmentTypeForPermission(permission)
+    : getEffectiveDepartmentTypeForPermission({
+        operatingMode: user.organisation.operatingMode,
+        departmentType: storedDepartmentType,
+        permission,
+      });
 
   if (!departmentType) {
     redirect("/home/settings/departments?reason=no-active-department");
   }
 
+  /*
+    Important:
+    For solo mode, pass EFFECTIVE capabilities and EFFECTIVE department type.
+    Do not pass storedDepartmentType, because it may still be "compliance".
+  */
   const allowed = hasOperationalPermissionForOrganisation({
-    capabilities: storedCapabilities,
-    departmentType: storedDepartmentType,
+    capabilities,
+    departmentType,
     permission,
     operatingMode: user.organisation.operatingMode,
   });
@@ -110,19 +161,26 @@ export async function requireOperationalPermission(
     redirect("/home?reason=unauthorised");
   }
 
-  const department: OperationalDepartmentContext = user.department
+  const department: OperationalDepartmentContext = isSoloOrganisation
     ? {
-        id: user.department.id,
-        name: user.department.name,
-        type: user.department.type as DepartmentType,
-        isSyntheticSoloDepartment: false,
-      }
-    : {
         id: "solo-workspace",
-        name: formatDepartmentName(departmentType),
+        name: "Solo Workspace",
         type: departmentType,
         isSyntheticSoloDepartment: true,
-      };
+      }
+    : storedDepartment
+      ? {
+          id: storedDepartment.id,
+          name: storedDepartment.name,
+          type: storedDepartment.type as DepartmentType,
+          isSyntheticSoloDepartment: false,
+        }
+      : {
+          id: "missing-department",
+          name: "Missing Department",
+          type: departmentType,
+          isSyntheticSoloDepartment: true,
+        };
 
   return {
     user,

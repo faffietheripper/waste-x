@@ -1,3 +1,5 @@
+// src/app/admin/organisations/actions.ts
+
 "use server";
 
 import crypto from "crypto";
@@ -24,6 +26,14 @@ type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
 type Capability = "generator" | "carrier" | "manager";
 
 const SOLO_CAPABILITIES: Capability[] = ["generator", "carrier", "manager"];
+
+/* =========================================
+   HELPERS
+========================================= */
+
+function isSoloOperatingMode(value: unknown) {
+  return String(value ?? "").toLowerCase() === "solo";
+}
 
 /* =========================================
    GET ALL ORGANISATIONS (WITH SEARCH)
@@ -207,18 +217,56 @@ async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
 }
 
 /* =========================================
-   ASSIGN FIRST ADMIN TO DEFAULT DEPARTMENT
+   SOLO USER ASSIGNMENT
 ========================================= */
 
-async function assignFirstAdminToDefaultDepartment({
+async function assignSoloUsersToGeneratorDepartment({
   orgId,
-  defaultDepartmentId,
-  forceForSolo,
+  generatorDepartmentId,
 }: {
   orgId: string;
-  defaultDepartmentId: string;
-  forceForSolo: boolean;
+  generatorDepartmentId: string;
 }) {
+  /*
+    Solo workspace rule:
+
+    Store solo users in Generator Operations.
+
+    Their solo workflow access does not come from the stored department alone.
+    It comes from:
+    - organisation.operatingMode = "solo"
+    - organisation.capabilities = generator + carrier + manager
+    - solo-aware permission helpers/nav
+
+    This prevents solo admins landing in Compliance after approval.
+  */
+
+  await database
+    .update(users)
+    .set({
+      departmentId: generatorDepartmentId,
+    })
+    .where(eq(users.organisationId, orgId));
+}
+
+/* =========================================
+   TEAM USER ASSIGNMENT
+========================================= */
+
+async function assignFirstTeamAdminToComplianceDepartment({
+  orgId,
+  complianceDepartmentId,
+}: {
+  orgId: string;
+  complianceDepartmentId: string;
+}) {
+  /*
+    Team workspace rule:
+
+    First admin/senior manager starts in Compliance by default.
+    Do not override an existing department for team organisations.
+  */
+
   const firstAdmin = await database.query.users.findFirst({
     where: and(
       eq(users.organisationId, orgId),
@@ -228,21 +276,12 @@ async function assignFirstAdminToDefaultDepartment({
 
   if (!firstAdmin) return;
 
-  /*
-    Team orgs:
-    - do not override existing department.
-
-    Solo orgs:
-    - force first admin into Generator so they can immediately create waste records.
-  */
-  if (firstAdmin.departmentId && !forceForSolo) return;
-
-  if (firstAdmin.departmentId === defaultDepartmentId) return;
+  if (firstAdmin.departmentId) return;
 
   await database
     .update(users)
     .set({
-      departmentId: defaultDepartmentId,
+      departmentId: complianceDepartmentId,
     })
     .where(eq(users.id, firstAdmin.id));
 }
@@ -269,13 +308,15 @@ export async function approveOrganisation(formData: FormData) {
     throw new Error("Organisation not found");
   }
 
-  const isSoloOrganisation = organisation.operatingMode === "solo";
+  const isSoloOrganisation = isSoloOperatingMode(organisation.operatingMode);
 
   const currentCapabilities =
     (organisation.capabilities as Capability[] | null) ?? [];
 
   const approvedCapabilities = isSoloOrganisation
-    ? Array.from(new Set<Capability>([...currentCapabilities, ...SOLO_CAPABILITIES]))
+    ? Array.from(
+        new Set<Capability>([...currentCapabilities, ...SOLO_CAPABILITIES]),
+      )
     : currentCapabilities;
 
   await database
@@ -287,20 +328,20 @@ export async function approveOrganisation(formData: FormData) {
     })
     .where(eq(organisations.id, orgId));
 
-  const {
-    generatorDepartmentId,
-    complianceDepartmentId,
-  } = await ensureDefaultDepartmentsForOrganisation(orgId);
+  const { generatorDepartmentId, complianceDepartmentId } =
+    await ensureDefaultDepartmentsForOrganisation(orgId);
 
-  const defaultAdminDepartmentId = isSoloOrganisation
-    ? generatorDepartmentId
-    : complianceDepartmentId;
-
-  await assignFirstAdminToDefaultDepartment({
-    orgId,
-    defaultDepartmentId: defaultAdminDepartmentId,
-    forceForSolo: isSoloOrganisation,
-  });
+  if (isSoloOrganisation) {
+    await assignSoloUsersToGeneratorDepartment({
+      orgId,
+      generatorDepartmentId,
+    });
+  } else {
+    await assignFirstTeamAdminToComplianceDepartment({
+      orgId,
+      complianceDepartmentId,
+    });
+  }
 
   /*
     Site model safety check.

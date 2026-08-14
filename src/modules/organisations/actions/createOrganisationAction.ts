@@ -1,78 +1,101 @@
 "use server";
 
-import { redirect } from "next/navigation";
-
 import { auth } from "@/auth";
+import { database } from "@/db/database";
+import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
+
 import { createOrganisation } from "../core/createOrganisation";
-import { getOrganisationByUser } from "../queries/getOrganisation";
 import { organisationSchema } from "../validators/organisationSchema";
 
-import { withErrorHandling } from "@/lib/errors/withErrorHandling";
-import { ERROR_CODES } from "@/lib/errors/errorCodes";
+function readRequiredString(formData: FormData, key: string) {
+  const value = formData.get(key);
 
-export const fetchOrganisationAction = withErrorHandling(
-  async () => {
-    const session = await auth();
+  if (typeof value !== "string") return "";
 
-    if (!session?.user?.id) {
-      throw new Error("UNAUTHORIZED");
-    }
+  return value.trim();
+}
 
-    return getOrganisationByUser(session.user.id);
-  },
-  {
-    actionName: "fetchOrganisation",
-    code: ERROR_CODES.SYSTEM_UNEXPECTED,
-    severity: "low",
-  },
-);
+function readOptionalString(formData: FormData, key: string) {
+  const value = formData.get(key);
 
-export const createOrganisationAction = withErrorHandling(
-  async (formData: FormData) => {
-    const session = await auth();
+  if (typeof value !== "string") return null;
 
-    if (!session?.user?.id) {
-      throw new Error("UNAUTHORIZED");
-    }
+  const trimmed = value.trim();
 
-    const parsed = organisationSchema.safeParse({
-      teamName: formData.get("teamName"),
-      industry: formData.get("industry"),
+  return trimmed.length > 0 ? trimmed : null;
+}
 
-      telephone: formData.get("telephone"),
-      emailAddress: formData.get("emailAddress"),
+function readCapabilities(formData: FormData) {
+  return formData
+    .getAll("capabilities")
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+}
 
-      streetAddress: formData.get("streetAddress"),
-      city: formData.get("city"),
-      region: formData.get("region"),
-      postCode: formData.get("postCode"),
-      country: formData.get("country"),
+export async function createOrganisationAction(formData: FormData) {
+  const session = await auth();
 
-      profilePicture: formData.get("profilePicture") || null,
+  if (!session?.user?.id) {
+    throw new Error("UNAUTHORIZED");
+  }
 
-      capabilities: formData.getAll("capabilities"),
-    });
+  const operatingMode =
+    readOptionalString(formData, "operatingMode") ?? "team";
 
-    if (!parsed.success) {
-      throw new Error("INVALID_INPUT");
-    }
+  const capabilities = readCapabilities(formData);
 
-    const result = await createOrganisation({
-      userId: session.user.id,
-      data: parsed.data,
-    });
+  /*
+    Demo/debug safety:
+    If this logs "solo", the form is fine.
+    If this logs "team" after you clicked solo, the frontend did not send solo.
+  */
+  console.log("CREATE ORG ACTION operatingMode:", operatingMode);
+  console.log("CREATE ORG ACTION capabilities:", capabilities);
 
-    if (result.organisationId) {
-      redirect("/onboarding/pending");
-    }
+  const parsed = organisationSchema.safeParse({
+    teamName: readRequiredString(formData, "teamName"),
+    industry: readRequiredString(formData, "industry"),
 
-    return {
-      success: true,
-    };
-  },
-  {
-    actionName: "createOrganisation",
-    code: ERROR_CODES.SYSTEM_UNEXPECTED,
-    severity: "high",
-  },
-);
+    telephone: readRequiredString(formData, "telephone"),
+    emailAddress: readRequiredString(formData, "emailAddress"),
+
+    streetAddress: readRequiredString(formData, "streetAddress"),
+    city: readRequiredString(formData, "city"),
+    region: readRequiredString(formData, "region"),
+    postCode: readRequiredString(formData, "postCode"),
+    country: readRequiredString(formData, "country"),
+
+    profilePicture: readOptionalString(formData, "profilePicture"),
+
+    operatingMode,
+    capabilities,
+  });
+
+  if (!parsed.success) {
+    console.error("CREATE ORG VALIDATION ERROR:", parsed.error.flatten());
+    throw new Error("INVALID_INPUT");
+  }
+
+  return createOrganisation({
+    userId: session.user.id,
+    data: parsed.data,
+  });
+}
+
+export async function fetchOrganisationAction() {
+  const session = await auth();
+
+  if (!session?.user?.id) {
+    return null;
+  }
+
+  const currentUser = await database.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+    with: {
+      organisation: true,
+    },
+  });
+
+  return currentUser?.organisation ?? null;
+}
