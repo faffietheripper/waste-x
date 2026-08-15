@@ -5,7 +5,11 @@ import { eq } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users } from "@/db/schema";
+import {
+  departments,
+  organisations,
+  users,
+} from "@/db/schema";
 
 import {
   type Capability,
@@ -15,6 +19,25 @@ import {
   hasOperationalPermissionForOrganisation,
 } from "./permissions";
 
+import {
+  getEffectiveOrganisationCapabilities,
+  getOrganisationOperatingMode,
+} from "@/modules/organisations/core/operatingModes";
+
+/* =========================================================
+   TYPES
+========================================================= */
+
+type StoredDepartment = Pick<
+  typeof departments.$inferSelect,
+  "id" | "name" | "type"
+>;
+
+type OperationalUser = typeof users.$inferSelect & {
+  organisation: typeof organisations.$inferSelect | null;
+  department: StoredDepartment | null;
+};
+
 type OperationalDepartmentContext = {
   id: string;
   name: string;
@@ -22,69 +45,20 @@ type OperationalDepartmentContext = {
   isSyntheticSoloDepartment: boolean;
 };
 
-type OperationalUser = typeof users.$inferSelect & {
-  organisation: any;
-  department:
-    | {
-        id: string;
-        name: string;
-        type: string;
-      }
-    | null;
-};
-
 type OperationalPermissionContext = {
   user: OperationalUser;
-  organisation: any;
+  organisation: typeof organisations.$inferSelect;
+
   department: OperationalDepartmentContext;
   departmentLabel: string;
+
   capabilities: Capability[];
+
   departmentType: DepartmentType;
   storedDepartmentType: DepartmentType | null;
+
   isSoloOrganisation: boolean;
 };
-
-/* =========================================================
-   SOLO HELPERS
-========================================================= */
-
-function isSoloOperatingMode(value: unknown) {
-  return String(value ?? "").toLowerCase() === "solo";
-}
-
-function getSoloEffectiveCapabilities(capabilities: Capability[]) {
-  const next = new Set<Capability>(capabilities);
-
-  next.add("generator");
-  next.add("carrier");
-  next.add("manager");
-
-  return Array.from(next);
-}
-
-function getSoloDepartmentTypeForPermission(permission: Permission) {
-  /*
-    HARD SOLO BYPASS
-
-    Solo mode must not trust user.departmentId or user.department.type.
-
-    Even if the database says the user is in Compliance, solo workflow should
-    behave as a full single-operator workspace.
-
-    Access is driven by:
-    - organisation.operatingMode = "solo"
-    - effective capabilities = generator + carrier + manager
-    - the permission being requested
-  */
-
-  return (
-    getEffectiveDepartmentTypeForPermission({
-      operatingMode: "solo",
-      departmentType: "generator",
-      permission,
-    }) ?? "generator"
-  );
-}
 
 /* =========================================================
    REQUIRE OPERATIONAL PERMISSION
@@ -99,8 +73,13 @@ export async function requireOperationalPermission(
     redirect("/login");
   }
 
+  /* =========================================================
+     LOAD USER CONTEXT
+  ========================================================= */
+
   const user = (await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
+
     with: {
       organisation: true,
       department: true,
@@ -111,85 +90,184 @@ export async function requireOperationalPermission(
     redirect("/home/settings/organisation?reason=no-organisation");
   }
 
-  const isSoloOrganisation = isSoloOperatingMode(user.organisation.operatingMode);
+  const organisation = user.organisation;
+
+  /* =========================================================
+     EFFECTIVE OPERATING MODE
+
+     IMPORTANT:
+
+     Do not directly trust:
+
+       organisation.operatingMode
+
+     here.
+
+     The MVP product switch inside operatingModes.ts can force
+     the current product experience into Solo Workspace even
+     when an older database row still contains "team".
+
+     This keeps the active product behaviour in one place.
+  ========================================================= */
+
+  const effectiveOperatingMode =
+    getOrganisationOperatingMode(organisation);
+
+  const isSoloOrganisation =
+    effectiveOperatingMode === "solo";
+
+  /* =========================================================
+     DEPARTMENT REQUIREMENT
+  ========================================================= */
 
   /*
-    Team organisations still require a real department.
-    Solo organisations do not. They get a synthetic solo workspace below.
+    Legacy/team/network workspaces still need a real department.
+
+    Solo Workspace does not.
+
+    Solo gets a synthetic operational department later based on
+    the permission being requested.
   */
+
   if (!user.department && !isSoloOrganisation) {
-    redirect("/home/settings/departments?reason=no-active-department");
+    redirect(
+      "/home/settings/departments?reason=no-active-department",
+    );
   }
 
   const storedDepartment = user.department;
 
   const storedDepartmentType =
-    (storedDepartment?.type as DepartmentType | undefined) ?? null;
+    (storedDepartment?.type as DepartmentType | undefined) ??
+    null;
+
+  /* =========================================================
+     CAPABILITIES
+  ========================================================= */
 
   const storedCapabilities =
-    (user.organisation.capabilities as Capability[] | null) ?? [];
-
-  const capabilities = isSoloOrganisation
-    ? getSoloEffectiveCapabilities(storedCapabilities)
-    : storedCapabilities;
-
-  const departmentType = isSoloOrganisation
-    ? getSoloDepartmentTypeForPermission(permission)
-    : getEffectiveDepartmentTypeForPermission({
-        operatingMode: user.organisation.operatingMode,
-        departmentType: storedDepartmentType,
-        permission,
-      });
-
-  if (!departmentType) {
-    redirect("/home/settings/departments?reason=no-active-department");
-  }
+    (organisation.capabilities as Capability[] | null) ?? [];
 
   /*
-    Important:
-    For solo mode, pass EFFECTIVE capabilities and EFFECTIVE department type.
-    Do not pass storedDepartmentType, because it may still be "compliance".
+    Solo Workspace still uses the old generator/carrier/manager
+    capability system internally as a compatibility bridge.
+
+    This does NOT mean those workspaces are visible in the MVP.
+
+    It simply allows old permission-protected DWT / receiving /
+    marketplace code to continue functioning while we rebuild the
+    new Solo-native modules.
   */
-  const allowed = hasOperationalPermissionForOrganisation({
-    capabilities,
-    departmentType,
-    permission,
-    operatingMode: user.organisation.operatingMode,
-  });
+
+  const capabilities = isSoloOrganisation
+    ? (getEffectiveOrganisationCapabilities(
+        organisation,
+      ) as Capability[])
+    : storedCapabilities;
+
+  /* =========================================================
+     EFFECTIVE DEPARTMENT
+  ========================================================= */
+
+  const departmentType =
+    getEffectiveDepartmentTypeForPermission({
+      operatingMode: effectiveOperatingMode,
+      departmentType: storedDepartmentType,
+      permission,
+    });
+
+  if (!departmentType) {
+    redirect(
+      "/home/settings/departments?reason=no-active-department",
+    );
+  }
+
+  /* =========================================================
+     FINAL PERMISSION CHECK
+  ========================================================= */
+
+  /*
+    Critical:
+
+    Pass effectiveOperatingMode rather than the raw DB value.
+
+    Example:
+
+      DB:
+        operatingMode = "team"
+
+      Waste X MVP:
+        SOLO_WORKSPACE_MVP = true
+
+      effectiveOperatingMode:
+        "solo"
+
+    Without this, the Solo compatibility bridge would still be
+    evaluated as a Team organisation inside permissions.ts.
+  */
+
+  const allowed =
+    hasOperationalPermissionForOrganisation({
+      capabilities,
+      departmentType,
+      permission,
+      operatingMode: effectiveOperatingMode,
+    });
 
   if (!allowed) {
     redirect("/home?reason=unauthorised");
   }
 
-  const department: OperationalDepartmentContext = isSoloOrganisation
-    ? {
-        id: "solo-workspace",
-        name: "Solo Workspace",
-        type: departmentType,
-        isSyntheticSoloDepartment: true,
-      }
-    : storedDepartment
+  /* =========================================================
+     OPERATIONAL DEPARTMENT CONTEXT
+  ========================================================= */
+
+  const department: OperationalDepartmentContext =
+    isSoloOrganisation
       ? {
-          id: storedDepartment.id,
-          name: storedDepartment.name,
-          type: storedDepartment.type as DepartmentType,
-          isSyntheticSoloDepartment: false,
-        }
-      : {
-          id: "missing-department",
-          name: "Missing Department",
+          id: "solo-workspace",
+          name: "Solo Workspace",
           type: departmentType,
           isSyntheticSoloDepartment: true,
-        };
+        }
+      : storedDepartment
+        ? {
+            id: storedDepartment.id,
+            name: storedDepartment.name,
+            type: storedDepartment.type as DepartmentType,
+            isSyntheticSoloDepartment: false,
+          }
+        : {
+            /*
+              Defensive fallback.
+
+              We should never normally reach this branch because
+              non-Solo workspaces without a department are redirected
+              above.
+            */
+            id: "missing-department",
+            name: "Missing Department",
+            type: departmentType,
+            isSyntheticSoloDepartment: true,
+          };
+
+  /* =========================================================
+     RETURN CONTEXT
+  ========================================================= */
 
   return {
     user,
-    organisation: user.organisation,
+
+    organisation,
+
     department,
     departmentLabel: department.name,
+
     capabilities,
+
     departmentType,
     storedDepartmentType,
+
     isSoloOrganisation,
   };
 }

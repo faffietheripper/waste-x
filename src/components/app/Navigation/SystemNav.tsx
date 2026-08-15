@@ -1,18 +1,20 @@
+// src/components/app/Navigation/SystemNav.tsx
+
+import { and, eq } from "drizzle-orm";
+import Image from "next/image";
+import Link from "next/link";
+
 import { auth } from "@/auth";
 import { database } from "@/db/database";
+
 import {
   notifications,
   supportTickets,
   users,
   type OrganisationOperatingMode,
 } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
-import Image from "next/image";
-import Link from "next/link";
 
 import { getProfileByUserId } from "@/data-access/profiles";
-import SignOutButton from "../SignOutButton";
-import SiteSwitcher from "./SiteSwitcher";
 
 import {
   type Capability,
@@ -38,6 +40,9 @@ import {
   type OrganisationCapability,
 } from "@/modules/organisations/core/operatingModes";
 
+import SignOutButton from "../SignOutButton";
+import SiteSwitcher from "./SiteSwitcher";
+
 /* =========================================================
    TYPES
 ========================================================= */
@@ -46,6 +51,7 @@ type NavItem = {
   label: string;
   href: string;
   show?: boolean;
+  variant?: "default" | "primary";
 };
 
 type NavSection = {
@@ -64,11 +70,14 @@ type OrganisationNavigationContext = {
 } | null;
 
 /* =========================================================
-   NAV STYLES
+   STYLES
 ========================================================= */
 
 const navItem =
   "group flex items-center justify-between rounded-2xl border border-transparent px-4 py-3 text-sm font-medium text-black/55 transition hover:border-orange-200 hover:bg-white hover:text-black hover:shadow-sm";
+
+const primaryNavItem =
+  "group flex items-center justify-between rounded-2xl border border-orange-300 bg-orange-500 px-4 py-3 text-sm font-semibold text-black shadow-sm transition hover:border-orange-400 hover:bg-orange-400 hover:shadow-md";
 
 const navSectionLabel =
   "px-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/30";
@@ -86,25 +95,42 @@ function getInitials(name: string) {
     .join("");
 }
 
-function formatDepartmentType(type: DepartmentType | null) {
-  if (!type) return "Department not assigned";
+function formatDepartmentType(
+  type: DepartmentType | null,
+) {
+  if (!type) {
+    return "Department not assigned";
+  }
 
-  if (type === "generator") return "Waste Generator";
-  if (type === "carrier") return "Waste Carrier";
-  if (type === "manager") return "Waste Manager";
-  if (type === "compliance") return "Compliance";
+  if (type === "generator") {
+    return "Waste Generator";
+  }
+
+  if (type === "carrier") {
+    return "Waste Carrier";
+  }
+
+  if (type === "manager") {
+    return "Waste Manager";
+  }
+
+  if (type === "compliance") {
+    return "Compliance";
+  }
 
   return "Operational Department";
 }
 
 function formatBadgeCount(count: number) {
-  if (count > 99) return "99+";
+  if (count > 99) {
+    return "99+";
+  }
 
   return count.toString();
 }
 
 /* =========================================================
-   SIMPLE ICONS
+   ICONS
 ========================================================= */
 
 function BellIcon() {
@@ -212,7 +238,7 @@ function ArrowIcon() {
 }
 
 /* =========================================================
-   ACTIVE DEPARTMENT / SOLO WORKSPACE
+   WORKSPACE PILLS
 ========================================================= */
 
 function ActiveDepartmentPill({
@@ -276,6 +302,7 @@ function SoloWorkspacePill() {
     >
       <span className="relative flex h-2.5 w-2.5">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-40" />
+
         <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-orange-500" />
       </span>
 
@@ -285,7 +312,7 @@ function SoloWorkspacePill() {
         </span>
 
         <span className="block max-w-[180px] truncate text-xs font-semibold text-black">
-          Full workflow access
+          Main operational workspace
         </span>
       </span>
     </Link>
@@ -296,7 +323,11 @@ function SoloWorkspacePill() {
    NOTIFICATION BUTTON
 ========================================================= */
 
-function NotificationButton({ unreadCount }: { unreadCount: number }) {
+function NotificationButton({
+  unreadCount,
+}: {
+  unreadCount: number;
+}) {
   const notificationLabel =
     unreadCount > 0
       ? `${unreadCount} unread notification${
@@ -323,10 +354,274 @@ function NotificationButton({ unreadCount }: { unreadCount: number }) {
 }
 
 /* =========================================================
-   OPERATIONAL NAVIGATION
+   NAV RENDERER
 ========================================================= */
 
-function OperationalNav({
+function NavigationSections({
+  sections,
+}: {
+  sections: NavSection[];
+}) {
+  return (
+    <nav className="flex flex-col gap-6">
+      {sections.map((section) => {
+        const visibleItems = section.items.filter(
+          (item) => item.show !== false,
+        );
+
+        if (visibleItems.length === 0) {
+          return null;
+        }
+
+        return (
+          <section
+            key={section.label}
+            className="space-y-2"
+          >
+            <p className={navSectionLabel}>
+              {section.label}
+            </p>
+
+            <div className="space-y-1">
+              {visibleItems.map((item) => {
+                const isPrimary = item.variant === "primary";
+
+                return (
+                  <Link
+                    key={`${section.label}-${item.href}-${item.label}`}
+                    href={item.href}
+                    className={isPrimary ? primaryNavItem : navItem}
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {item.label}
+                    </span>
+
+                    <span
+                      className={
+                        isPrimary
+                          ? "text-black/50 transition group-hover:translate-x-0.5 group-hover:text-black"
+                          : "text-black/15 transition group-hover:translate-x-0.5 group-hover:text-orange-500"
+                      }
+                    >
+                      <ArrowIcon />
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </nav>
+  );
+}
+
+/* =========================================================
+   SOLO MVP NAVIGATION
+========================================================= */
+
+/* =========================================================
+   SOLO MVP NAVIGATION
+========================================================= */
+
+function SoloOperationalNav({
+  hasOrganisation,
+}: {
+  hasOrganisation: boolean;
+}) {
+  const sections: NavSection[] = [
+    /* =========================================================
+       OVERVIEW
+    ========================================================= */
+
+    {
+      label: "Overview",
+      items: [
+        {
+          label: "Dashboard",
+          href: "/home",
+          show: true,
+        },
+      ],
+    },
+
+    /* =========================================================
+       OPERATIONS
+    ========================================================= */
+
+    {
+      label: "Operations",
+      items: [
+        {
+          label: "+ Book a Job",
+          href: "/home/jobs/new",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Jobs",
+          href: "/home/jobs",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Daily Worksheet",
+          href: "/home/worksheet",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Incoming",
+          href: "/home/movements/incoming",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Outgoing",
+          href: "/home/movements/outgoing",
+          show: hasOrganisation,
+        },
+      ],
+    },
+
+    /* =========================================================
+       BUSINESS DATA
+    ========================================================= */
+
+    {
+      label: "Business Data",
+      items: [
+        {
+          label: "Clients",
+          href: "/home/clients",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Hauliers",
+          href: "/home/hauliers",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Drivers & Vehicles",
+          href: "/home/transport",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Materials",
+          href: "/home/materials",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Third-Party Tips",
+          href: "/home/tips",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Rates",
+          href: "/home/rates",
+          show: hasOrganisation,
+        },
+      ],
+    },
+
+    /* =========================================================
+       COMPLIANCE
+    ========================================================= */
+
+    {
+      label: "Compliance",
+      items: [
+        {
+          label: "Receiving Site & Permit",
+          href: "/home/sites",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "DWT Centre",
+          href: "/home/dwt",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Quarterly Returns",
+          href: "/home/returns",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Activity",
+          href: "/home/activity",
+          show: hasOrganisation,
+        },
+      ],
+    },
+
+    /* =========================================================
+       ACCOUNTS
+    ========================================================= */
+
+    {
+      label: "Accounts",
+      items: [
+        {
+          label: "Billing & Exports",
+          href: "/home/accounts",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "Reports",
+          href: "/home/reports",
+          show: hasOrganisation,
+        },
+      ],
+    },
+
+    /* =========================================================
+       MARKETPLACE
+    ========================================================= */
+
+    {
+      label: "Marketplace",
+      items: [
+        {
+          label: "Browse Marketplace",
+          href: "/home/marketplace/browse",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "My Listings",
+          href: "/home/operations/listings",
+          show: hasOrganisation,
+        },
+
+        {
+          label: "My Bids",
+          href: "/home/marketplace/bids",
+          show: hasOrganisation,
+        },
+      ],
+    },
+  ];
+
+  return <NavigationSections sections={sections} />;
+}
+/* =========================================================
+   LEGACY / FUTURE NETWORK NAVIGATION
+
+   Generator / Carrier / departments remain here.
+
+   They are NOT shown while Solo Workspace MVP is active.
+========================================================= */
+
+function LegacyOperationalNav({
   capabilities,
   activeDepartmentType,
   hasOrganisation,
@@ -345,79 +640,70 @@ function OperationalNav({
     });
   }
 
-  const simplifiedNavigation = shouldUseSimplifiedNavigation(organisation);
+  /* =========================================================
+     LISTINGS
+  ========================================================= */
 
-  /*
-    Solo mode product rule:
-    solo = simplified workspace with full workflow access.
-    The user does not need department switching just to access generator,
-    carrier, manager and compliance areas.
-  */
-  const effectiveCapabilities: Capability[] = simplifiedNavigation
-    ? ["generator", "carrier", "manager"]
-    : capabilities;
-
-  const hasCarrierCapability = effectiveCapabilities.includes("carrier");
-  const hasManagerCapability = effectiveCapabilities.includes("manager");
-
-  /* Listings */
   const canViewListings = can("listing:view");
   const canCreateListings = can("listing:create");
 
-  const canAccessWasteRecords = simplifiedNavigation
-    ? hasOrganisation
-    : canViewListings || canCreateListings;
+  const canAccessWasteRecords =
+    canViewListings || canCreateListings;
 
-  /* Templates */
+  /* =========================================================
+     TEMPLATES
+  ========================================================= */
+
   const canViewTemplates = can("template:view");
   const canCreateTemplates = can("template:create");
 
-  /* Marketplace */
+  /* =========================================================
+     MARKETPLACE
+  ========================================================= */
+
   const canViewMarketplace = can("marketplace:view");
   const canBid = can("listing:bid");
 
   const canAccessMarketplace =
     hasOrganisation &&
-    (simplifiedNavigation ||
-      (shouldShowMarketplace(organisation) && (canViewMarketplace || canBid)));
+    shouldShowMarketplace(organisation) &&
+    (canViewMarketplace || canBid);
 
-  /* Assignments */
+  /* =========================================================
+     ASSIGNMENTS
+  ========================================================= */
+
   const canViewAssignments = can("assignment:view");
-  const canAssignCarrier = can("assignment:assign_carrier");
 
-  const canAccessAssignments = simplifiedNavigation
-    ? hasOrganisation && (hasCarrierCapability || hasManagerCapability)
-    : canViewAssignments;
+  const canAssignCarrier = can(
+    "assignment:assign_carrier",
+  );
 
-  const canAccessExternalAssignments = simplifiedNavigation
-    ? hasOrganisation
-    : hasOrganisation && shouldShowExternalJobs(organisation);
-
-  /*
-    Carrier Hub stays manager-side for team/multi-site/enterprise.
-    Solo and carrier_ops use Assignments / External Assignments instead.
-  */
   const canUseCarrierHub =
     hasOrganisation &&
-    !simplifiedNavigation &&
     shouldShowCarrierHub(organisation) &&
     activeDepartmentType === "manager" &&
     (canViewAssignments || canAssignCarrier);
 
-  /* Receiving */
+  /* =========================================================
+     RECEIVING
+  ========================================================= */
+
   const canViewReceiving = can("receiving:view");
   const canCreateReceiving = can("receiving:create");
   const canSubmitReceiving = can("receiving:submit");
 
   const canAccessReceivingArea =
     hasOrganisation &&
-    (simplifiedNavigation ||
-      shouldShowReceiving(organisation) ||
+    (shouldShowReceiving(organisation) ||
       canViewReceiving ||
       canCreateReceiving ||
       canSubmitReceiving);
 
-  /* Digital Waste Tracking */
+  /* =========================================================
+     DWT
+  ========================================================= */
+
   const canViewDigitalWasteTracking = can("dwt:view");
 
   const canSubmitDigitalWasteTracking = can(
@@ -428,35 +714,45 @@ function OperationalNav({
     "dwt:update_receive_movement",
   );
 
-  const canViewDwtReferenceData = can("dwt:reference_data:view");
+  const canViewDwtReferenceData = can(
+    "dwt:reference_data:view",
+  );
 
-  const canSyncDwtReferenceData = can("dwt:reference_data:sync");
+  const canSyncDwtReferenceData = can(
+    "dwt:reference_data:sync",
+  );
 
   const canAccessDwtArea =
     hasOrganisation &&
-    (simplifiedNavigation ||
-      shouldShowDwtSubmissions(organisation) ||
+    (shouldShowDwtSubmissions(organisation) ||
       canViewDigitalWasteTracking ||
       canSubmitDigitalWasteTracking ||
       canUpdateDigitalWasteTracking ||
       canViewDwtReferenceData ||
       canSyncDwtReferenceData);
 
-  /* Incidents, compliance and reports */
+  /* =========================================================
+     INCIDENTS / COMPLIANCE
+  ========================================================= */
+
   const canViewIncidents = can("incident:view");
-  const canViewComplianceReports = can("compliance:reports");
-  const canViewComplianceAudit = can("compliance:audit");
+
+  const canViewComplianceReports = can(
+    "compliance:reports",
+  );
+
+  const canViewComplianceAudit = can(
+    "compliance:audit",
+  );
 
   const canAccessIncidents =
     hasOrganisation &&
-    (simplifiedNavigation ||
-      shouldShowIncidents(organisation) ||
+    (shouldShowIncidents(organisation) ||
       canViewIncidents);
 
   const canViewReportsCentre =
     hasOrganisation &&
-    (simplifiedNavigation ||
-      shouldShowReports(organisation) ||
+    (shouldShowReports(organisation) ||
       canViewListings ||
       canViewAssignments ||
       canViewReceiving ||
@@ -466,22 +762,33 @@ function OperationalNav({
       canViewComplianceAudit);
 
   const canAccessAdvancedCompliance =
-    shouldShowAdvancedCompliance(organisation) && canViewComplianceAudit;
+    shouldShowAdvancedCompliance(organisation) &&
+    canViewComplianceAudit;
 
-  /* Shared workspace */
-  const canViewTeam = can("team:view") || hasOrganisation;
+  /* =========================================================
+     WORKSPACE
+  ========================================================= */
+
+  const canViewTeam =
+    can("team:view") || hasOrganisation;
 
   const canAccessTeamMembers =
-    canViewTeam && shouldShowTeamMembers(organisation);
+    canViewTeam &&
+    shouldShowTeamMembers(organisation);
 
   const canAccessDepartments =
-    hasOrganisation && shouldShowDepartments(organisation);
+    hasOrganisation &&
+    shouldShowDepartments(organisation);
 
-  const canAccessSiteSettings = simplifiedNavigation
-    ? hasOrganisation
-    : hasOrganisation && shouldShowSiteSettings(organisation);
+  const canAccessSiteSettings =
+    hasOrganisation &&
+    shouldShowSiteSettings(organisation);
 
-  const simplifiedSections: NavSection[] = [
+  /* =========================================================
+     SECTIONS
+  ========================================================= */
+
+  const sections: NavSection[] = [
     {
       label: "Overview",
       items: [
@@ -492,101 +799,7 @@ function OperationalNav({
         },
       ],
     },
-    {
-      label: "Operations",
-      items: [
-        {
-          label: "Assignments",
-          href: "/home/operations/assignments",
-          show: canAccessAssignments,
-        },
-         {
-          label: "External Assignments",
-          href: "/home/operations/jobs",
-          show: canAccessExternalAssignments,
-        },
-       
-       
-        {
-          label: "Intake Queue for DWT",
-          href: "/home/receiving/intake",
-          show: canAccessReceivingArea,
-        },
-        {
-          label: "DWT Submissions",
-          href: "/home/receiving/submissions",
-          show: canAccessDwtArea,
-        },
-      ],
-    },
-    {
-      label: "Marketplace",
-      items: [
-        {
-          label: "Browse Listings",
-          href: "/home/marketplace/browse",
-          show: canAccessMarketplace,
-        },
-         {
-          label: "My Waste Listings",
-          href: "/home/operations/listings",
-          show: canAccessWasteRecords,
-        },
-        {
-          label: "My Bids",
-          href: "/home/marketplace/bids",
-          show: canAccessMarketplace,
-        },
-      ],
-    },
-    {
-      label: "Compliance",
-      items: [
-        {
-          label: "Incidents",
-          href: "/home/operations/incidents",
-          show: canAccessIncidents,
-        },
-        {
-          label: "Reports Centre",
-          href: "/home/reports",
-          show: canViewReportsCentre,
-        },
-      ],
-    },
-    {
-      label: "Workspace",
-      items: [
-        {
-          label: "Templates",
-          href: "/home/operations/templates",
-          show: hasOrganisation,
-        },
-        {
-          label: "Sites",
-          href: "/home/settings/sites",
-          show: canAccessSiteSettings,
-        },
-        {
-          label: "Organisation",
-          href: "/home/settings/organisation",
-          show: hasOrganisation,
-        },
-      ],
-    },
-  ];
 
-  const fullSections: NavSection[] = [
-    {
-      label: "Overview",
-      items: [
-        {
-          label: "Dashboard",
-          href: "/home",
-          show: true,
-        },
-      ],
-    },
     {
       label: "Operations",
       items: [
@@ -595,79 +808,96 @@ function OperationalNav({
           href: "/home/operations/listings",
           show: canAccessWasteRecords,
         },
+
         {
           label: "External Jobs",
           href: "/home/operations/jobs",
-          show: hasOrganisation && shouldShowExternalJobs(organisation),
+          show:
+            hasOrganisation &&
+            shouldShowExternalJobs(organisation),
         },
+
         {
           label: "Assignments",
           href: "/home/operations/assignments",
           show: canViewAssignments,
         },
+
         {
           label: "Carrier Hub",
           href: "/home/operations/carriers",
           show: canUseCarrierHub,
         },
+
         {
           label: "Active Assignments",
           href: "/home/operations/assignments/active",
           show: canViewAssignments,
         },
+
         {
           label: "Completed Jobs",
           href: "/home/operations/assignments/completed",
           show: canViewAssignments,
         },
+
         {
           label: "Intake Queue",
           href: "/home/receiving/intake",
           show: canAccessReceivingArea,
         },
+
         {
           label: "DWT Submissions",
           href: "/home/receiving/submissions",
-          show:
-            canViewReceiving ||
-            canSubmitReceiving ||
-            canAccessDwtArea,
+          show: canAccessDwtArea,
         },
       ],
     },
+
     {
       label: "Marketplace",
       items: [
         {
           label: "Browse Listings",
           href: "/home/marketplace/browse",
-          show: canAccessMarketplace && canViewMarketplace,
+          show:
+            canAccessMarketplace &&
+            canViewMarketplace,
         },
+
         {
           label: "My Bids",
           href: "/home/marketplace/bids",
-          show: canAccessMarketplace && canBid,
+          show:
+            canAccessMarketplace &&
+            canBid,
         },
       ],
     },
+
     {
       label: "Compliance",
       items: [
         {
           label: "Digital Waste Tracking",
-          href: "/home/compliance/digital-waste-tracking",
+          href:
+            "/home/compliance/digital-waste-tracking",
           show: canAccessDwtArea,
         },
+
         {
           label: "Incident Review",
           href: "/home/compliance/incidents",
           show: canAccessIncidents,
         },
+
         {
           label: "Reports Centre",
           href: "/home/reports",
           show: canViewReportsCentre,
         },
+
         {
           label: "Audit Trail",
           href: "/home/compliance/audit",
@@ -675,29 +905,36 @@ function OperationalNav({
         },
       ],
     },
+
     {
       label: "Workspace",
       items: [
         {
           label: "Templates",
           href: "/home/operations/templates",
-          show: canViewTemplates || canCreateTemplates,
+          show:
+            canViewTemplates ||
+            canCreateTemplates,
         },
+
         {
           label: "Team Members",
           href: "/home/team/members",
           show: canAccessTeamMembers,
         },
+
         {
           label: "Organisation",
           href: "/home/settings/organisation",
           show: hasOrganisation,
         },
+
         {
           label: "Sites",
           href: "/home/settings/sites",
           show: canAccessSiteSettings,
         },
+
         {
           label: "Departments",
           href: "/home/settings/departments",
@@ -707,38 +944,42 @@ function OperationalNav({
     },
   ];
 
-  const sections = simplifiedNavigation ? simplifiedSections : fullSections;
+  return <NavigationSections sections={sections} />;
+}
+
+/* =========================================================
+   OPERATIONAL NAVIGATION ROUTER
+========================================================= */
+
+function OperationalNav({
+  capabilities,
+  activeDepartmentType,
+  hasOrganisation,
+  organisation,
+}: {
+  capabilities: Capability[];
+  activeDepartmentType: DepartmentType | null;
+  hasOrganisation: boolean;
+  organisation: OrganisationNavigationContext;
+}) {
+  const useSoloNavigation =
+    shouldUseSimplifiedNavigation(organisation);
+
+  if (useSoloNavigation) {
+    return (
+      <SoloOperationalNav
+        hasOrganisation={hasOrganisation}
+      />
+    );
+  }
 
   return (
-    <nav className="flex flex-col gap-6">
-      {sections.map((section) => {
-        const visibleItems = section.items.filter(
-          (item) => item.show !== false,
-        );
-
-        if (visibleItems.length === 0) return null;
-
-        return (
-          <section key={section.label} className="space-y-2">
-            <p className={navSectionLabel}>{section.label}</p>
-
-            <div className="space-y-1">
-              {visibleItems.map((item) => (
-                <Link key={item.href} href={item.href} className={navItem}>
-                  <span className="min-w-0 flex-1 truncate">
-                    {item.label}
-                  </span>
-
-                  <span className="text-black/15 transition group-hover:translate-x-0.5 group-hover:text-orange-500">
-                    <ArrowIcon />
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </section>
-        );
-      })}
-    </nav>
+    <LegacyOperationalNav
+      capabilities={capabilities}
+      activeDepartmentType={activeDepartmentType}
+      hasOrganisation={hasOrganisation}
+      organisation={organisation}
+    />
   );
 }
 
@@ -764,7 +1005,9 @@ function SidebarFooter({
 
           {waitingOnUserCount > 0 && (
             <span className="absolute -right-1.5 -top-1.5 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-[#f7f3ed] bg-red-500 px-1 text-[9px] font-bold text-white">
-              {waitingOnUserCount > 9 ? "9+" : waitingOnUserCount}
+              {waitingOnUserCount > 9
+                ? "9+"
+                : waitingOnUserCount}
             </span>
           )}
         </Link>
@@ -789,94 +1032,170 @@ function SidebarFooter({
 export default async function SystemNav() {
   const session = await auth();
 
-  if (!session?.user?.id) return null;
+  if (!session?.user?.id) {
+    return null;
+  }
 
-  const user = await database.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    with: {
-      organisation: true,
-      department: true,
-    },
-  });
+  /* =========================================================
+     USER
+  ========================================================= */
+
+  const user =
+    await database.query.users.findFirst({
+      where: eq(users.id, session.user.id),
+
+      with: {
+        organisation: true,
+        department: true,
+      },
+    });
 
   const capabilities =
-    (user?.organisation?.capabilities as Capability[] | null) ?? [];
+    (user?.organisation
+      ?.capabilities as Capability[] | null) ??
+    [];
 
   const organisationModeCapabilities =
-    capabilities as unknown as OrganisationCapability[];
+    capabilities as OrganisationCapability[];
 
-  const organisationContext: OrganisationNavigationContext = user?.organisation
-    ? {
-        operatingMode:
-          user.organisation.operatingMode as OrganisationOperatingMode | null,
-        capabilities: organisationModeCapabilities,
-      }
-    : null;
+  const organisationContext: OrganisationNavigationContext =
+    user?.organisation
+      ? {
+          operatingMode:
+            user.organisation
+              .operatingMode as OrganisationOperatingMode | null,
+
+          capabilities:
+            organisationModeCapabilities,
+        }
+      : null;
 
   const hasOrganisation = Boolean(
-    user?.organisationId && user?.organisation,
+    user?.organisationId &&
+      user?.organisation,
   );
 
-  const activeDepartment = user?.department ?? null;
+  /* =========================================================
+     DEPARTMENT
+
+     Still loaded for future/legacy workspaces.
+
+     Solo Workspace ignores it.
+  ========================================================= */
+
+  const activeDepartment =
+    user?.department ?? null;
 
   const activeDepartmentType =
-    (activeDepartment?.type as DepartmentType | undefined) ?? null;
+    (activeDepartment?.type as
+      | DepartmentType
+      | undefined) ?? null;
 
-  const isSoloOrganisation = organisationContext?.operatingMode === "solo";
+  /* =========================================================
+     PRODUCT WORKSPACE
+  ========================================================= */
 
-  const showSoloWorkspacePill = hasOrganisation && isSoloOrganisation;
+  const isSoloOrganisation =
+    shouldUseSimplifiedNavigation(
+      organisationContext,
+    );
+
+  const showSoloWorkspacePill =
+    hasOrganisation &&
+    isSoloOrganisation;
 
   const showActiveDepartmentPill =
     hasOrganisation &&
     !isSoloOrganisation &&
-    shouldShowActiveDepartmentSwitcher(organisationContext);
-
-  const profilePromise = getProfileByUserId(session.user.id);
-
-  const unreadNotificationsPromise = database
-    .select({
-      id: notifications.id,
-    })
-    .from(notifications)
-    .where(
-      and(
-        eq(notifications.recipientId, session.user.id),
-        eq(notifications.isRead, false),
-      ),
+    shouldShowActiveDepartmentSwitcher(
+      organisationContext,
     );
 
-  const waitingTicketsPromise = user?.organisationId
-    ? database.query.supportTickets.findMany({
-        where: and(
-          eq(supportTickets.organisationId, user.organisationId),
-          eq(supportTickets.status, "waiting_on_user"),
-        ),
-        columns: {
-          id: true,
-        },
-      })
-    : Promise.resolve([]);
+  /* =========================================================
+     HEADER DATA
+  ========================================================= */
 
-  const [profile, unreadNotifications, waitingTickets] = await Promise.all([
+  const profilePromise =
+    getProfileByUserId(session.user.id);
+
+  const unreadNotificationsPromise =
+    database
+      .select({
+        id: notifications.id,
+      })
+      .from(notifications)
+      .where(
+        and(
+          eq(
+            notifications.recipientId,
+            session.user.id,
+          ),
+          eq(
+            notifications.isRead,
+            false,
+          ),
+        ),
+      );
+
+  const waitingTicketsPromise =
+    user?.organisationId
+      ? database.query.supportTickets.findMany({
+          where: and(
+            eq(
+              supportTickets.organisationId,
+              user.organisationId,
+            ),
+            eq(
+              supportTickets.status,
+              "waiting_on_user",
+            ),
+          ),
+
+          columns: {
+            id: true,
+          },
+        })
+      : Promise.resolve([]);
+
+  const [
+    profile,
+    unreadNotifications,
+    waitingTickets,
+  ] = await Promise.all([
     profilePromise,
     unreadNotificationsPromise,
     waitingTicketsPromise,
   ]);
 
-  const fullName = profile?.fullName ?? user?.name ?? "Unknown User";
+  /* =========================================================
+     DISPLAY DATA
+  ========================================================= */
 
-  const profileImage = profile?.profilePicture ?? null;
+  const fullName =
+    profile?.fullName ??
+    user?.name ??
+    "Unknown User";
 
-  const unreadNotificationCount = unreadNotifications.length;
+  const profileImage =
+    profile?.profilePicture ?? null;
 
-  const waitingOnUserCount = waitingTickets.length;
+  const unreadNotificationCount =
+    unreadNotifications.length;
 
-  const departmentSummary: ActiveDepartmentSummary = activeDepartment
-    ? {
-        name: activeDepartment.name,
-        type: activeDepartmentType,
-      }
-    : null;
+  const waitingOnUserCount =
+    waitingTickets.length;
+
+  const departmentSummary: ActiveDepartmentSummary =
+    activeDepartment
+      ? {
+          name: activeDepartment.name,
+          type: activeDepartmentType,
+        }
+      : null;
+
+  /* =========================================================
+     RENDER
+  ========================================================= */
 
   return (
     <>
@@ -897,20 +1216,33 @@ export default async function SystemNav() {
         </Link>
 
         <div className="flex items-center gap-2 sm:gap-3">
-          {hasOrganisation && user?.organisationId && (
-            <SiteSwitcher
-              organisationId={user.organisationId}
-              organisation={organisationContext}
+          {hasOrganisation &&
+            user?.organisationId && (
+              <SiteSwitcher
+                organisationId={
+                  user.organisationId
+                }
+                organisation={
+                  organisationContext
+                }
+              />
+            )}
+
+          {showSoloWorkspacePill && (
+            <SoloWorkspacePill />
+          )}
+
+          {showActiveDepartmentPill && (
+            <ActiveDepartmentPill
+              department={departmentSummary}
             />
           )}
 
-          {showSoloWorkspacePill && <SoloWorkspacePill />}
-
-          {showActiveDepartmentPill && (
-            <ActiveDepartmentPill department={departmentSummary} />
-          )}
-
-          <NotificationButton unreadCount={unreadNotificationCount} />
+          <NotificationButton
+            unreadCount={
+              unreadNotificationCount
+            }
+          />
 
           <Link
             href="/home/settings/profile"
@@ -924,7 +1256,8 @@ export default async function SystemNav() {
               />
             ) : (
               <div className="grid h-8 w-8 place-items-center rounded-xl bg-black text-xs font-semibold text-orange-400">
-                {getInitials(fullName) || "WX"}
+                {getInitials(fullName) ||
+                  "WX"}
               </div>
             )}
 
@@ -942,13 +1275,23 @@ export default async function SystemNav() {
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
             <OperationalNav
               capabilities={capabilities}
-              activeDepartmentType={activeDepartmentType}
-              hasOrganisation={hasOrganisation}
-              organisation={organisationContext}
+              activeDepartmentType={
+                activeDepartmentType
+              }
+              hasOrganisation={
+                hasOrganisation
+              }
+              organisation={
+                organisationContext
+              }
             />
           </div>
 
-          <SidebarFooter waitingOnUserCount={waitingOnUserCount} />
+          <SidebarFooter
+            waitingOnUserCount={
+              waitingOnUserCount
+            }
+          />
         </div>
       </aside>
     </>

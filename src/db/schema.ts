@@ -1,3 +1,27 @@
+/*
+  WASTE X — SOLO WORKSPACE FOUNDATION SCHEMA
+
+  IMPORTANT:
+  - Solo Workspace is the active MVP operational model.
+  - Generator / Carrier / Compliance department and assignment models are retained
+    for future network phases and Marketplace compatibility, but are not required
+    by the new Solo workflow.
+  - Marketplace tables are retained.
+  - Do not apply this file directly to a production database with drizzle-kit push.
+    Create and review a migration that adds/backfills the new model safely.
+
+  Core active flow:
+  Organisation
+    -> Site
+      -> Site Permit
+        -> Permitted EWC Codes
+    -> Counterparties / Drivers / Vehicles / Materials / Rates
+    -> Job
+      -> Job Load
+        -> Waste Receipt
+          -> DWT Submission
+*/
+
 import {
   integer,
   pgTable,
@@ -10,8 +34,6 @@ import {
   index,
   numeric,
 } from "drizzle-orm/pg-core";
-import type { AdapterAccount } from "next-auth/adapters";
-import { ChainOfCustodyType } from "@/util/types";
 import { relations } from "drizzle-orm";
 
 
@@ -24,6 +46,7 @@ export type OrganisationOperatingMode =
 
 export type SiteType =
   | "main_site"
+  | "waste_receiving_site"
   | "transfer_station"
   | "depot"
   | "recycling_yard"
@@ -37,6 +60,75 @@ export type CarrierAssignmentJobSource =
   | "wastex_marketplace"
   | "external_manual"
   | "internal_operation";
+
+export type CounterpartyRole =
+  | "client"
+  | "producer"
+  | "haulier"
+  | "receiver"
+  | "third_party_tip"
+  | "supplier"
+  | "broker"
+  | "dealer";
+
+export type CounterpartySiteType =
+  | "producer_site"
+  | "customer_site"
+  | "receiving_site"
+  | "third_party_tip"
+  | "depot"
+  | "other";
+
+export type PermitRegulator = "EA" | "NRW" | "SEPA" | "NIEA" | "other";
+
+export type PermitAuthorisationType =
+  | "permit"
+  | "licence"
+  | "exemption"
+  | "other";
+
+export type PermitStatus =
+  | "active"
+  | "expired"
+  | "suspended"
+  | "revoked"
+  | "unknown";
+
+export type JobDirection = "incoming" | "outgoing";
+
+export type JobSource =
+  | "manual"
+  | "template"
+  | "repeat"
+  | "marketplace"
+  | "imported";
+
+export type JobStatus =
+  | "draft"
+  | "booked"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+export type JobLoadStatus =
+  | "planned"
+  | "arrived"
+  | "accepted"
+  | "rejected"
+  | "completed"
+  | "cancelled";
+
+export type WeightSource = "manual" | "weighbridge" | "imported";
+
+export type CommercialRateType =
+  | "customer_charge"
+  | "haulage_cost"
+  | "tipping_cost"
+  | "material_sale"
+  | "other";
+
+export type CommercialRateUnit = "tonne" | "load" | "job";
+
 
 /* =========================================================
    ORGANISATIONS
@@ -60,7 +152,7 @@ export const organisations = pgTable("bb_organisation", {
  operatingMode: text("operatingMode")
     .$type<OrganisationOperatingMode>()
     .notNull()
-    .default("team"),
+    .default("solo"),
 
   industry: text("industry"),
 
@@ -98,6 +190,12 @@ export const organisations = pgTable("bb_organisation", {
   approvedAt: timestamp("approvedAt", { mode: "date" }),
 });
 
+/*
+  LEGACY / FUTURE NETWORK MODEL
+  --------------------------------
+  Retained so Generator / Carrier / Compliance functionality can return later.
+  The Solo Workspace must not depend on departments or activeDepartment.
+*/
 export const departments = pgTable("bb_departments", {
   id: text("id").primaryKey(),
 
@@ -166,6 +264,10 @@ export const sites = pgTable(
     fullAddress: text("fullAddress"),
     postcode: text("postcode"),
 
+    /*
+      LEGACY compatibility only.
+      New Solo Workspace permit configuration lives in sitePermits.
+    */
     permitNumber: text("permitNumber"),
 
     isDefault: boolean("isDefault").notNull().default(false),
@@ -188,6 +290,1158 @@ export const sites = pgTable(
     ),
   }),
 );
+
+
+/* =========================================================
+   SOLO WORKSPACE CORE
+   ---------------------------------------------------------
+   This is the active MVP operational model.
+
+   Master data:
+   - site permits / EWC catalogue
+   - counterparties / sites
+   - drivers / vehicles
+   - materials / D-R codes / rates
+
+   Transactions:
+   - job templates
+   - jobs
+   - job loads
+
+   Generator / Carrier assignment tables remain below for
+   future network workflows, but Solo does not depend on them.
+========================================================= */
+
+/* =========================================================
+   EWC CATALOGUE
+   Stable Waste X operational catalogue.
+   wasteTrackingReferenceData remains the external/reference cache.
+========================================================= */
+
+export const ewcCodes = pgTable(
+  "bb_ewc_code",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    code: text("code").notNull(),
+    description: text("description").notNull(),
+
+    chapterCode: text("chapterCode"),
+    chapterDescription: text("chapterDescription"),
+    subChapterCode: text("subChapterCode"),
+    subChapterDescription: text("subChapterDescription"),
+
+    entryType: text("entryType"),
+    isHazardous: boolean("isHazardous"),
+
+    source: text("source").notNull().default("official"),
+    sourceVersion: text("sourceVersion"),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    codeUnique: uniqueIndex("ewc_code_unique").on(table.code),
+    activeIdx: index("ewc_active_idx").on(table.isActive),
+    hazardousIdx: index("ewc_hazardous_idx").on(table.isHazardous),
+  }),
+);
+
+/* =========================================================
+   DISPOSAL / RECOVERY CODES
+========================================================= */
+
+export const disposalRecoveryCodes = pgTable(
+  "bb_disposal_recovery_code",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    code: text("code").notNull(),
+
+    type: text("type")
+      .$type<"disposal" | "recovery">()
+      .notNull(),
+
+    description: text("description").notNull(),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    source: text("source").notNull().default("official"),
+    sourceVersion: text("sourceVersion"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    codeUnique: uniqueIndex("disposal_recovery_code_unique").on(table.code),
+    typeIdx: index("disposal_recovery_type_idx").on(table.type),
+    activeIdx: index("disposal_recovery_active_idx").on(table.isActive),
+  }),
+);
+
+/* =========================================================
+   SITE PERMITS
+========================================================= */
+
+export const sitePermits = pgTable(
+  "bb_site_permit",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    siteId: text("siteId")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+
+    permitNumber: text("permitNumber").notNull(),
+
+    regulator: text("regulator")
+      .$type<PermitRegulator>()
+      .notNull(),
+
+    authorisationType: text("authorisationType")
+      .$type<PermitAuthorisationType>()
+      .notNull(),
+
+    status: text("status")
+      .$type<PermitStatus>()
+      .notNull()
+      .default("active"),
+
+    isPrimary: boolean("isPrimary").notNull().default(true),
+
+    validFrom: timestamp("validFrom", { mode: "date" }),
+    expiresAt: timestamp("expiresAt", { mode: "date" }),
+
+    documentKey: text("documentKey"),
+    notes: text("notes"),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("site_permit_org_idx").on(table.organisationId),
+    siteIdx: index("site_permit_site_idx").on(table.siteId),
+    permitIdx: index("site_permit_number_idx").on(table.permitNumber),
+    statusIdx: index("site_permit_status_idx").on(table.status),
+    sitePermitUnique: uniqueIndex("site_permit_site_number_unique").on(
+      table.siteId,
+      table.permitNumber,
+    ),
+  }),
+);
+
+export const permitEwcCodes = pgTable(
+  "bb_permit_ewc_code",
+  {
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    permitId: text("permitId")
+      .notNull()
+      .references(() => sitePermits.id, { onDelete: "cascade" }),
+
+    ewcCodeId: text("ewcCodeId")
+      .notNull()
+      .references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    configuredByUserId: text("configuredByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.permitId, table.ewcCodeId] }),
+    orgIdx: index("permit_ewc_org_idx").on(table.organisationId),
+    permitIdx: index("permit_ewc_permit_idx").on(table.permitId),
+    ewcIdx: index("permit_ewc_code_idx").on(table.ewcCodeId),
+  }),
+);
+
+/* =========================================================
+   COUNTERPARTIES
+   ---------------------------------------------------------
+   One business record can act as a client, producer, haulier,
+   receiver, third-party tip, supplier, broker or dealer.
+========================================================= */
+
+export const counterparties = pgTable(
+  "bb_counterparty",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    name: text("name").notNull(),
+
+    accountReference: text("accountReference"),
+
+    email: text("email"),
+    telephone: text("telephone"),
+
+    fullAddress: text("fullAddress"),
+    postcode: text("postcode"),
+
+    carrierRegistrationNumber: text("carrierRegistrationNumber"),
+    brokerDealerRegistrationNumber: text("brokerDealerRegistrationNumber"),
+
+    paymentTermsDays: integer("paymentTermsDays"),
+
+    notes: text("notes"),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("counterparty_org_idx").on(table.organisationId),
+    nameIdx: index("counterparty_name_idx").on(table.name),
+    carrierRegIdx: index("counterparty_carrier_reg_idx").on(
+      table.carrierRegistrationNumber,
+    ),
+    activeIdx: index("counterparty_active_idx").on(table.isActive),
+    accountReferenceUnique: uniqueIndex(
+      "counterparty_org_account_reference_unique",
+    ).on(table.organisationId, table.accountReference),
+  }),
+);
+
+export const counterpartyRoles = pgTable(
+  "bb_counterparty_role",
+  {
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    counterpartyId: text("counterpartyId")
+      .notNull()
+      .references(() => counterparties.id, { onDelete: "cascade" }),
+
+    role: text("role")
+      .$type<CounterpartyRole>()
+      .notNull(),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.counterpartyId, table.role] }),
+    orgIdx: index("counterparty_role_org_idx").on(table.organisationId),
+    roleIdx: index("counterparty_role_role_idx").on(table.role),
+  }),
+);
+
+export const counterpartySites = pgTable(
+  "bb_counterparty_site",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    counterpartyId: text("counterpartyId")
+      .notNull()
+      .references(() => counterparties.id, { onDelete: "cascade" }),
+
+    name: text("name").notNull(),
+
+    siteType: text("siteType")
+      .$type<CounterpartySiteType>()
+      .notNull()
+      .default("customer_site"),
+
+    fullAddress: text("fullAddress"),
+    postcode: text("postcode"),
+
+    contactName: text("contactName"),
+    contactEmail: text("contactEmail"),
+    contactTelephone: text("contactTelephone"),
+
+    /*
+      Useful for third-party receiving/tipping sites.
+      Waste X does not assume this is verified unless a separate
+      verification process confirms it.
+    */
+    authorisationNumber: text("authorisationNumber"),
+
+    isDefault: boolean("isDefault").notNull().default(false),
+    isActive: boolean("isActive").notNull().default(true),
+
+    notes: text("notes"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("counterparty_site_org_idx").on(table.organisationId),
+    counterpartyIdx: index("counterparty_site_counterparty_idx").on(
+      table.counterpartyId,
+    ),
+    typeIdx: index("counterparty_site_type_idx").on(table.siteType),
+    activeIdx: index("counterparty_site_active_idx").on(table.isActive),
+    counterpartyNameUnique: uniqueIndex(
+      "counterparty_site_counterparty_name_unique",
+    ).on(table.counterpartyId, table.name),
+  }),
+);
+
+
+/* =========================================================
+   THIRD-PARTY FACILITY AUTHORISATIONS
+   ---------------------------------------------------------
+   External waste facilities are operated by counterparties.
+   Their environmental authorisations are separate from the
+   Waste X organisation's own sitePermits.
+========================================================= */
+
+export const counterpartySiteAuthorisations = pgTable(
+  "bb_counterparty_site_authorisation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    counterpartySiteId: text("counterpartySiteId")
+      .notNull()
+      .references(() => counterpartySites.id, { onDelete: "cascade" }),
+
+    authorisationNumber: text("authorisationNumber").notNull(),
+
+    regulator: text("regulator")
+      .$type<PermitRegulator>()
+      .notNull(),
+
+    authorisationType: text("authorisationType")
+      .$type<PermitAuthorisationType>()
+      .notNull(),
+
+    status: text("status")
+      .$type<PermitStatus>()
+      .notNull()
+      .default("unknown"),
+
+    isPrimary: boolean("isPrimary").notNull().default(true),
+
+    validFrom: timestamp("validFrom", { mode: "date" }),
+    expiresAt: timestamp("expiresAt", { mode: "date" }),
+
+    verificationSource: text("verificationSource"),
+    verifiedAt: timestamp("verifiedAt", { mode: "date" }),
+
+    documentKey: text("documentKey"),
+    notes: text("notes"),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("counterparty_site_auth_org_idx").on(table.organisationId),
+    siteIdx: index("counterparty_site_auth_site_idx").on(table.counterpartySiteId),
+    numberIdx: index("counterparty_site_auth_number_idx").on(table.authorisationNumber),
+    statusIdx: index("counterparty_site_auth_status_idx").on(table.status),
+    siteNumberUnique: uniqueIndex("counterparty_site_auth_site_number_unique").on(
+      table.counterpartySiteId,
+      table.authorisationNumber,
+    ),
+  }),
+);
+
+export const counterpartySiteEwcCodes = pgTable(
+  "bb_counterparty_site_ewc_code",
+  {
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    authorisationId: text("authorisationId")
+      .notNull()
+      .references(() => counterpartySiteAuthorisations.id, { onDelete: "cascade" }),
+
+    ewcCodeId: text("ewcCodeId")
+      .notNull()
+      .references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    configuredByUserId: text("configuredByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.authorisationId, table.ewcCodeId] }),
+    orgIdx: index("counterparty_site_ewc_org_idx").on(table.organisationId),
+    authIdx: index("counterparty_site_ewc_auth_idx").on(table.authorisationId),
+    ewcIdx: index("counterparty_site_ewc_code_idx").on(table.ewcCodeId),
+  }),
+);
+
+/* =========================================================
+   DRIVERS / VEHICLES
+========================================================= */
+
+export const drivers = pgTable(
+  "bb_driver",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    /*
+      Nullable so the organisation can also store its own drivers.
+      When set, this is normally a counterparty with the haulier role.
+    */
+    haulierCounterpartyId: text("haulierCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    name: text("name").notNull(),
+    telephone: text("telephone"),
+    email: text("email"),
+
+    defaultVehicleId: text("defaultVehicleId").references(() => vehicles.id, {
+      onDelete: "set null",
+    }),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    notes: text("notes"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("driver_org_idx").on(table.organisationId),
+    haulierIdx: index("driver_haulier_idx").on(table.haulierCounterpartyId),
+    defaultVehicleIdx: index("driver_default_vehicle_idx").on(
+      table.defaultVehicleId,
+    ),
+    activeIdx: index("driver_active_idx").on(table.isActive),
+  }),
+);
+
+export const vehicles = pgTable(
+  "bb_vehicle",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    haulierCounterpartyId: text("haulierCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    registrationNumber: text("registrationNumber").notNull(),
+
+    vehicleType: text("vehicleType"),
+
+    /*
+      Stored in kilograms internally for consistency.
+      It is optional because not every site relies on stored tare.
+    */
+    tareWeightKg: numeric("tareWeightKg", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    notes: text("notes"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("vehicle_org_idx").on(table.organisationId),
+    haulierIdx: index("vehicle_haulier_idx").on(table.haulierCounterpartyId),
+    activeIdx: index("vehicle_active_idx").on(table.isActive),
+    registrationUnique: uniqueIndex("vehicle_org_registration_unique").on(
+      table.organisationId,
+      table.registrationNumber,
+    ),
+  }),
+);
+
+/* =========================================================
+   MATERIAL / WASTE PROFILES
+   ---------------------------------------------------------
+   This is the main "enter once, reuse everywhere" layer.
+========================================================= */
+
+export const materialProfiles = pgTable(
+  "bb_material_profile",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    /*
+      Null = organisation-wide profile.
+      Set = profile is specific to one Waste X operated site.
+    */
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    name: text("name").notNull(),
+
+    ewcCodeId: text("ewcCodeId")
+      .notNull()
+      .references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    wasteDescription: text("wasteDescription").notNull(),
+
+    physicalForm: text("physicalForm")
+      .$type<"Gas" | "Liquid" | "Solid" | "Powder" | "Sludge" | "Mixed">()
+      .notNull(),
+
+    defaultNumberOfContainers: integer("defaultNumberOfContainers")
+      .notNull()
+      .default(1),
+
+    defaultContainerType: text("defaultContainerType").notNull(),
+
+    containsPops: boolean("containsPops").notNull().default(false),
+    popsSourceOfComponents: text("popsSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+    popsComponents: text("popsComponents"),
+
+    containsHazardous: boolean("containsHazardous")
+      .notNull()
+      .default(false),
+
+    hazardousSourceOfComponents: text("hazardousSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+    hazardousHazCodes: text("hazardousHazCodes"),
+    hazardousComponents: text("hazardousComponents"),
+
+    defaultDisposalRecoveryCodeId: text(
+      "defaultDisposalRecoveryCodeId",
+    ).references(() => disposalRecoveryCodes.id, {
+      onDelete: "set null",
+    }),
+
+    defaultWeightMetric: text("defaultWeightMetric")
+      .$type<"Grams" | "Kilograms" | "Tonnes">()
+      .notNull()
+      .default("Tonnes"),
+
+    isFavourite: boolean("isFavourite").notNull().default(false),
+    isActive: boolean("isActive").notNull().default(true),
+
+    notes: text("notes"),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("material_profile_org_idx").on(table.organisationId),
+    siteIdx: index("material_profile_site_idx").on(table.siteId),
+    ewcIdx: index("material_profile_ewc_idx").on(table.ewcCodeId),
+    activeIdx: index("material_profile_active_idx").on(table.isActive),
+    favouriteIdx: index("material_profile_favourite_idx").on(table.isFavourite),
+    orgNameUnique: uniqueIndex("material_profile_org_name_unique").on(
+      table.organisationId,
+      table.name,
+    ),
+  }),
+);
+
+/* =========================================================
+   COMMERCIAL RATES
+========================================================= */
+
+export const rates = pgTable(
+  "bb_rate",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    rateType: text("rateType")
+      .$type<CommercialRateType>()
+      .notNull(),
+
+    unit: text("unit")
+      .$type<CommercialRateUnit>()
+      .notNull(),
+
+    amount: numeric("amount", {
+      precision: 14,
+      scale: 2,
+    }).notNull(),
+
+    currency: text("currency").notNull().default("GBP"),
+
+    counterpartyId: text("counterpartyId").references(() => counterparties.id, {
+      onDelete: "cascade",
+    }),
+
+    counterpartySiteId: text("counterpartySiteId").references(
+      () => counterpartySites.id,
+      { onDelete: "cascade" },
+    ),
+
+    ownSiteId: text("ownSiteId").references(() => sites.id, {
+      onDelete: "cascade",
+    }),
+
+    materialProfileId: text("materialProfileId").references(
+      () => materialProfiles.id,
+      { onDelete: "cascade" },
+    ),
+
+    effectiveFrom: timestamp("effectiveFrom", { mode: "date" }),
+    effectiveTo: timestamp("effectiveTo", { mode: "date" }),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    notes: text("notes"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("rate_org_idx").on(table.organisationId),
+    typeIdx: index("rate_type_idx").on(table.rateType),
+    counterpartyIdx: index("rate_counterparty_idx").on(table.counterpartyId),
+    materialIdx: index("rate_material_idx").on(table.materialProfileId),
+    activeIdx: index("rate_active_idx").on(table.isActive),
+  }),
+);
+
+/* =========================================================
+   JOB TEMPLATES
+========================================================= */
+
+export const jobTemplates = pgTable(
+  "bb_job_template",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    name: text("name").notNull(),
+
+    direction: text("direction")
+      .$type<JobDirection>()
+      .notNull()
+      .default("incoming"),
+
+    clientCounterpartyId: text("clientCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    clientSiteId: text("clientSiteId").references(() => counterpartySites.id, {
+      onDelete: "set null",
+    }),
+
+    ownSiteId: text("ownSiteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    sitePermitId: text("sitePermitId").references(() => sitePermits.id, {
+      onDelete: "set null",
+    }),
+
+    thirdPartyDestinationSiteId: text(
+      "thirdPartyDestinationSiteId",
+    ).references(() => counterpartySites.id, {
+      onDelete: "set null",
+    }),
+
+    haulierCounterpartyId: text("haulierCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    driverId: text("driverId").references(() => drivers.id, {
+      onDelete: "set null",
+    }),
+
+    vehicleId: text("vehicleId").references(() => vehicles.id, {
+      onDelete: "set null",
+    }),
+
+    materialProfileId: text("materialProfileId").references(
+      () => materialProfiles.id,
+      { onDelete: "set null" },
+    ),
+
+    rateId: text("rateId").references(() => rates.id, {
+      onDelete: "set null",
+    }),
+
+    plannedLoads: integer("plannedLoads").notNull().default(1),
+
+    defaultCustomerReference: text("defaultCustomerReference"),
+    notes: text("notes"),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    lastUsedAt: timestamp("lastUsedAt", { mode: "date" }),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("job_template_org_idx").on(table.organisationId),
+    clientIdx: index("job_template_client_idx").on(table.clientCounterpartyId),
+    ownSiteIdx: index("job_template_own_site_idx").on(table.ownSiteId),
+    sitePermitIdx: index("job_template_site_permit_idx").on(table.sitePermitId),
+    activeIdx: index("job_template_active_idx").on(table.isActive),
+    orgNameUnique: uniqueIndex("job_template_org_name_unique").on(
+      table.organisationId,
+      table.name,
+    ),
+  }),
+);
+
+/* =========================================================
+   JOBS
+   ---------------------------------------------------------
+   Jobs are the planned/commercial unit.
+   They are NOT carrier assignments.
+========================================================= */
+
+export const jobs = pgTable(
+  "bb_job",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    jobNumber: text("jobNumber").notNull(),
+
+    source: text("source")
+      .$type<JobSource>()
+      .notNull()
+      .default("manual"),
+
+    direction: text("direction")
+      .$type<JobDirection>()
+      .notNull()
+      .default("incoming"),
+
+    status: text("status")
+      .$type<JobStatus>()
+      .notNull()
+      .default("booked"),
+
+    jobDate: timestamp("jobDate", { mode: "date" }).notNull(),
+
+    clientCounterpartyId: text("clientCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    clientSiteId: text("clientSiteId").references(() => counterpartySites.id, {
+      onDelete: "set null",
+    }),
+
+    /*
+      The Waste X customer's own site handling the job.
+      For incoming jobs this is normally the receiving site.
+    */
+    ownSiteId: text("ownSiteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    sitePermitId: text("sitePermitId").references(() => sitePermits.id, {
+      onDelete: "set null",
+    }),
+
+    thirdPartyDestinationSiteId: text(
+      "thirdPartyDestinationSiteId",
+    ).references(() => counterpartySites.id, {
+      onDelete: "set null",
+    }),
+
+    haulierCounterpartyId: text("haulierCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    driverId: text("driverId").references(() => drivers.id, {
+      onDelete: "set null",
+    }),
+
+    vehicleId: text("vehicleId").references(() => vehicles.id, {
+      onDelete: "set null",
+    }),
+
+    materialProfileId: text("materialProfileId").references(
+      () => materialProfiles.id,
+      { onDelete: "set null" },
+    ),
+
+    plannedLoads: integer("plannedLoads").notNull().default(1),
+
+    purchaseOrder: text("purchaseOrder"),
+    customerReference: text("customerReference"),
+
+    /*
+      Customer billing marker for the Solo Workspace.
+
+      Important: bb_invoice / bb_payment are platform subscription billing
+      records. They are NOT customer job invoices. Stage 6 deliberately keeps
+      customer invoicing lightweight and external-accounting friendly.
+    */
+    customerInvoiceReference: text("customerInvoiceReference"),
+    customerInvoicedAt: timestamp("customerInvoicedAt", { mode: "date" }),
+
+    rateId: text("rateId").references(() => rates.id, {
+      onDelete: "set null",
+    }),
+
+    notes: text("notes"),
+
+    sourceTemplateId: text("sourceTemplateId").references(
+      () => jobTemplates.id,
+      { onDelete: "set null" },
+    ),
+
+    /*
+      Marketplace remains available, but is only one possible source of a job.
+    */
+    marketplaceListingId: integer("marketplaceListingId").references(
+      () => wasteListings.id,
+      { onDelete: "set null" },
+    ),
+
+    /*
+      Backwards-compatible bridge only.
+      New Solo jobs do not require carrierAssignments.
+    */
+    legacyAssignmentId: text("legacyAssignmentId").references(
+      () => carrierAssignments.id,
+      { onDelete: "set null" },
+    ),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    completedAt: timestamp("completedAt", { mode: "date" }),
+    cancelledAt: timestamp("cancelledAt", { mode: "date" }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("job_org_idx").on(table.organisationId),
+    dateIdx: index("job_date_idx").on(table.jobDate),
+    statusIdx: index("job_status_idx").on(table.status),
+    clientIdx: index("job_client_idx").on(table.clientCounterpartyId),
+    customerInvoicedIdx: index("job_customer_invoiced_idx").on(
+      table.organisationId,
+      table.customerInvoicedAt,
+    ),
+    ownSiteIdx: index("job_own_site_idx").on(table.ownSiteId),
+    sitePermitIdx: index("job_site_permit_idx").on(table.sitePermitId),
+    sourceIdx: index("job_source_idx").on(table.source),
+    marketplaceListingIdx: index("job_marketplace_listing_idx").on(
+      table.marketplaceListingId,
+    ),
+    orgJobNumberUnique: uniqueIndex("job_org_job_number_unique").on(
+      table.organisationId,
+      table.jobNumber,
+    ),
+  }),
+);
+
+/* =========================================================
+   JOB LOADS / MOVEMENTS
+   ---------------------------------------------------------
+   This is the factual operational transaction.
+
+   Jobs can have many loads.
+   DWT receipts attach to a load, not to a carrier assignment.
+========================================================= */
+
+export const jobLoads = pgTable(
+  "bb_job_load",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    jobId: text("jobId")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+
+    loadNumber: integer("loadNumber").notNull(),
+
+    status: text("status")
+      .$type<JobLoadStatus>()
+      .notNull()
+      .default("planned"),
+
+    direction: text("direction")
+      .$type<JobDirection>()
+      .notNull()
+      .default("incoming"),
+
+    movementAt: timestamp("movementAt", { mode: "date" }),
+    receivedAt: timestamp("receivedAt", { mode: "date" }),
+
+    /*
+      Actual parties/sites used for this load.
+      These are copied from job defaults when the load is created,
+      but may be changed for the actual movement.
+    */
+    clientCounterpartyId: text("clientCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    clientSiteId: text("clientSiteId").references(() => counterpartySites.id, {
+      onDelete: "set null",
+    }),
+
+    ownSiteId: text("ownSiteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    sitePermitId: text("sitePermitId").references(() => sitePermits.id, {
+      onDelete: "set null",
+    }),
+
+    thirdPartyDestinationSiteId: text(
+      "thirdPartyDestinationSiteId",
+    ).references(() => counterpartySites.id, {
+      onDelete: "set null",
+    }),
+
+    haulierCounterpartyId: text("haulierCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    driverId: text("driverId").references(() => drivers.id, {
+      onDelete: "set null",
+    }),
+
+    vehicleId: text("vehicleId").references(() => vehicles.id, {
+      onDelete: "set null",
+    }),
+
+    materialProfileId: text("materialProfileId").references(
+      () => materialProfiles.id,
+      { onDelete: "set null" },
+    ),
+
+    /*
+      Material snapshot.
+      This deliberately duplicates critical values so later edits to a
+      Material Profile do not rewrite what actually happened.
+    */
+    ewcCodeId: text("ewcCodeId").references(() => ewcCodes.id, {
+      onDelete: "set null",
+    }),
+
+    ewcCodeSnapshot: text("ewcCodeSnapshot"),
+    wasteDescriptionSnapshot: text("wasteDescriptionSnapshot"),
+
+    physicalFormSnapshot: text("physicalFormSnapshot").$type<
+      "Gas" | "Liquid" | "Solid" | "Powder" | "Sludge" | "Mixed"
+    >(),
+
+    numberOfContainers: integer("numberOfContainers"),
+    containerTypeSnapshot: text("containerTypeSnapshot"),
+
+    containsPops: boolean("containsPops").notNull().default(false),
+    popsSourceOfComponents: text("popsSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+    popsComponents: text("popsComponents"),
+
+    containsHazardous: boolean("containsHazardous")
+      .notNull()
+      .default(false),
+
+    hazardousSourceOfComponents: text("hazardousSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+    hazardousHazCodes: text("hazardousHazCodes"),
+    hazardousComponents: text("hazardousComponents"),
+
+    disposalRecoveryCodeId: text("disposalRecoveryCodeId").references(
+      () => disposalRecoveryCodes.id,
+      { onDelete: "set null" },
+    ),
+
+    disposalRecoveryCodeSnapshot: text("disposalRecoveryCodeSnapshot"),
+
+    /*
+      Weight capture.
+      The MVP supports manual entry; weighbridge/imported are future-safe.
+    */
+    grossWeight: numeric("grossWeight", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    tareWeight: numeric("tareWeight", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    netWeight: numeric("netWeight", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    weightMetric: text("weightMetric")
+      .$type<"Grams" | "Kilograms" | "Tonnes">()
+      .notNull()
+      .default("Tonnes"),
+
+    weightIsEstimate: boolean("weightIsEstimate").notNull().default(false),
+
+    weightSource: text("weightSource")
+      .$type<WeightSource>()
+      .notNull()
+      .default("manual"),
+
+    ticketNumber: text("ticketNumber"),
+    purchaseOrder: text("purchaseOrder"),
+    customerReference: text("customerReference"),
+
+    /*
+      Commercial snapshots.
+      Rates may later change; completed loads retain the values used.
+    */
+    customerChargeAmount: numeric("customerChargeAmount", {
+      precision: 14,
+      scale: 2,
+    }),
+
+    customerChargeUnit: text("customerChargeUnit").$type<CommercialRateUnit>(),
+
+    haulageCostAmount: numeric("haulageCostAmount", {
+      precision: 14,
+      scale: 2,
+    }),
+
+    haulageCostUnit: text("haulageCostUnit").$type<CommercialRateUnit>(),
+
+    tippingCostAmount: numeric("tippingCostAmount", {
+      precision: 14,
+      scale: 2,
+    }),
+
+    tippingCostUnit: text("tippingCostUnit").$type<CommercialRateUnit>(),
+
+    currency: text("currency").notNull().default("GBP"),
+
+    notes: text("notes"),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    completedAt: timestamp("completedAt", { mode: "date" }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("job_load_org_idx").on(table.organisationId),
+    jobIdx: index("job_load_job_idx").on(table.jobId),
+    statusIdx: index("job_load_status_idx").on(table.status),
+    movementAtIdx: index("job_load_movement_at_idx").on(table.movementAt),
+    receivedAtIdx: index("job_load_received_at_idx").on(table.receivedAt),
+    ownSiteIdx: index("job_load_own_site_idx").on(table.ownSiteId),
+    sitePermitIdx: index("job_load_site_permit_idx").on(table.sitePermitId),
+    haulierIdx: index("job_load_haulier_idx").on(
+      table.haulierCounterpartyId,
+    ),
+    materialIdx: index("job_load_material_idx").on(table.materialProfileId),
+    ticketIdx: index("job_load_ticket_idx").on(table.ticketNumber),
+    jobLoadNumberUnique: uniqueIndex("job_load_job_number_unique").on(
+      table.jobId,
+      table.loadNumber,
+    ),
+  }),
+);
+
 
 export const invoices = pgTable(
   "bb_invoice",
@@ -248,6 +1502,11 @@ export const payments = pgTable(
   }),
 );
 
+/*
+  LEGACY chain/network event stream.
+  New Solo Workspace operational history should use jobs, jobLoads
+  and auditEvents rather than depending on actorRole/assignment state.
+*/
 export const wasteEvents = pgTable(
   "bb_waste_event",
   {
@@ -339,18 +1598,34 @@ export const users = pgTable(
       onDelete: "cascade",
     }),
 
+    /*
+      LEGACY / future network workspace only.
+      Solo Workspace must not require departmentId.
+    */
     departmentId: text("departmentId"),
 
     activeSessionToken: text("activeSessionToken"),
 activeSessionStartedAt: timestamp("activeSessionStartedAt"),
 lastSeenAt: timestamp("lastSeenAt"),
 
+    /*
+      Application access role.
+      Legacy employee/seniorManagement values are retained for migration
+      compatibility. New Solo Workspace screens should use:
+      administrator | operations | accounts | read_only.
+    */
     role: text("role")
       .$type<
-        "administrator" | "employee" | "seniorManagement" | "platform_admin"
+        | "administrator"
+        | "operations"
+        | "accounts"
+        | "read_only"
+        | "employee"
+        | "seniorManagement"
+        | "platform_admin"
       >()
       .notNull()
-      .default("employee"),
+      .default("operations"),
 
     isActive: boolean("isActive").notNull().default(true),
     isSuspended: boolean("isSuspended").notNull().default(false),
@@ -611,7 +1886,10 @@ export const bids = pgTable(
 );
 
 /* =========================================================
-   CARRIER ASSIGNMENTS
+   CARRIER ASSIGNMENTS — LEGACY / FUTURE NETWORK MODEL
+   ---------------------------------------------------------
+   Retained for Marketplace / future Generator & Carrier phases.
+   The active Solo Workspace must not require this table.
 ========================================================= */
 
 export const carrierAssignments = pgTable(
@@ -866,6 +2144,30 @@ export const wasteTrackingOrganisationSettings = pgTable(
 
     isEnabled: boolean("isEnabled").notNull().default(false),
 
+    /*
+      Optional carrier defaults for organisations that transport waste
+      themselves. These are used only when a Solo job load has no external
+      haulierCounterpartyId. They do not replace external haulier records.
+    */
+    ownCarrierRegistrationNumber: text("ownCarrierRegistrationNumber"),
+
+    ownCarrierReasonForNoRegistrationNumber: text(
+      "ownCarrierReasonForNoRegistrationNumber",
+    ).$type<"ON_SITE" | "HOUSEHOLD" | "ONE_OFF" | "MARINE">(),
+
+    ownCarrierMeansOfTransport: text("ownCarrierMeansOfTransport")
+      .$type<
+        | "Road"
+        | "Rail"
+        | "Air"
+        | "Sea"
+        | "Inland Waterway"
+        | "Piped"
+        | "Other"
+      >()
+      .notNull()
+      .default("Road"),
+
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
     updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
   },
@@ -961,23 +2263,41 @@ export const wasteReceipts = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
 
-    /*
-      Tenant organisation context.
-      For manager/receiver workflows, this is usually the manager organisation.
-    */
     organisationId: text("organisationId")
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
 
-    assignmentId: text("assignmentId")
-      .notNull()
-      .references(() => carrierAssignments.id, { onDelete: "cascade" }),
+    /*
+      NEW SOLO WORKSPACE LINK
+      -----------------------
+      A receipt belongs to the actual load received.
 
-    listingId: integer("listingId")
-      .notNull()
-      .references(() => wasteListings.id, { onDelete: "cascade" }),
+      This is nullable during migration so historical marketplace receipts
+      remain valid. New Solo Workspace receipt creation should require it.
+    */
+    jobLoadId: text("jobLoadId").references(() => jobLoads.id, {
+      onDelete: "cascade",
+    }),
+
+    /*
+      LEGACY / FUTURE NETWORK LINKS
+      -----------------------------
+      Retained so old marketplace/assignment receipts and future network
+      flows continue to have a migration path.
+    */
+    assignmentId: text("assignmentId").references(() => carrierAssignments.id, {
+      onDelete: "set null",
+    }),
+
+    listingId: integer("listingId").references(() => wasteListings.id, {
+      onDelete: "set null",
+    }),
 
     siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    sitePermitId: text("sitePermitId").references(() => sitePermits.id, {
       onDelete: "set null",
     }),
 
@@ -985,6 +2305,10 @@ export const wasteReceipts = pgTable(
       onDelete: "set null",
     }),
 
+    /*
+      Waste X organisation links remain useful where the carrier or receiver
+      is also a Waste X organisation.
+    */
     carrierOrganisationId: text("carrierOrganisationId").references(
       () => organisations.id,
       { onDelete: "set null" },
@@ -992,6 +2316,21 @@ export const wasteReceipts = pgTable(
 
     receiverOrganisationId: text("receiverOrganisationId").references(
       () => organisations.id,
+      { onDelete: "set null" },
+    ),
+
+    /*
+      Solo Workspace master-data links.
+      These allow ordinary clients/hauliers/brokers to exist without needing
+      to be registered Waste X organisations.
+    */
+    carrierCounterpartyId: text("carrierCounterpartyId").references(
+      () => counterparties.id,
+      { onDelete: "set null" },
+    ),
+
+    brokerDealerCounterpartyId: text("brokerDealerCounterpartyId").references(
+      () => counterparties.id,
       { onDelete: "set null" },
     ),
 
@@ -1023,7 +2362,7 @@ export const wasteReceipts = pgTable(
 
     /*
       Carrier snapshot at receipt time.
-      This protects the audit record if organisation details change later.
+      This protects the legal/audit record if master data changes later.
     */
     carrierRegistrationNumber: text("carrierRegistrationNumber"),
 
@@ -1049,6 +2388,16 @@ export const wasteReceipts = pgTable(
     >(),
 
     /*
+      Optional broker/dealer snapshot.
+    */
+    brokerDealerOrganisationName: text("brokerDealerOrganisationName"),
+    brokerDealerFullAddress: text("brokerDealerFullAddress"),
+    brokerDealerPostcode: text("brokerDealerPostcode"),
+    brokerDealerEmailAddress: text("brokerDealerEmailAddress"),
+    brokerDealerPhoneNumber: text("brokerDealerPhoneNumber"),
+    brokerDealerRegistrationNumber: text("brokerDealerRegistrationNumber"),
+
+    /*
       Receiver/site snapshot at receipt time.
     */
     receiverSiteName: text("receiverSiteName"),
@@ -1072,11 +2421,21 @@ export const wasteReceipts = pgTable(
   },
   (table) => ({
     orgIdx: index("waste_receipt_org_idx").on(table.organisationId),
+    jobLoadUnique: uniqueIndex("waste_receipt_job_load_unique").on(
+      table.jobLoadId,
+    ),
+    jobLoadIdx: index("waste_receipt_job_load_idx").on(table.jobLoadId),
     siteIdx: index("waste_receipt_site_idx").on(table.siteId),
+    sitePermitIdx: index("waste_receipt_site_permit_idx").on(
+      table.sitePermitId,
+    ),
     assignmentIdx: index("waste_receipt_assignment_idx").on(
       table.assignmentId,
     ),
     listingIdx: index("waste_receipt_listing_idx").on(table.listingId),
+    carrierCounterpartyIdx: index(
+      "waste_receipt_carrier_counterparty_idx",
+    ).on(table.carrierCounterpartyId),
     statusIdx: index("waste_receipt_status_idx").on(table.status),
     receivedAtIdx: index("waste_receipt_received_at_idx").on(table.receivedAt),
   }),
@@ -1202,16 +2561,29 @@ export const wasteTrackingSubmissions = pgTable(
       .notNull()
       .references(() => organisations.id, { onDelete: "cascade" }),
 
-    assignmentId: text("assignmentId")
-      .notNull()
-      .references(() => carrierAssignments.id, { onDelete: "cascade" }),
+    /*
+      New operational link.
+      New Solo submissions should originate from a Waste X job load/receipt.
+    */
+    jobLoadId: text("jobLoadId").references(() => jobLoads.id, {
+      onDelete: "set null",
+    }),
+
+    /*
+      Legacy / future network links.
+    */
+    assignmentId: text("assignmentId").references(() => carrierAssignments.id, {
+      onDelete: "set null",
+    }),
 
     listingId: integer("listingId").references(() => wasteListings.id, {
       onDelete: "set null",
     }),
+
     siteId: text("siteId").references(() => sites.id, {
       onDelete: "set null",
     }),
+
     receiptId: text("receiptId").references(() => wasteReceipts.id, {
       onDelete: "set null",
     }),
@@ -1239,26 +2611,22 @@ export const wasteTrackingSubmissions = pgTable(
       .notNull()
       .default("draft"),
 
-    method: text("method").$type<"POST" | "PUT">().notNull(),
-
-    endpoint: text("endpoint").notNull(),
-
     /*
-      JSON string of the exact payload submitted.
-      Keep this as text to stay consistent with your current schema style.
+      Nullable for draft/queued records.
+      Populated when a submission attempt is made.
     */
-    payloadSnapshot: text("payloadSnapshot").notNull(),
+    method: text("method").$type<"POST" | "PUT">(),
 
-    /*
-      JSON string of the exact response returned by Defra.
-    */
+    endpoint: text("endpoint"),
+
+    payloadSnapshot: text("payloadSnapshot"),
+
     responseSnapshot: text("responseSnapshot"),
 
-    /*
-      JSON string arrays from Defra validation response.
-    */
     validationWarnings: text("validationWarnings"),
     validationErrors: text("validationErrors"),
+
+    attemptNumber: integer("attemptNumber").notNull().default(1),
 
     submittedAt: timestamp("submittedAt", { mode: "date" }),
     lastAttemptedAt: timestamp("lastAttemptedAt", { mode: "date" }),
@@ -1269,6 +2637,9 @@ export const wasteTrackingSubmissions = pgTable(
   (table) => ({
     orgIdx: index("waste_tracking_submission_org_idx").on(
       table.organisationId,
+    ),
+    jobLoadIdx: index("waste_tracking_submission_job_load_idx").on(
+      table.jobLoadId,
     ),
     assignmentIdx: index("waste_tracking_submission_assignment_idx").on(
       table.assignmentId,
@@ -1336,9 +2707,12 @@ export const wasteTrackingPatResults = pgTable(
 
     /*
       Waste X internal links.
-      These are optional because C01 and H02 are expected-error
-      scenarios and may not create a WTID.
+      These are optional because expected-error scenarios may not create a WTID.
     */
+    jobLoadId: text("jobLoadId").references(() => jobLoads.id, {
+      onDelete: "set null",
+    }),
+
     assignmentId: text("assignmentId").references(() => carrierAssignments.id, {
       onDelete: "set null",
     }),
@@ -1417,6 +2791,10 @@ export const wasteTrackingPatResults = pgTable(
       table.defraStatus,
     ),
 
+    jobLoadIdx: index("waste_tracking_pat_result_job_load_idx").on(
+      table.jobLoadId,
+    ),
+
     assignmentIdx: index("waste_tracking_pat_result_assignment_idx").on(
       table.assignmentId,
     ),
@@ -1444,6 +2822,11 @@ export const wasteTrackingPatResults = pgTable(
 export const wasteTrackingPatResultsRelations = relations(
   wasteTrackingPatResults,
   ({ one }) => ({
+    jobLoad: one(jobLoads, {
+      fields: [wasteTrackingPatResults.jobLoadId],
+      references: [jobLoads.id],
+    }),
+
     assignment: one(carrierAssignments, {
       fields: [wasteTrackingPatResults.assignmentId],
       references: [carrierAssignments.id],
@@ -1498,6 +2881,14 @@ export const notifications = pgTable(
     }),
 
     listingId: integer("listingId").references(() => wasteListings.id, {
+      onDelete: "cascade",
+    }),
+
+    jobId: text("jobId").references(() => jobs.id, {
+      onDelete: "cascade",
+    }),
+
+    jobLoadId: text("jobLoadId").references(() => jobLoads.id, {
       onDelete: "cascade",
     }),
 
@@ -1818,15 +3209,23 @@ export const reportExports = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
 
+    /*
+      LEGACY / future network reporting context.
+      Solo reports do not require a department.
+    */
     departmentId: text("departmentId"),
 
     reportType: text("reportType")
       .$type<
+        | "daily_worksheet"
+        | "job_summary"
+        | "quarterly_return"
+        | "billing_export"
+        | "dwt_submissions"
+        | "waste_receipts"
         | "assignment_summary"
         | "chain_of_custody"
         | "incident_log"
-        | "dwt_submissions"
-        | "waste_receipts"
         | "listing_activity"
         | "carrier_performance"
         | "user_access_audit"
@@ -1964,9 +3363,15 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     references: [userProfiles.userId],
   }),
 
-  listings: many(wasteListings),
-
-  bids: many(bids),
+  /*
+    Active Solo Workspace creation/audit links.
+  */
+  createdSitePermits: many(sitePermits),
+  configuredPermitEwcCodes: many(permitEwcCodes),
+  createdMaterialProfiles: many(materialProfiles),
+  createdJobTemplates: many(jobTemplates),
+  createdJobs: many(jobs),
+  createdJobLoads: many(jobLoads),
 
   notificationsReceived: many(notifications, {
     relationName: "notificationRecipient",
@@ -1976,17 +3381,24 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     relationName: "notificationActor",
   }),
 
+  wasteReceiptsReceived: many(wasteReceipts),
+
+  wasteTrackingSubmissionsSubmitted: many(wasteTrackingSubmissions),
+
+  /*
+    Legacy / future network links.
+  */
+  listings: many(wasteListings),
+  bids: many(bids),
+
   department: one(departments, {
     fields: [users.departmentId],
     references: [departments.id],
   }),
 
   reviewsWritten: many(reviews),
-
-  wasteReceiptsReceived: many(wasteReceipts),
-
-  wasteTrackingSubmissionsSubmitted: many(wasteTrackingSubmissions),
 }));
+
 
 /* ================= USER PROFILES ================= */
 
@@ -2004,6 +3416,30 @@ export const organisationsRelations = relations(
   ({ one, many }) => ({
     members: many(users),
 
+    /*
+      Active Solo Workspace domain.
+    */
+    sites: many(sites),
+    sitePermits: many(sitePermits),
+    permitEwcCodes: many(permitEwcCodes),
+
+    counterparties: many(counterparties),
+    counterpartyRoles: many(counterpartyRoles),
+    counterpartySites: many(counterpartySites),
+
+    drivers: many(drivers),
+    vehicles: many(vehicles),
+
+    materialProfiles: many(materialProfiles),
+    rates: many(rates),
+
+    jobTemplates: many(jobTemplates),
+    jobs: many(jobs),
+    jobLoads: many(jobLoads),
+
+    /*
+      Marketplace / future network domain.
+    */
     listings: many(wasteListings, {
       relationName: "ownerOrganisation",
     }),
@@ -2023,8 +3459,6 @@ export const organisationsRelations = relations(
     }),
 
     departments: many(departments),
-
-    sites: many(sites),
 
     reviews: many(reviews),
     subscriptions: many(organisationSubscriptions),
@@ -2053,6 +3487,581 @@ export const organisationsRelations = relations(
   }),
 );
 
+
+/* ================= SOLO WORKSPACE CORE RELATIONS ================= */
+
+export const ewcCodesRelations = relations(ewcCodes, ({ many }) => ({
+  permitLinks: many(permitEwcCodes),
+  externalFacilityAuthorisationLinks: many(counterpartySiteEwcCodes),
+  materialProfiles: many(materialProfiles),
+  jobLoads: many(jobLoads),
+}));
+
+export const disposalRecoveryCodesRelations = relations(
+  disposalRecoveryCodes,
+  ({ many }) => ({
+    materialProfiles: many(materialProfiles),
+    jobLoads: many(jobLoads),
+  }),
+);
+
+export const sitePermitsRelations = relations(
+  sitePermits,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [sitePermits.organisationId],
+      references: [organisations.id],
+    }),
+
+    site: one(sites, {
+      fields: [sitePermits.siteId],
+      references: [sites.id],
+    }),
+
+    createdBy: one(users, {
+      fields: [sitePermits.createdByUserId],
+      references: [users.id],
+    }),
+
+    permittedEwcCodes: many(permitEwcCodes),
+    jobTemplates: many(jobTemplates),
+    jobs: many(jobs),
+    jobLoads: many(jobLoads),
+    wasteReceipts: many(wasteReceipts),
+  }),
+);
+
+export const permitEwcCodesRelations = relations(
+  permitEwcCodes,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [permitEwcCodes.organisationId],
+      references: [organisations.id],
+    }),
+
+    permit: one(sitePermits, {
+      fields: [permitEwcCodes.permitId],
+      references: [sitePermits.id],
+    }),
+
+    ewcCode: one(ewcCodes, {
+      fields: [permitEwcCodes.ewcCodeId],
+      references: [ewcCodes.id],
+    }),
+
+    configuredBy: one(users, {
+      fields: [permitEwcCodes.configuredByUserId],
+      references: [users.id],
+    }),
+  }),
+);
+
+export const counterpartiesRelations = relations(
+  counterparties,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [counterparties.organisationId],
+      references: [organisations.id],
+    }),
+
+    roles: many(counterpartyRoles),
+    sites: many(counterpartySites),
+
+    drivers: many(drivers, {
+      relationName: "driverHaulier",
+    }),
+
+    vehicles: many(vehicles, {
+      relationName: "vehicleHaulier",
+    }),
+
+    rates: many(rates),
+
+    clientJobTemplates: many(jobTemplates, {
+      relationName: "jobTemplateClient",
+    }),
+
+    haulierJobTemplates: many(jobTemplates, {
+      relationName: "jobTemplateHaulier",
+    }),
+
+    clientJobs: many(jobs, {
+      relationName: "jobClient",
+    }),
+
+    haulierJobs: many(jobs, {
+      relationName: "jobHaulier",
+    }),
+
+    clientJobLoads: many(jobLoads, {
+      relationName: "jobLoadClient",
+    }),
+
+    haulierJobLoads: many(jobLoads, {
+      relationName: "jobLoadHaulier",
+    }),
+
+    carrierWasteReceipts: many(wasteReceipts, {
+      relationName: "wasteReceiptCarrierCounterparty",
+    }),
+
+    brokerDealerWasteReceipts: many(wasteReceipts, {
+      relationName: "wasteReceiptBrokerDealerCounterparty",
+    }),
+  }),
+);
+
+export const counterpartyRolesRelations = relations(
+  counterpartyRoles,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [counterpartyRoles.organisationId],
+      references: [organisations.id],
+    }),
+
+    counterparty: one(counterparties, {
+      fields: [counterpartyRoles.counterpartyId],
+      references: [counterparties.id],
+    }),
+  }),
+);
+
+export const counterpartySitesRelations = relations(
+  counterpartySites,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [counterpartySites.organisationId],
+      references: [organisations.id],
+    }),
+
+    counterparty: one(counterparties, {
+      fields: [counterpartySites.counterpartyId],
+      references: [counterparties.id],
+    }),
+
+    authorisations: many(counterpartySiteAuthorisations),
+
+    rates: many(rates),
+
+    clientJobTemplates: many(jobTemplates, {
+      relationName: "jobTemplateClientSite",
+    }),
+
+    destinationJobTemplates: many(jobTemplates, {
+      relationName: "jobTemplateThirdPartyDestination",
+    }),
+
+    clientJobs: many(jobs, {
+      relationName: "jobClientSite",
+    }),
+
+    destinationJobs: many(jobs, {
+      relationName: "jobThirdPartyDestination",
+    }),
+
+    clientJobLoads: many(jobLoads, {
+      relationName: "jobLoadClientSite",
+    }),
+
+    destinationJobLoads: many(jobLoads, {
+      relationName: "jobLoadThirdPartyDestination",
+    }),
+  }),
+);
+
+export const counterpartySiteAuthorisationsRelations = relations(
+  counterpartySiteAuthorisations,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [counterpartySiteAuthorisations.organisationId],
+      references: [organisations.id],
+    }),
+
+    site: one(counterpartySites, {
+      fields: [counterpartySiteAuthorisations.counterpartySiteId],
+      references: [counterpartySites.id],
+    }),
+
+    createdBy: one(users, {
+      fields: [counterpartySiteAuthorisations.createdByUserId],
+      references: [users.id],
+    }),
+
+    permittedEwcCodes: many(counterpartySiteEwcCodes),
+  }),
+);
+
+export const counterpartySiteEwcCodesRelations = relations(
+  counterpartySiteEwcCodes,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [counterpartySiteEwcCodes.organisationId],
+      references: [organisations.id],
+    }),
+
+    authorisation: one(counterpartySiteAuthorisations, {
+      fields: [counterpartySiteEwcCodes.authorisationId],
+      references: [counterpartySiteAuthorisations.id],
+    }),
+
+    ewcCode: one(ewcCodes, {
+      fields: [counterpartySiteEwcCodes.ewcCodeId],
+      references: [ewcCodes.id],
+    }),
+
+    configuredBy: one(users, {
+      fields: [counterpartySiteEwcCodes.configuredByUserId],
+      references: [users.id],
+    }),
+  }),
+);
+
+export const driversRelations = relations(drivers, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [drivers.organisationId],
+    references: [organisations.id],
+  }),
+
+  haulier: one(counterparties, {
+    relationName: "driverHaulier",
+    fields: [drivers.haulierCounterpartyId],
+    references: [counterparties.id],
+  }),
+
+  defaultVehicle: one(vehicles, {
+    relationName: "driverDefaultVehicle",
+    fields: [drivers.defaultVehicleId],
+    references: [vehicles.id],
+  }),
+
+  jobTemplates: many(jobTemplates),
+  jobs: many(jobs),
+  jobLoads: many(jobLoads),
+}));
+
+export const vehiclesRelations = relations(vehicles, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [vehicles.organisationId],
+    references: [organisations.id],
+  }),
+
+  haulier: one(counterparties, {
+    relationName: "vehicleHaulier",
+    fields: [vehicles.haulierCounterpartyId],
+    references: [counterparties.id],
+  }),
+
+  defaultForDrivers: many(drivers, {
+    relationName: "driverDefaultVehicle",
+  }),
+
+  jobTemplates: many(jobTemplates),
+  jobs: many(jobs),
+  jobLoads: many(jobLoads),
+}));
+
+export const materialProfilesRelations = relations(
+  materialProfiles,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [materialProfiles.organisationId],
+      references: [organisations.id],
+    }),
+
+    site: one(sites, {
+      fields: [materialProfiles.siteId],
+      references: [sites.id],
+    }),
+
+    ewcCode: one(ewcCodes, {
+      fields: [materialProfiles.ewcCodeId],
+      references: [ewcCodes.id],
+    }),
+
+    defaultDisposalRecoveryCode: one(disposalRecoveryCodes, {
+      fields: [materialProfiles.defaultDisposalRecoveryCodeId],
+      references: [disposalRecoveryCodes.id],
+    }),
+
+    createdBy: one(users, {
+      fields: [materialProfiles.createdByUserId],
+      references: [users.id],
+    }),
+
+    rates: many(rates),
+    jobTemplates: many(jobTemplates),
+    jobs: many(jobs),
+    jobLoads: many(jobLoads),
+  }),
+);
+
+export const ratesRelations = relations(rates, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [rates.organisationId],
+    references: [organisations.id],
+  }),
+
+  counterparty: one(counterparties, {
+    fields: [rates.counterpartyId],
+    references: [counterparties.id],
+  }),
+
+  counterpartySite: one(counterpartySites, {
+    fields: [rates.counterpartySiteId],
+    references: [counterpartySites.id],
+  }),
+
+  ownSite: one(sites, {
+    fields: [rates.ownSiteId],
+    references: [sites.id],
+  }),
+
+  materialProfile: one(materialProfiles, {
+    fields: [rates.materialProfileId],
+    references: [materialProfiles.id],
+  }),
+
+  jobTemplates: many(jobTemplates),
+  jobs: many(jobs),
+}));
+
+export const jobTemplatesRelations = relations(
+  jobTemplates,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [jobTemplates.organisationId],
+      references: [organisations.id],
+    }),
+
+    client: one(counterparties, {
+      relationName: "jobTemplateClient",
+      fields: [jobTemplates.clientCounterpartyId],
+      references: [counterparties.id],
+    }),
+
+    clientSite: one(counterpartySites, {
+      relationName: "jobTemplateClientSite",
+      fields: [jobTemplates.clientSiteId],
+      references: [counterpartySites.id],
+    }),
+
+    ownSite: one(sites, {
+      fields: [jobTemplates.ownSiteId],
+      references: [sites.id],
+    }),
+
+    sitePermit: one(sitePermits, {
+      fields: [jobTemplates.sitePermitId],
+      references: [sitePermits.id],
+    }),
+
+    thirdPartyDestinationSite: one(counterpartySites, {
+      relationName: "jobTemplateThirdPartyDestination",
+      fields: [jobTemplates.thirdPartyDestinationSiteId],
+      references: [counterpartySites.id],
+    }),
+
+    haulier: one(counterparties, {
+      relationName: "jobTemplateHaulier",
+      fields: [jobTemplates.haulierCounterpartyId],
+      references: [counterparties.id],
+    }),
+
+    driver: one(drivers, {
+      fields: [jobTemplates.driverId],
+      references: [drivers.id],
+    }),
+
+    vehicle: one(vehicles, {
+      fields: [jobTemplates.vehicleId],
+      references: [vehicles.id],
+    }),
+
+    materialProfile: one(materialProfiles, {
+      fields: [jobTemplates.materialProfileId],
+      references: [materialProfiles.id],
+    }),
+
+    rate: one(rates, {
+      fields: [jobTemplates.rateId],
+      references: [rates.id],
+    }),
+
+    createdBy: one(users, {
+      fields: [jobTemplates.createdByUserId],
+      references: [users.id],
+    }),
+
+    jobs: many(jobs),
+  }),
+);
+
+export const jobsRelations = relations(jobs, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [jobs.organisationId],
+    references: [organisations.id],
+  }),
+
+  client: one(counterparties, {
+    relationName: "jobClient",
+    fields: [jobs.clientCounterpartyId],
+    references: [counterparties.id],
+  }),
+
+  clientSite: one(counterpartySites, {
+    relationName: "jobClientSite",
+    fields: [jobs.clientSiteId],
+    references: [counterpartySites.id],
+  }),
+
+  ownSite: one(sites, {
+    fields: [jobs.ownSiteId],
+    references: [sites.id],
+  }),
+
+  sitePermit: one(sitePermits, {
+    fields: [jobs.sitePermitId],
+    references: [sitePermits.id],
+  }),
+
+  thirdPartyDestinationSite: one(counterpartySites, {
+    relationName: "jobThirdPartyDestination",
+    fields: [jobs.thirdPartyDestinationSiteId],
+    references: [counterpartySites.id],
+  }),
+
+  haulier: one(counterparties, {
+    relationName: "jobHaulier",
+    fields: [jobs.haulierCounterpartyId],
+    references: [counterparties.id],
+  }),
+
+  driver: one(drivers, {
+    fields: [jobs.driverId],
+    references: [drivers.id],
+  }),
+
+  vehicle: one(vehicles, {
+    fields: [jobs.vehicleId],
+    references: [vehicles.id],
+  }),
+
+  materialProfile: one(materialProfiles, {
+    fields: [jobs.materialProfileId],
+    references: [materialProfiles.id],
+  }),
+
+  rate: one(rates, {
+    fields: [jobs.rateId],
+    references: [rates.id],
+  }),
+
+  sourceTemplate: one(jobTemplates, {
+    fields: [jobs.sourceTemplateId],
+    references: [jobTemplates.id],
+  }),
+
+  marketplaceListing: one(wasteListings, {
+    fields: [jobs.marketplaceListingId],
+    references: [wasteListings.id],
+  }),
+
+  legacyAssignment: one(carrierAssignments, {
+    fields: [jobs.legacyAssignmentId],
+    references: [carrierAssignments.id],
+  }),
+
+  createdBy: one(users, {
+    fields: [jobs.createdByUserId],
+    references: [users.id],
+  }),
+
+  loads: many(jobLoads),
+  notifications: many(notifications),
+}));
+
+export const jobLoadsRelations = relations(jobLoads, ({ one, many }) => ({
+  organisation: one(organisations, {
+    fields: [jobLoads.organisationId],
+    references: [organisations.id],
+  }),
+
+  job: one(jobs, {
+    fields: [jobLoads.jobId],
+    references: [jobs.id],
+  }),
+
+  client: one(counterparties, {
+    relationName: "jobLoadClient",
+    fields: [jobLoads.clientCounterpartyId],
+    references: [counterparties.id],
+  }),
+
+  clientSite: one(counterpartySites, {
+    relationName: "jobLoadClientSite",
+    fields: [jobLoads.clientSiteId],
+    references: [counterpartySites.id],
+  }),
+
+  ownSite: one(sites, {
+    fields: [jobLoads.ownSiteId],
+    references: [sites.id],
+  }),
+
+  sitePermit: one(sitePermits, {
+    fields: [jobLoads.sitePermitId],
+    references: [sitePermits.id],
+  }),
+
+  thirdPartyDestinationSite: one(counterpartySites, {
+    relationName: "jobLoadThirdPartyDestination",
+    fields: [jobLoads.thirdPartyDestinationSiteId],
+    references: [counterpartySites.id],
+  }),
+
+  haulier: one(counterparties, {
+    relationName: "jobLoadHaulier",
+    fields: [jobLoads.haulierCounterpartyId],
+    references: [counterparties.id],
+  }),
+
+  driver: one(drivers, {
+    fields: [jobLoads.driverId],
+    references: [drivers.id],
+  }),
+
+  vehicle: one(vehicles, {
+    fields: [jobLoads.vehicleId],
+    references: [vehicles.id],
+  }),
+
+  materialProfile: one(materialProfiles, {
+    fields: [jobLoads.materialProfileId],
+    references: [materialProfiles.id],
+  }),
+
+  ewcCode: one(ewcCodes, {
+    fields: [jobLoads.ewcCodeId],
+    references: [ewcCodes.id],
+  }),
+
+  disposalRecoveryCode: one(disposalRecoveryCodes, {
+    fields: [jobLoads.disposalRecoveryCodeId],
+    references: [disposalRecoveryCodes.id],
+  }),
+
+  createdBy: one(users, {
+    fields: [jobLoads.createdByUserId],
+    references: [users.id],
+  }),
+
+  receipt: one(wasteReceipts),
+
+  submissions: many(wasteTrackingSubmissions),
+  notifications: many(notifications),
+}));
+
+
 /* ================= WASTE LISTINGS ================= */
 
 export const wasteListingsRelations = relations(
@@ -2069,28 +4078,29 @@ export const wasteListingsRelations = relations(
       references: [organisations.id],
     }),
 
-    bids: many(bids),
-
-    carrierAssignments: many(carrierAssignments),
-
-    incidents: many(incidents),
-
-    notifications: many(notifications),
-
-    reviews: many(reviews),
-
-    templateData: many(listingTemplateData),
-
-    wasteReceipts: many(wasteReceipts),
-
-      site: one(sites, {
+    site: one(sites, {
       fields: [wasteListings.siteId],
       references: [sites.id],
     }),
 
+    bids: many(bids),
+    carrierAssignments: many(carrierAssignments),
+    incidents: many(incidents),
+    notifications: many(notifications),
+    reviews: many(reviews),
+    templateData: many(listingTemplateData),
+
+    /*
+      Marketplace can create/seed an operational job,
+      but jobs do not require marketplace listings.
+    */
+    jobs: many(jobs),
+
+    wasteReceipts: many(wasteReceipts),
     wasteTrackingSubmissions: many(wasteTrackingSubmissions),
   }),
 );
+
 
 /* ================= BIDS ================= */
 
@@ -2159,6 +4169,8 @@ export const carrierAssignmentsRelations = relations(
     wasteReceipts: many(wasteReceipts),
 
     wasteTrackingSubmissions: many(wasteTrackingSubmissions),
+
+    legacySoloJobs: many(jobs),
   }),
 );
 /* ================= INCIDENTS ================= */
@@ -2229,15 +4241,27 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
     relationName: "notificationActor",
   }),
 
-  listing: one(wasteListings, {
-    fields: [notifications.listingId],
-    references: [wasteListings.id],
-  }),
   organisation: one(organisations, {
     fields: [notifications.organisationId],
     references: [organisations.id],
   }),
+
+  job: one(jobs, {
+    fields: [notifications.jobId],
+    references: [jobs.id],
+  }),
+
+  jobLoad: one(jobLoads, {
+    fields: [notifications.jobLoadId],
+    references: [jobLoads.id],
+  }),
+
+  listing: one(wasteListings, {
+    fields: [notifications.listingId],
+    references: [wasteListings.id],
+  }),
 }));
+
 
 export const supportTicketsRelations = relations(
   supportTickets,
@@ -2370,6 +4394,11 @@ export const wasteReceiptsRelations = relations(
       references: [organisations.id],
     }),
 
+    jobLoad: one(jobLoads, {
+      fields: [wasteReceipts.jobLoadId],
+      references: [jobLoads.id],
+    }),
+
     assignment: one(carrierAssignments, {
       fields: [wasteReceipts.assignmentId],
       references: [carrierAssignments.id],
@@ -2378,6 +4407,16 @@ export const wasteReceiptsRelations = relations(
     listing: one(wasteListings, {
       fields: [wasteReceipts.listingId],
       references: [wasteListings.id],
+    }),
+
+    site: one(sites, {
+      fields: [wasteReceipts.siteId],
+      references: [sites.id],
+    }),
+
+    sitePermit: one(sitePermits, {
+      fields: [wasteReceipts.sitePermitId],
+      references: [sitePermits.id],
     }),
 
     receivedByUser: one(users, {
@@ -2397,16 +4436,23 @@ export const wasteReceiptsRelations = relations(
       references: [organisations.id],
     }),
 
-    items: many(wasteReceiptItems),
-
-    submissions: many(wasteTrackingSubmissions),
-
-        site: one(sites, {
-      fields: [wasteReceipts.siteId],
-      references: [sites.id],
+    carrierCounterparty: one(counterparties, {
+      relationName: "wasteReceiptCarrierCounterparty",
+      fields: [wasteReceipts.carrierCounterpartyId],
+      references: [counterparties.id],
     }),
+
+    brokerDealerCounterparty: one(counterparties, {
+      relationName: "wasteReceiptBrokerDealerCounterparty",
+      fields: [wasteReceipts.brokerDealerCounterpartyId],
+      references: [counterparties.id],
+    }),
+
+    items: many(wasteReceiptItems),
+    submissions: many(wasteTrackingSubmissions),
   }),
 );
+
 
 /* ================= WASTE RECEIPT ITEMS ================= */
 
@@ -2435,6 +4481,11 @@ export const wasteTrackingSubmissionsRelations = relations(
       references: [organisations.id],
     }),
 
+    jobLoad: one(jobLoads, {
+      fields: [wasteTrackingSubmissions.jobLoadId],
+      references: [jobLoads.id],
+    }),
+
     assignment: one(carrierAssignments, {
       fields: [wasteTrackingSubmissions.assignmentId],
       references: [carrierAssignments.id],
@@ -2455,12 +4506,13 @@ export const wasteTrackingSubmissionsRelations = relations(
       references: [users.id],
     }),
 
-        site: one(sites, {
+    site: one(sites, {
       fields: [wasteTrackingSubmissions.siteId],
       references: [sites.id],
     }),
   }),
 );
+
 
 /* ================= REPORT EXPORTS ================= */
 
@@ -2494,10 +4546,24 @@ export const sitesRelations = relations(sites, ({ one, many }) => ({
     references: [organisations.id],
   }),
 
-  listings: many(wasteListings),
-  carrierAssignments: many(carrierAssignments),
-  incidents: many(incidents),
+  /*
+    Active Solo Workspace.
+  */
+  permits: many(sitePermits),
+  materialProfiles: many(materialProfiles),
+  rates: many(rates),
+  jobTemplates: many(jobTemplates),
+  jobs: many(jobs),
+  jobLoads: many(jobLoads),
+
   wasteReceipts: many(wasteReceipts),
   wasteTrackingSubmissions: many(wasteTrackingSubmissions),
   reportExports: many(reportExports),
+
+  /*
+    Marketplace / future network.
+  */
+  listings: many(wasteListings),
+  carrierAssignments: many(carrierAssignments),
+  incidents: many(incidents),
 }));
