@@ -4,15 +4,24 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useFormStatus, useFormState } from "react-dom";
+import { useFormState, useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 
 import { patTrackerAction } from "./actions";
-
 import {
   initialPatActionState,
   type PatActionState,
 } from "./pat-action-state";
+
+/*
+  IMPORTANT
+  =========
+  This is the existing PAT tracker interaction model with the admin visuals
+  refreshed to Waste X Admin black / red / white.
+
+  The action names, hidden field names, evidence fields and DEFRA-status
+  workflow remain aligned with the existing PAT server action.
+*/
 
 export type EvidenceWasteItemSummary = {
   index: number;
@@ -133,6 +142,18 @@ export type DwtEvidenceSuggestion = {
   matchReasons: string[];
 };
 
+type Filter =
+  | "all"
+  | "missing"
+  | "review"
+  | "suggested"
+  | "attached"
+  | "confirmed";
+
+/* =========================================================
+   MAIN CLIENT
+========================================================= */
+
 export default function PatTrackerClient({
   initialResults,
   initialSuggestions,
@@ -144,9 +165,7 @@ export default function PatTrackerClient({
 }) {
   const [results, setResults] = useState(initialResults);
   const [suggestions, setSuggestions] = useState(initialSuggestions);
-  const [filter, setFilter] = useState<
-    "all" | "missing" | "review" | "suggested" | "attached" | "confirmed"
-  >("all");
+  const [filter, setFilter] = useState<Filter>("all");
 
   useEffect(() => {
     setResults(initialResults);
@@ -165,36 +184,41 @@ export default function PatTrackerClient({
     return map;
   }, [suggestions]);
 
-  const rows = useMemo(() => {
-    return [...results]
-      .sort((first, second) => first.scenarioOrder - second.scenarioOrder)
-      .map((result) => ({
-        result,
-        suggestions: suggestionsByScenario.get(result.scenarioId) ?? [],
-      }));
-  }, [results, suggestionsByScenario]);
+  const rows = useMemo(
+    () =>
+      [...results]
+        .sort((first, second) => first.scenarioOrder - second.scenarioOrder)
+        .map((result) => ({
+          result,
+          suggestions: suggestionsByScenario.get(result.scenarioId) ?? [],
+        })),
+    [results, suggestionsByScenario],
+  );
 
   const attachedCount = results.filter(
-    (result) => result.wasteTrackingId || result.dwtSubmissionId || result.errorMessage,
+    (result) =>
+      result.wasteTrackingId ||
+      result.dwtSubmissionId ||
+      result.errorMessage,
   ).length;
 
-  const evidenceNeedsReviewCount = results.filter(
-    (result) => Boolean(result.evidenceValidation && !result.evidenceValidation.valid),
+  const evidenceNeedsReviewCount = results.filter((result) =>
+    Boolean(result.evidenceValidation && !result.evidenceValidation.valid),
   ).length;
 
   const suggestedCount = rows.filter(
-    (row) =>
-      !row.result.wasteTrackingId &&
-      !row.result.dwtSubmissionId &&
-      row.suggestions.length > 0,
+    ({ result, suggestions: rowSuggestions }) =>
+      !result.wasteTrackingId &&
+      !result.dwtSubmissionId &&
+      rowSuggestions.length > 0,
   ).length;
 
   const missingCount = rows.filter(
-    (row) =>
-      !row.result.wasteTrackingId &&
-      !row.result.dwtSubmissionId &&
-      !row.result.errorMessage &&
-      row.suggestions.length === 0,
+    ({ result, suggestions: rowSuggestions }) =>
+      !result.wasteTrackingId &&
+      !result.dwtSubmissionId &&
+      !result.errorMessage &&
+      rowSuggestions.length === 0,
   ).length;
 
   const confirmedCount = results.filter(
@@ -211,22 +235,24 @@ export default function PatTrackerClient({
     (result) => result.defraStatus === "ready_to_send",
   ).length;
 
-  const filteredRows = rows.filter((row) => {
+  const filteredRows = rows.filter(({ result, suggestions: rowSuggestions }) => {
     const hasEvidence =
-      Boolean(row.result.wasteTrackingId) ||
-      Boolean(row.result.dwtSubmissionId) ||
-      Boolean(row.result.errorMessage);
+      Boolean(result.wasteTrackingId) ||
+      Boolean(result.dwtSubmissionId) ||
+      Boolean(result.errorMessage);
 
-    if (filter === "missing") return !hasEvidence && row.suggestions.length === 0;
+    if (filter === "missing") return !hasEvidence && rowSuggestions.length === 0;
     if (filter === "review") {
       return Boolean(
-        row.result.evidenceValidation && !row.result.evidenceValidation.valid,
+        result.evidenceValidation && !result.evidenceValidation.valid,
       );
     }
-    if (filter === "suggested") return !hasEvidence && row.suggestions.length > 0;
+    if (filter === "suggested") {
+      return !hasEvidence && rowSuggestions.length > 0;
+    }
     if (filter === "attached") return hasEvidence;
     if (filter === "confirmed") {
-      return row.result.defraStatus === "confirmed_by_defra";
+      return result.defraStatus === "confirmed_by_defra";
     }
 
     return true;
@@ -235,24 +261,20 @@ export default function PatTrackerClient({
   const emailTable = useMemo(() => buildDefraEmailTable(results), [results]);
 
   return (
-    <div className="space-y-8">
-      {/* ================= NEW SCANNER SUMMARY ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm">
+    <div className="space-y-7">
+      <section className="rounded-[1.75rem] border border-black/10 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-600">
               Evidence Scanner
             </p>
-
-            <h2 className="mt-2 text-lg font-bold text-gray-950">
+            <h2 className="mt-2 text-xl font-black text-black">
               Waste X scans existing evidence first
             </h2>
-
-            <p className="mt-2 max-w-4xl text-sm leading-6 text-gray-500">
-              Instead of manually filling 14 scenario forms, Waste X checks your
-              existing DWT submissions and suggests only records that are labelled
-              for the correct PAT scenario. One DWT submission should not be reused
-              across different scenarios.
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-black/50">
+              The existing PAT evidence workflow is unchanged. Waste X scans
+              DWT submissions, keeps evidence tied to the correct PAT scenario,
+              and flags anything that needs review before it is sent to DEFRA.
             </p>
           </div>
 
@@ -265,34 +287,28 @@ export default function PatTrackerClient({
             value={scannedSubmissionCount}
             helper="Latest DWT records checked"
           />
-
           <ScannerStat
             label="Evidence attached"
             value={attachedCount}
-            helper="Scenarios with WTID/error evidence"
+            helper="Scenarios with evidence"
           />
-
           <ScannerStat
             label="Needs review"
             value={evidenceNeedsReviewCount}
             helper="Attached evidence mismatch"
-            tone={evidenceNeedsReviewCount > 0 ? "danger" : "default"}
+            danger={evidenceNeedsReviewCount > 0}
           />
-
           <ScannerStat
-            label="Suggested matches"
+            label="Suggested"
             value={suggestedCount}
             helper="Can be attached now"
-            tone={suggestedCount > 0 ? "warning" : "default"}
           />
-
           <ScannerStat
             label="Missing tests"
             value={missingCount}
-            helper="Need a new PAT run"
-            tone={missingCount > 0 ? "danger" : "default"}
+            helper="Need a PAT run"
+            danger={missingCount > 0}
           />
-
           <ScannerStat
             label="Confirmed"
             value={confirmedCount}
@@ -301,8 +317,7 @@ export default function PatTrackerClient({
         </div>
       </section>
 
-      {/* ================= STATUS KPIS ================= */}
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-6">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Metric label="Expected" value={14} helper="DEFRA scenarios" />
         <Metric label="Recorded" value={results.length} helper="Rows in tracker" />
         <Metric label="Ready" value={readyCount} helper="Ready to email" />
@@ -311,112 +326,84 @@ export default function PatTrackerClient({
           label="Confirmed"
           value={confirmedCount}
           helper="DEFRA confirmed"
-          tone={confirmedCount < 14 ? "danger" : "default"}
+          danger={confirmedCount < 14}
         />
         <Metric
           label="Remaining"
           value={Math.max(14 - attachedCount, 0)}
-          helper="No evidence attached yet"
-          tone={attachedCount < 14 ? "danger" : "default"}
+          helper="No evidence yet"
+          danger={attachedCount < 14}
         />
       </section>
 
-      {/* ================= FILTERS ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <section className="rounded-[1.75rem] border border-black/10 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-600">
               Work Queue
             </p>
-            <h2 className="mt-2 text-lg font-bold text-gray-950">
+            <h2 className="mt-2 text-lg font-black text-black">
               Focus on what needs doing
             </h2>
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <FilterButton active={filter === "all"} onClick={() => setFilter("all")}>
-              All
-            </FilterButton>
-
-            <FilterButton
-              active={filter === "suggested"}
-              onClick={() => setFilter("suggested")}
-            >
-              Suggested
-            </FilterButton>
-
-            <FilterButton
-              active={filter === "review"}
-              onClick={() => setFilter("review")}
-            >
-              Needs review
-            </FilterButton>
-
-            <FilterButton
-              active={filter === "missing"}
-              onClick={() => setFilter("missing")}
-            >
-              Missing
-            </FilterButton>
-
-            <FilterButton
-              active={filter === "attached"}
-              onClick={() => setFilter("attached")}
-            >
-              Attached
-            </FilterButton>
-
-            <FilterButton
-              active={filter === "confirmed"}
-              onClick={() => setFilter("confirmed")}
-            >
-              Confirmed
-            </FilterButton>
+            {(
+              [
+                ["all", "All"],
+                ["suggested", "Suggested"],
+                ["review", "Needs review"],
+                ["missing", "Missing"],
+                ["attached", "Attached"],
+                ["confirmed", "Confirmed"],
+              ] as [Filter, string][]
+            ).map(([value, label]) => (
+              <FilterButton
+                key={value}
+                active={filter === value}
+                onClick={() => setFilter(value)}
+              >
+                {label}
+              </FilterButton>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* ================= DEFRA EMAIL TABLE ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm">
-        <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <section className="rounded-[1.75rem] border border-black/10 bg-white p-6 shadow-sm">
+        <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-600">
               DEFRA Submission Table
             </p>
-
-            <h2 className="mt-2 text-lg font-bold text-gray-950">
+            <h2 className="mt-2 text-lg font-black text-black">
               Copy into your email
             </h2>
-
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-              Once evidence is attached to the scenarios, this table is ready to
-              send to DEFRA. Missing scenarios will show as pending.
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+              This is the existing PAT evidence summary generated from the
+              tracker records.
             </p>
           </div>
 
           <CopyEmailTableButton value={emailTable} />
         </div>
 
-        <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap rounded-2xl border border-gray-200 bg-gray-50 p-5 text-xs leading-6 text-gray-700">
+        <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap rounded-2xl border border-white/10 bg-black p-5 text-xs leading-6 text-white/70">
           {emailTable}
         </pre>
       </section>
 
-      {/* ================= SCENARIO SCANNER REGISTER ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm">
-        <div className="mb-6 border-b border-gray-200 pb-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+      <section className="rounded-[1.75rem] border border-black/10 bg-white p-6 shadow-sm">
+        <div className="mb-6 border-b border-black/10 pb-5">
+          <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-600">
             Scenario Register
           </p>
-
-          <h2 className="mt-2 text-lg font-bold text-gray-950">
+          <h2 className="mt-2 text-lg font-black text-black">
             Suggested evidence and missing tests
           </h2>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-            Attach suggested submissions where Waste X found a match. If a
-            scenario has no suggestion, run a new DWT test that satisfies the
-            requirements shown on the card.
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+            Attach suggested submissions, review mismatches, or record manual
+            evidence using the same PAT fields and actions as before.
           </p>
         </div>
 
@@ -424,11 +411,11 @@ export default function PatTrackerClient({
           <EmptyState />
         ) : (
           <div className="space-y-5">
-            {filteredRows.map(({ result, suggestions }) => (
-              <ScenarioScannerCard
+            {filteredRows.map(({ result, suggestions: rowSuggestions }) => (
+              <ScenarioCard
                 key={result.id}
                 result={result}
-                suggestions={suggestions}
+                suggestions={rowSuggestions}
               />
             ))}
           </div>
@@ -439,10 +426,10 @@ export default function PatTrackerClient({
 }
 
 /* =========================================================
-   SCENARIO CARD
+   SCENARIO
 ========================================================= */
 
-function ScenarioScannerCard({
+function ScenarioCard({
   result,
   suggestions,
 }: {
@@ -454,60 +441,57 @@ function ScenarioScannerCard({
     Boolean(result.dwtSubmissionId) ||
     Boolean(result.errorMessage);
 
-  const expectedError = result.expectedResult === "error";
-  const evidenceNeedsReview = Boolean(
+  const needsReview = Boolean(
     result.evidenceValidation && !result.evidenceValidation.valid,
   );
 
   return (
-    <article className="rounded-[1.5rem] border border-gray-200 bg-gray-50 p-5">
+    <article className="rounded-[1.5rem] border border-black/10 bg-black/[0.025] p-5">
       <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
+            <span className="rounded-full bg-black px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white">
               {result.scenarioId}
             </span>
 
             <StatusBadge status={result.defraStatus} />
 
             <span
-              className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-                expectedError
+              className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
+                result.expectedResult === "error"
                   ? "border-red-200 bg-red-50 text-red-700"
-                  : "border-gray-200 bg-white text-gray-600"
+                  : "border-black/10 bg-white text-black/60"
               }`}
             >
-              Expected {expectedError ? "Error" : "WTID"}
+              Expected {result.expectedResult === "error" ? "Error" : "WTID"}
             </span>
 
             {hasEvidence ? (
-              <>
-                <span className="rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
-                  Evidence attached
-                </span>
-
-                {evidenceNeedsReview && (
-                  <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-red-700">
-                    Evidence needs review
-                  </span>
-                )}
-              </>
+              <span className="rounded-full border border-black bg-black px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white">
+                Evidence attached
+              </span>
             ) : suggestions.length > 0 ? (
-              <span className="rounded-full border border-gray-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-700">
-                {suggestions.length} suggestion{suggestions.length === 1 ? "" : "s"}
+              <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-black/60">
+                {suggestions.length} suggestion
+                {suggestions.length === 1 ? "" : "s"}
               </span>
             ) : (
-              <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-red-700">
+              <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-red-700">
                 Missing test
               </span>
             )}
+
+            {needsReview ? (
+              <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-red-700">
+                Evidence needs review
+              </span>
+            ) : null}
           </div>
 
-          <h3 className="mt-3 text-sm font-bold text-gray-950">
+          <h3 className="mt-3 text-sm font-black text-black">
             {result.scenarioDescription}
           </h3>
-
-          <p className="mt-2 text-xs leading-5 text-gray-500">
+          <p className="mt-2 text-xs leading-5 text-black/45">
             Feature: {result.feature ?? "—"} · Scenario order:{" "}
             {result.scenarioOrder}
           </p>
@@ -517,51 +501,48 @@ function ScenarioScannerCard({
           <QuickActionForm id={result.id} intent="ready">
             Mark ready
           </QuickActionForm>
-
           <QuickActionForm id={result.id} intent="sent">
             Mark sent
           </QuickActionForm>
-
-          <QuickActionForm id={result.id} intent="confirmed" variant="primary">
+          <QuickActionForm id={result.id} intent="confirmed" primary>
             Mark confirmed
           </QuickActionForm>
 
-          {result.listingId && (
+          {result.listingId ? (
             <Link
               href={`/admin/audit/chain/${result.listingId}`}
-              className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+              className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/65 transition hover:border-red-300 hover:text-red-600"
             >
               Chain
             </Link>
-          )}
+          ) : null}
         </div>
       </div>
 
       {hasEvidence ? (
         <>
-          <AttachedEvidencePanel result={result} />
+          <AttachedEvidence result={result} />
 
-          {evidenceNeedsReview && suggestions.length > 0 && (
-            <SuggestedEvidencePanel suggestions={suggestions} />
-          )}
+          {needsReview && suggestions.length > 0 ? (
+            <Suggestions suggestions={suggestions} />
+          ) : null}
         </>
       ) : suggestions.length > 0 ? (
-        <SuggestedEvidencePanel suggestions={suggestions} />
+        <Suggestions suggestions={suggestions} />
       ) : (
-        <MissingScenarioPanel result={result} />
+        <MissingScenario result={result} />
       )}
 
       <details
-        open={evidenceNeedsReview}
-        className="mt-5 rounded-2xl border border-gray-200 bg-white p-5"
+        open={needsReview}
+        className="mt-5 rounded-2xl border border-black/10 bg-white p-5"
       >
-        <summary className="cursor-pointer text-sm font-bold text-gray-950">
-          {evidenceNeedsReview ? "Fix / replace evidence" : "Manual evidence override"}
+        <summary className="cursor-pointer text-sm font-black text-black">
+          {needsReview ? "Fix / replace evidence" : "Manual evidence override"}
         </summary>
-
-        <p className="mt-2 text-sm leading-6 text-gray-500">
-          Use this only if the scanner cannot find the evidence automatically or
-          DEFRA gives you specific manual details to record.
+        <p className="mt-2 text-sm leading-6 text-black/50">
+          Use the existing manual fields when automatic evidence is unavailable
+          or DEFRA asks for specific details.
         </p>
 
         <ManualEvidenceForm result={result} />
@@ -570,303 +551,236 @@ function ScenarioScannerCard({
   );
 }
 
-function AttachedEvidencePanel({ result }: { result: PatResult }) {
-  const evidenceValidation = result.evidenceValidation;
-  const evidenceNeedsReview = Boolean(
-    evidenceValidation && !evidenceValidation.valid,
-  );
-
+function AttachedEvidence({ result }: { result: PatResult }) {
   return (
-    <section className="mt-5 rounded-[1.35rem] border border-gray-200 bg-white p-5">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+    <section className="mt-5 rounded-[1.35rem] border border-black/10 bg-white p-5">
+      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600">
         Attached Evidence
       </p>
 
-      {evidenceNeedsReview && evidenceValidation && (
-        <EvidenceValidationWarning validation={evidenceValidation} />
-      )}
-
-      {evidenceValidation?.valid && (
-        <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
-          {evidenceValidation.message}
+      {result.evidenceValidation &&
+      !result.evidenceValidation.valid ? (
+        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-black text-red-800">
+            {result.evidenceValidation.message ??
+              "Attached evidence needs review."}
+          </p>
+          <div className="mt-2 space-y-1 text-sm text-red-700">
+            {result.evidenceValidation.scenarioReference ? (
+              <p>
+                Payload scenario reference:{" "}
+                <strong>
+                  {result.evidenceValidation.scenarioReference}
+                </strong>
+              </p>
+            ) : null}
+            {result.evidenceValidation.warnings.map((warning) => (
+              <p key={warning}>• {warning}</p>
+            ))}
+          </div>
         </div>
-      )}
+      ) : null}
 
-      <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 md:flex-row md:items-center md:justify-between">
-        <p className="text-sm leading-6 text-gray-600">
-          Remove this linked submission if it was attached to the wrong PAT
-          scenario, then attach a correct suggestion or save corrected manual
-          evidence below.
+      {result.evidenceValidation?.valid ? (
+        <div className="mt-4 rounded-2xl border border-black/10 bg-black/[0.025] p-4 text-sm text-black/65">
+          {result.evidenceValidation.message}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-black/10 bg-black/[0.025] p-4 md:flex-row md:items-center md:justify-between">
+        <p className="text-sm leading-6 text-black/55">
+          Remove linked evidence if it belongs to the wrong PAT scenario, then
+          attach the correct evidence or save a manual override.
         </p>
-
         <ClearEvidenceForm result={result} />
       </div>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <EvidenceItem
           label="WTID / expected error"
           value={result.wasteTrackingId ?? result.errorMessage ?? "—"}
         />
-
         <EvidenceItem label="EWC codes" value={result.ewcCodes ?? "—"} />
-
         <EvidenceItem label="HTTP status" value={result.httpStatus ?? "—"} />
-
         <EvidenceItem label="Tested at" value={formatDateTime(result.testedAt)} />
-
         <EvidenceItem label="Assignment" value={result.assignmentId ?? "—"} />
-
         <EvidenceItem label="Listing" value={result.listingId ?? "—"} />
-
         <EvidenceItem label="Receipt" value={result.receiptId ?? "—"} />
-
         <EvidenceItem
           label="DWT submission"
           value={result.dwtSubmissionId ?? "—"}
         />
       </div>
 
-      {result.evidenceSummary && (
-        <EvidenceBreakdownPanel evidenceSummary={result.evidenceSummary} />
-      )}
+      {result.evidenceSummary ? (
+        <EvidenceBreakdown summary={result.evidenceSummary} />
+      ) : null}
 
-      {result.reason && (
-        <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+      {result.reason ? (
+        <div className="mt-4 rounded-2xl border border-black/10 bg-black/[0.025] p-4">
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-600">
             Reason
           </p>
-          <p className="mt-2 text-sm leading-6 text-gray-600">{result.reason}</p>
+          <p className="mt-2 text-sm leading-6 text-black/60">
+            {result.reason}
+          </p>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
 
-
-function EvidenceValidationWarning({
-  validation,
-}: {
-  validation: EvidenceValidation;
-}) {
-  return (
-    <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-700">
-        Evidence mismatch warning
-      </p>
-
-      <p className="mt-2 text-sm font-semibold text-red-900">
-        {validation.message ?? "Attached evidence needs review."}
-      </p>
-
-      <div className="mt-3 space-y-1 text-sm leading-6 text-red-800">
-        {validation.scenarioReference && (
-          <p>
-            Payload scenario reference: <strong>{validation.scenarioReference}</strong>
-          </p>
-        )}
-
-        {validation.warnings.map((warning) => (
-          <p key={warning}>• {warning}</p>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SuggestedEvidencePanel({
+function Suggestions({
   suggestions,
 }: {
   suggestions: DwtEvidenceSuggestion[];
 }) {
   return (
-    <section className="mt-5 rounded-[1.35rem] border border-gray-200 bg-white p-5">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+    <section className="mt-5 rounded-[1.35rem] border border-black/10 bg-white p-5">
+      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600">
         Suggested Evidence
       </p>
-
-      <h4 className="mt-2 text-sm font-bold text-gray-950">
-        Waste X found matching DWT submissions
+      <h4 className="mt-2 text-sm font-black text-black">
+        Matching DWT submissions
       </h4>
 
       <div className="mt-4 space-y-3">
         {suggestions.map((suggestion) => (
-          <SuggestionCard
+          <div
             key={`${suggestion.scenarioId}-${suggestion.dwtSubmissionId}`}
-            suggestion={suggestion}
-          />
+            className="rounded-2xl border border-black/10 bg-black/[0.025] p-4"
+          >
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap gap-2">
+                  <ConfidenceBadge confidence={suggestion.confidence} />
+                  <Pill>{suggestion.status || "Unknown status"}</Pill>
+                  {suggestion.httpStatus ? (
+                    <Pill>HTTP {suggestion.httpStatus}</Pill>
+                  ) : null}
+                </div>
+
+                <p className="mt-3 text-sm font-black text-black">
+                  {suggestion.wasteTrackingId
+                    ? `WTID ${suggestion.wasteTrackingId}`
+                    : "Expected error evidence"}
+                </p>
+                <p className="mt-1 text-xs text-black/45">
+                  Submission: {shortId(suggestion.dwtSubmissionId)} · Tested{" "}
+                  {formatDateTime(suggestion.testedAt)}
+                </p>
+
+                {suggestion.payloadScenarioId ? (
+                  <p className="mt-2 text-xs font-bold text-black/65">
+                    Payload PAT reference: {suggestion.payloadScenarioId}
+                  </p>
+                ) : null}
+
+                <ul className="mt-3 space-y-1 text-xs leading-5 text-black/55">
+                  {suggestion.matchReasons.map((reason) => (
+                    <li key={reason}>✓ {reason}</li>
+                  ))}
+                </ul>
+
+                {suggestion.evidenceSummary ? (
+                  <EvidenceBreakdown
+                    summary={suggestion.evidenceSummary}
+                    compact
+                  />
+                ) : null}
+              </div>
+
+              <AttachSuggestionForm suggestion={suggestion} />
+            </div>
+          </div>
         ))}
       </div>
     </section>
   );
 }
 
-function SuggestionCard({ suggestion }: { suggestion: DwtEvidenceSuggestion }) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap gap-2">
-            <ConfidenceBadge confidence={suggestion.confidence} />
-
-            <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
-              {suggestion.status || "Unknown status"}
-            </span>
-
-            {suggestion.httpStatus && (
-              <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
-                HTTP {suggestion.httpStatus}
-              </span>
-            )}
-
-            {suggestion.evidenceSummary?.wasteItemCount ? (
-              <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
-                {suggestion.evidenceSummary.wasteItemCount} waste item
-                {suggestion.evidenceSummary.wasteItemCount === 1 ? "" : "s"}
-              </span>
-            ) : null}
-          </div>
-
-          <p className="mt-3 text-sm font-bold text-gray-950">
-            {suggestion.wasteTrackingId
-              ? `WTID ${suggestion.wasteTrackingId}`
-              : "Expected error evidence"}
-          </p>
-
-          <p className="mt-1 text-xs text-gray-500">
-            Submission: {shortId(suggestion.dwtSubmissionId)} · Tested{" "}
-            {formatDateTime(suggestion.testedAt)}
-          </p>
-
-          {suggestion.payloadScenarioId && (
-            <p className="mt-1 text-xs font-semibold text-gray-700">
-              Payload PAT reference: {suggestion.payloadScenarioId}
-            </p>
-          )}
-
-          <ul className="mt-3 space-y-1 text-xs leading-5 text-gray-600">
-            {suggestion.matchReasons.map((reason) => (
-              <li key={reason}>✓ {reason}</li>
-            ))}
-          </ul>
-
-          {suggestion.evidenceSummary && (
-            <EvidenceBreakdownPanel
-              evidenceSummary={suggestion.evidenceSummary}
-              compact
-            />
-          )}
-        </div>
-
-        <AttachSuggestionForm suggestion={suggestion} />
-      </div>
-    </div>
-  );
-}
-
-function EvidenceBreakdownPanel({
-  evidenceSummary,
+function EvidenceBreakdown({
+  summary,
   compact = false,
 }: {
-  evidenceSummary: EvidenceSummary;
+  summary: EvidenceSummary;
   compact?: boolean;
 }) {
   return (
-    <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+    <div className="mt-4 rounded-2xl border border-black/10 bg-white p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
-            Payload evidence breakdown
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-600">
+            Payload Evidence
           </p>
-
-          <p className="mt-2 text-sm font-semibold text-gray-950">
-            {evidenceSummary.wasteItemCount} waste item
-            {evidenceSummary.wasteItemCount === 1 ? "" : "s"} in the submitted
-            payload
+          <p className="mt-2 text-sm font-bold text-black">
+            {summary.wasteItemCount} waste item
+            {summary.wasteItemCount === 1 ? "" : "s"}
           </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {evidenceSummary.brokerDealerIncluded && (
-            <MiniBadge>Broker/dealer included</MiniBadge>
-          )}
-
-          {evidenceSummary.containsPops && (
-            <MiniBadge>{evidenceSummary.popsComponentCount} POPs</MiniBadge>
-          )}
-
-          {evidenceSummary.containsHazardous && (
-            <MiniBadge>
-              {evidenceSummary.hazardousComponentCount} hazardous
-            </MiniBadge>
-          )}
+          {summary.brokerDealerIncluded ? <Pill>Broker/dealer</Pill> : null}
+          {summary.containsPops ? (
+            <Pill>{summary.popsComponentCount} POPs</Pill>
+          ) : null}
+          {summary.containsHazardous ? (
+            <Pill>{summary.hazardousComponentCount} hazardous</Pill>
+          ) : null}
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <EvidenceItem label="All EWC codes" value={joinValues(summary.ewcCodes)} />
         <EvidenceItem
-          label="All EWC codes"
-          value={joinEvidenceValues(evidenceSummary.ewcCodes)}
+          label="D/R codes"
+          value={joinValues(summary.disposalOrRecoveryCodes)}
         />
-
         <EvidenceItem
-          label="Disposal/recovery"
-          value={joinEvidenceValues(evidenceSummary.disposalOrRecoveryCodes)}
+          label="POPs"
+          value={joinValues(summary.popsComponents)}
         />
-
         <EvidenceItem
-          label="POPs components"
-          value={joinEvidenceValues(evidenceSummary.popsComponents)}
-        />
-
-        <EvidenceItem
-          label="Hazardous evidence"
-          value={joinEvidenceValues([
-            ...evidenceSummary.hazardousPropertyCodes,
-            ...evidenceSummary.hazardousComponents,
+          label="Hazardous"
+          value={joinValues([
+            ...summary.hazardousPropertyCodes,
+            ...summary.hazardousComponents,
           ])}
         />
-
-        <EvidenceItem
-          label="Transport"
-          value={evidenceSummary.meansOfTransport ?? "—"}
-        />
-
+        <EvidenceItem label="Transport" value={summary.meansOfTransport ?? "—"} />
         <EvidenceItem
           label="Carrier registration"
-          value={evidenceSummary.carrierRegistrationNumber ?? "—"}
+          value={summary.carrierRegistrationNumber ?? "—"}
         />
-
         <EvidenceItem
           label="Broker/dealer"
           value={
-            evidenceSummary.brokerOrDealer?.organisationName ??
-            (evidenceSummary.brokerDealerIncluded ? "Included" : "—")
+            summary.brokerOrDealer?.organisationName ??
+            (summary.brokerDealerIncluded ? "Included" : "—")
           }
         />
-
         <EvidenceItem
           label="Broker/dealer reg"
-          value={evidenceSummary.brokerOrDealer?.registrationNumber ?? "—"}
+          value={summary.brokerOrDealer?.registrationNumber ?? "—"}
         />
       </div>
 
-      {!compact && evidenceSummary.wasteItems.length > 0 && (
+      {!compact && summary.wasteItems.length > 0 ? (
         <div className="mt-4 space-y-3">
-          {evidenceSummary.wasteItems.map((item) => (
+          {summary.wasteItems.map((item) => (
             <div
               key={item.index}
-              className="rounded-2xl border border-gray-200 bg-gray-50 p-4"
+              className="rounded-2xl border border-black/10 bg-black/[0.025] p-4"
             >
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-600">
                 Waste item {item.index}
               </p>
-
-              <p className="mt-2 text-sm font-semibold text-gray-950">
+              <p className="mt-2 text-sm font-bold text-black">
                 {item.wasteDescription || "No description captured"}
               </p>
 
               <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <EvidenceItem label="EWC" value={joinEvidenceValues(item.ewcCodes)} />
+                <EvidenceItem label="EWC" value={joinValues(item.ewcCodes)} />
                 <EvidenceItem
                   label="Container"
                   value={
@@ -878,64 +792,43 @@ function EvidenceBreakdownPanel({
                 <EvidenceItem label="Weight" value={item.weightLabel ?? "—"} />
                 <EvidenceItem
                   label="D/R codes"
-                  value={joinEvidenceValues(item.disposalOrRecoveryCodes)}
+                  value={joinValues(item.disposalOrRecoveryCodes)}
                 />
-                <EvidenceItem
-                  label="POPs"
-                  value={joinEvidenceValues(item.popsComponents)}
-                />
+                <EvidenceItem label="POPs" value={joinValues(item.popsComponents)} />
                 <EvidenceItem
                   label="Haz codes"
-                  value={joinEvidenceValues(item.hazardousPropertyCodes)}
+                  value={joinValues(item.hazardousPropertyCodes)}
                 />
                 <EvidenceItem
                   label="Haz components"
-                  value={joinEvidenceValues(item.hazardousComponents)}
+                  value={joinValues(item.hazardousComponents)}
                 />
               </div>
             </div>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function MiniBadge({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
-      {children}
-    </span>
-  );
-}
-
-function joinEvidenceValues(values: string[]) {
-  return values.length > 0 ? values.join(", ") : "—";
-}
-
-
-function MissingScenarioPanel({ result }: { result: PatResult }) {
+function MissingScenario({ result }: { result: PatResult }) {
   return (
     <section className="mt-5 rounded-[1.35rem] border border-red-200 bg-red-50 p-5">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-red-700">
+      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-700">
         Missing Test
       </p>
-
-      <h4 className="mt-2 text-sm font-bold text-red-800">
+      <h4 className="mt-2 text-sm font-black text-red-800">
         No existing DWT submission currently satisfies {result.scenarioId}.
       </h4>
-
       <p className="mt-2 max-w-4xl text-sm leading-6 text-red-700/80">
-        Run a new DWT test that satisfies this scenario, then return to this page.
-        Waste X will scan the latest submissions and suggest the matching
-        evidence automatically.
+        Run the required DWT PAT scenario, then return here. The evidence
+        scanner will check the latest submissions again.
       </p>
-
-      <div className="mt-4 rounded-2xl border border-red-200 bg-white/70 p-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-700">
+      <div className="mt-4 rounded-2xl border border-red-200 bg-white p-4">
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700">
           What this scenario needs
         </p>
-
         <p className="mt-2 text-sm leading-6 text-red-800">
           {scenarioRequirement(result.scenarioId)}
         </p>
@@ -945,12 +838,11 @@ function MissingScenarioPanel({ result }: { result: PatResult }) {
 }
 
 /* =========================================================
-   FORMS
+   ACTION FORMS
 ========================================================= */
 
 function SeedForm() {
   const router = useRouter();
-
   const [state, formAction] = useFormState(
     patTrackerAction,
     initialPatActionState,
@@ -963,11 +855,9 @@ function SeedForm() {
   }, [state, router]);
 
   return (
-    <form action={formAction} className="space-y-3">
+    <form action={formAction} className="space-y-2">
       <input type="hidden" name="intent" value="seed" />
-
       <SubmitButton>Seed / refresh scenarios</SubmitButton>
-
       <ActionFeedback state={state} />
     </form>
   );
@@ -977,12 +867,12 @@ function QuickActionForm({
   id,
   intent,
   children,
-  variant = "secondary",
+  primary = false,
 }: {
   id: string;
   intent: "ready" | "sent" | "confirmed";
   children: string;
-  variant?: "secondary" | "primary";
+  primary?: boolean;
 }) {
   const [state, formAction] = useFormState(
     patTrackerAction,
@@ -995,9 +885,7 @@ function QuickActionForm({
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="id" value={id} />
-
-      <MiniSubmitButton variant={variant}>{children}</MiniSubmitButton>
-
+      <MiniSubmitButton primary={primary}>{children}</MiniSubmitButton>
       <ActionFeedback state={state} compact />
     </form>
   );
@@ -1016,10 +904,9 @@ function AttachSuggestionForm({
   useRefreshAfterAction(state);
 
   return (
-    <form action={formAction} className="space-y-2">
+    <form action={formAction} className="shrink-0 space-y-2">
       <input type="hidden" name="intent" value="attach_submission" />
       <input type="hidden" name="id" value={suggestion.patResultId} />
-
       <input
         type="hidden"
         name="dwtSubmissionId"
@@ -1050,7 +937,11 @@ function AttachSuggestionForm({
         name="httpStatus"
         value={suggestion.httpStatus ?? ""}
       />
-      <input type="hidden" name="testedAt" value={suggestion.testedAt ?? ""} />
+      <input
+        type="hidden"
+        name="testedAt"
+        value={suggestion.testedAt ?? ""}
+      />
       <input type="hidden" name="ewcCodes" value={suggestion.ewcCodes} />
       <input type="hidden" name="reason" value={suggestion.reason} />
       <input
@@ -1059,8 +950,7 @@ function AttachSuggestionForm({
         value={suggestion.errorMessage ?? ""}
       />
 
-      <MiniSubmitButton variant="primary">Attach evidence</MiniSubmitButton>
-
+      <MiniSubmitButton primary>Attach evidence</MiniSubmitButton>
       <ActionFeedback state={state} compact />
     </form>
   );
@@ -1074,13 +964,16 @@ function ClearEvidenceForm({ result }: { result: PatResult }) {
 
   useRefreshAfterAction(state);
 
+  /*
+    This intentionally preserves the original client behaviour:
+    clear_evidence is submitted to the existing server action, which falls
+    through to the existing save path and clears omitted evidence fields.
+  */
   return (
     <form action={formAction} className="shrink-0 space-y-2">
       <input type="hidden" name="intent" value="clear_evidence" />
       <input type="hidden" name="id" value={result.id} />
-
-      <MiniSubmitButton variant="danger">Remove wrong evidence</MiniSubmitButton>
-
+      <DangerSubmitButton>Remove wrong evidence</DangerSubmitButton>
       <ActionFeedback state={state} compact />
     </form>
   );
@@ -1104,16 +997,18 @@ function ManualEvidenceForm({ result }: { result: PatResult }) {
           label="Waste Tracking ID"
           name="wasteTrackingId"
           defaultValue={result.wasteTrackingId}
-          placeholder={result.expectedResult === "error" ? "No WTID expected" : "26K5L36X7"}
+          placeholder={
+            result.expectedResult === "error"
+              ? "No WTID expected"
+              : "26K5L36X7"
+          }
         />
-
         <Field
           label="EWC codes"
           name="ewcCodes"
           defaultValue={result.ewcCodes}
           placeholder="020101"
         />
-
         <Field
           label="HTTP status"
           name="httpStatus"
@@ -1121,7 +1016,6 @@ function ManualEvidenceForm({ result }: { result: PatResult }) {
           defaultValue={result.httpStatus}
           placeholder={result.expectedResult === "error" ? "400" : "201"}
         />
-
         <Field
           label="Tested at"
           name="testedAt"
@@ -1136,20 +1030,17 @@ function ManualEvidenceForm({ result }: { result: PatResult }) {
           name="assignmentId"
           defaultValue={result.assignmentId}
         />
-
         <Field
           label="Listing ID"
           name="listingId"
           type="number"
           defaultValue={result.listingId}
         />
-
         <Field
           label="Receipt ID"
           name="receiptId"
           defaultValue={result.receiptId}
         />
-
         <Field
           label="DWT submission ID"
           name="dwtSubmissionId"
@@ -1172,14 +1063,12 @@ function ManualEvidenceForm({ result }: { result: PatResult }) {
             ["failed", "Failed"],
           ]}
         />
-
         <Field
           label="DEFRA sent at"
           name="defraSentAt"
           type="datetime-local"
           defaultValue={toDateTimeLocalValue(result.defraSentAt)}
         />
-
         <Field
           label="DEFRA confirmed at"
           name="defraConfirmedAt"
@@ -1194,31 +1083,26 @@ function ManualEvidenceForm({ result }: { result: PatResult }) {
         defaultValue={result.reason}
         placeholder="Reason/details required by DEFRA."
       />
-
       <Textarea
         label="Error message"
         name="errorMessage"
         defaultValue={result.errorMessage}
-        placeholder="For C01 and H02, paste the expected error returned by the API."
+        placeholder="For expected-error scenarios, record the API error."
       />
-
       <Textarea
         label="Unable to run reason"
         name="unableToRunReason"
         defaultValue={result.unableToRunReason}
       />
-
       <Textarea
         label="Additional details"
         name="additionalDetails"
         defaultValue={result.additionalDetails}
       />
-
       <Textarea label="Notes" name="notes" defaultValue={result.notes} />
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <ActionFeedback state={state} />
-
         <SubmitButton>Save manual evidence</SubmitButton>
       </div>
     </form>
@@ -1226,33 +1110,31 @@ function ManualEvidenceForm({ result }: { result: PatResult }) {
 }
 
 /* =========================================================
-   SMALL COMPONENTS
+   UI
 ========================================================= */
 
 function Metric({
   label,
   value,
   helper,
-  tone = "default",
+  danger = false,
 }: {
   label: string;
   value: string | number;
   helper: string;
-  tone?: "default" | "danger";
+  danger?: boolean;
 }) {
   return (
-    <div className="rounded-[1.5rem] border border-gray-200 bg-white p-5 shadow-sm">
-      <p className="text-sm font-medium text-gray-500">{label}</p>
-
+    <div className="rounded-[1.5rem] border border-black/10 bg-white p-5 shadow-sm">
+      <p className="text-sm font-medium text-black/45">{label}</p>
       <p
-        className={`mt-3 text-3xl font-bold tracking-tight ${
-          tone === "danger" ? "text-red-700" : "text-gray-950"
+        className={`mt-3 text-3xl font-black tracking-tight ${
+          danger ? "text-red-600" : "text-black"
         }`}
       >
         {value}
       </p>
-
-      <p className="mt-2 text-xs leading-5 text-gray-400">{helper}</p>
+      <p className="mt-2 text-xs leading-5 text-black/35">{helper}</p>
     </div>
   );
 }
@@ -1261,29 +1143,22 @@ function ScannerStat({
   label,
   value,
   helper,
-  tone = "default",
+  danger = false,
 }: {
   label: string;
   value: string | number;
   helper: string;
-  tone?: "default" | "danger" | "warning";
+  danger?: boolean;
 }) {
-  const valueClass =
-    tone === "danger"
-      ? "text-red-700"
-      : tone === "warning"
-        ? "text-gray-950"
-        : "text-gray-950";
-
   return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+    <div className="rounded-2xl border border-black/10 bg-black/[0.025] p-4">
+      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-black/35">
         {label}
       </p>
-
-      <p className={`mt-2 text-2xl font-bold ${valueClass}`}>{value}</p>
-
-      <p className="mt-1 text-xs leading-5 text-gray-500">{helper}</p>
+      <p className={`mt-2 text-2xl font-black ${danger ? "text-red-600" : "text-black"}`}>
+        {value}
+      </p>
+      <p className="mt-1 text-xs leading-5 text-black/45">{helper}</p>
     </div>
   );
 }
@@ -1301,10 +1176,10 @@ function FilterButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+      className={`rounded-full border px-4 py-2 text-sm font-bold transition ${
         active
-          ? "border-gray-900 bg-gray-950 text-white"
-          : "border-gray-200 bg-gray-50 text-gray-700 hover:bg-white"
+          ? "border-black bg-black text-white"
+          : "border-black/10 bg-white text-black/60 hover:border-red-300 hover:text-red-600"
       }`}
     >
       {children}
@@ -1320,12 +1195,11 @@ function EvidenceItem({
   value: string | number | null;
 }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+    <div className="rounded-2xl border border-black/10 bg-black/[0.025] p-4">
+      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-black/35">
         {label}
       </p>
-
-      <p className="mt-2 break-words text-sm font-semibold text-gray-950">
+      <p className="mt-2 break-words text-sm font-bold text-black">
         {value === null || value === "" ? "—" : String(value)}
       </p>
     </div>
@@ -1347,10 +1221,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-black/40">
         {label}
       </span>
-
       <input
         name={name}
         type={type}
@@ -1360,7 +1233,7 @@ function Field({
             : String(defaultValue)
         }
         placeholder={placeholder}
-        className="mt-2 min-h-[3rem] w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-gray-400"
+        className="mt-2 min-h-[3rem] w-full rounded-2xl border border-black/15 bg-white px-4 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-red-500"
       />
     </label>
   );
@@ -1379,14 +1252,13 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-black/40">
         {label}
       </span>
-
       <select
         name={name}
         defaultValue={defaultValue ?? "not_started"}
-        className="mt-2 min-h-[3rem] w-full rounded-2xl border border-gray-200 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-gray-400"
+        className="mt-2 min-h-[3rem] w-full rounded-2xl border border-black/15 bg-white px-4 text-sm text-black outline-none transition focus:border-red-500"
       >
         {options.map(([value, label]) => (
           <option key={value} value={value}>
@@ -1411,16 +1283,15 @@ function Textarea({
 }) {
   return (
     <label className="block">
-      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
+      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-black/40">
         {label}
       </span>
-
       <textarea
         name={name}
         defaultValue={defaultValue ?? ""}
         placeholder={placeholder}
         rows={3}
-        className="mt-2 w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-gray-400"
+        className="mt-2 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-red-500"
       />
     </label>
   );
@@ -1433,7 +1304,7 @@ function SubmitButton({ children }: { children: React.ReactNode }) {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-2xl bg-gray-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+      className="rounded-2xl bg-black px-5 py-3 text-sm font-black text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {pending ? "Working..." : children}
     </button>
@@ -1442,25 +1313,36 @@ function SubmitButton({ children }: { children: React.ReactNode }) {
 
 function MiniSubmitButton({
   children,
-  variant = "secondary",
+  primary = false,
 }: {
   children: React.ReactNode;
-  variant?: "secondary" | "primary" | "danger";
+  primary?: boolean;
 }) {
   const { pending } = useFormStatus();
-
-  const className =
-    variant === "primary"
-      ? "border-gray-900 bg-gray-950 text-white hover:bg-gray-800"
-      : variant === "danger"
-        ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
-        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50";
 
   return (
     <button
       type="submit"
       disabled={pending}
-      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      className={`rounded-full border px-3 py-1.5 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+        primary
+          ? "border-red-600 bg-red-600 text-white hover:bg-red-700"
+          : "border-black/10 bg-white text-black/65 hover:border-red-300 hover:text-red-600"
+      }`}
+    >
+      {pending ? "Working..." : children}
+    </button>
+  );
+}
+
+function DangerSubmitButton({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:opacity-50"
     >
       {pending ? "Working..." : children}
     </button>
@@ -1478,11 +1360,11 @@ function ActionFeedback({
 
   return (
     <div
-      className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
-        compact ? "max-w-[14rem] text-xs" : ""
+      className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
+        compact ? "max-w-[15rem] text-xs" : ""
       } ${
         state.ok
-          ? "border-gray-900 bg-gray-950 text-white"
+          ? "border-black bg-black text-white"
           : "border-red-200 bg-red-50 text-red-700"
       }`}
     >
@@ -1492,22 +1374,22 @@ function ActionFeedback({
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const className =
-    status === "confirmed_by_defra"
-      ? "border-gray-900 bg-gray-950 text-white"
-      : status === "submitted_to_defra"
-        ? "border-gray-300 bg-gray-100 text-gray-800"
-        : status === "ready_to_send"
-          ? "border-gray-200 bg-white text-gray-700"
-          : status === "needs_more_info" ||
-              status === "unable_to_run" ||
-              status === "failed"
-            ? "border-red-200 bg-red-50 text-red-700"
-            : "border-gray-200 bg-white text-gray-500";
+  const danger =
+    status === "needs_more_info" ||
+    status === "unable_to_run" ||
+    status === "failed";
+
+  const confirmed = status === "confirmed_by_defra";
 
   return (
     <span
-      className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${className}`}
+      className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
+        danger
+          ? "border-red-200 bg-red-50 text-red-700"
+          : confirmed
+            ? "border-black bg-black text-white"
+            : "border-black/10 bg-white text-black/60"
+      }`}
     >
       {formatLabel(status)}
     </span>
@@ -1519,32 +1401,33 @@ function ConfidenceBadge({
 }: {
   confidence: DwtEvidenceSuggestion["confidence"];
 }) {
-  const className =
-    confidence === "high"
-      ? "border-gray-900 bg-gray-950 text-white"
-      : confidence === "medium"
-        ? "border-gray-300 bg-white text-gray-700"
-        : "border-gray-200 bg-white text-gray-500";
-
   return (
     <span
-      className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${className}`}
+      className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
+        confidence === "high"
+          ? "border-black bg-black text-white"
+          : "border-black/10 bg-white text-black/60"
+      }`}
     >
       {confidence} confidence
     </span>
   );
 }
 
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-black/55">
+      {children}
+    </span>
+  );
+}
+
 function EmptyState() {
   return (
-    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8">
-      <p className="text-sm font-semibold text-gray-950">
-        No PAT scenarios found.
-      </p>
-
-      <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-        Click “Seed / refresh scenarios” above to create the DEFRA PAT tracker
-        rows.
+    <div className="rounded-2xl border border-dashed border-black/15 bg-black/[0.025] p-8">
+      <p className="text-sm font-black text-black">No PAT scenarios found.</p>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-black/50">
+        Use “Seed / refresh scenarios” to create the DEFRA PAT tracker rows.
       </p>
     </div>
   );
@@ -1563,7 +1446,7 @@ function CopyEmailTableButton({ value }: { value: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-white"
+      className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-black text-black/65 transition hover:border-red-300 hover:text-red-600"
     >
       {copied ? "Copied ✓" : "Copy table"}
     </button>
@@ -1571,15 +1454,14 @@ function CopyEmailTableButton({ value }: { value: string }) {
 }
 
 /* =========================================================
-   HOOKS
+   REFRESH + HELPERS
 ========================================================= */
 
 function useRefreshAfterAction(state: PatActionState) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!state.timestamp) return;
-    if (!state.ok) return;
+    if (!state.timestamp || !state.ok) return;
 
     const timeout = window.setTimeout(() => {
       router.refresh();
@@ -1588,10 +1470,6 @@ function useRefreshAfterAction(state: PatActionState) {
     return () => window.clearTimeout(timeout);
   }, [state.timestamp, state.ok, router]);
 }
-
-/* =========================================================
-   HELPERS
-========================================================= */
 
 function buildDefraEmailTable(results: PatResult[]) {
   if (results.length === 0) {
@@ -1604,26 +1482,28 @@ function buildDefraEmailTable(results: PatResult[]) {
 
   const header =
     "Scenario ID | Scenario description | WTID | EWC codes | Reason / details";
-
   const divider =
     "------------|----------------------|------|-----------|-----------------";
 
   const body = rows
     .map((result) => {
-      const evidenceNeedsReview = Boolean(
+      const needsReview = Boolean(
         result.evidenceValidation && !result.evidenceValidation.valid,
       );
 
-      const evidenceReviewText = evidenceNeedsReview
+      const reviewText = needsReview
         ? `CHECK EVIDENCE: ${
             result.evidenceValidation?.warnings.join(" ") ??
             "Attached evidence needs review."
           }`
         : null;
 
-      const wtid = evidenceNeedsReview
+      const wtid = needsReview
         ? `CHECK EVIDENCE - ${
-            result.wasteTrackingId ?? result.errorMessage ?? result.dwtSubmissionId ?? "attached record"
+            result.wasteTrackingId ??
+            result.errorMessage ??
+            result.dwtSubmissionId ??
+            "attached record"
           }`
         : result.expectedResult === "error"
           ? result.errorMessage
@@ -1636,7 +1516,7 @@ function buildDefraEmailTable(results: PatResult[]) {
           : result.wasteTrackingId || "Pending";
 
       const details = [
-        evidenceReviewText,
+        reviewText,
         result.reason,
         result.evidenceSummary
           ? buildEmailEvidenceSummary(result.evidenceSummary)
@@ -1650,7 +1530,9 @@ function buildDefraEmailTable(results: PatResult[]) {
         .join(" ");
 
       return `${result.scenarioId} | ${result.scenarioDescription} | ${wtid} | ${
-        result.ewcCodes || result.evidenceSummary?.ewcCodes.join(", ") || "—"
+        result.ewcCodes ||
+        result.evidenceSummary?.ewcCodes.join(", ") ||
+        "—"
       } | ${details || "—"}`;
     })
     .join("\n");
@@ -1660,7 +1542,9 @@ function buildDefraEmailTable(results: PatResult[]) {
 
 function buildEmailEvidenceSummary(summary: EvidenceSummary) {
   const parts = [
-    `${summary.wasteItemCount} waste item${summary.wasteItemCount === 1 ? "" : "s"}`,
+    `${summary.wasteItemCount} waste item${
+      summary.wasteItemCount === 1 ? "" : "s"
+    }`,
     summary.disposalOrRecoveryCodes.length > 0
       ? `D/R codes: ${summary.disposalOrRecoveryCodes.join(", ")}`
       : null,
@@ -1683,7 +1567,6 @@ function buildEmailEvidenceSummary(summary: EvidenceSummary) {
   return parts.join(". ");
 }
 
-
 function scenarioRequirement(scenarioId: string) {
   const requirements: Record<string, string> = {
     R01: "Run a successful basic receipt with one waste item, disposal/recovery code present, no POPs and no hazardous properties.",
@@ -1702,14 +1585,16 @@ function scenarioRequirement(scenarioId: string) {
     X01: "Run a successful receipt containing both hazardous components and POPs components.",
   };
 
-  return requirements[scenarioId] ?? "Run a DWT submission that satisfies this DEFRA PAT scenario.";
+  return (
+    requirements[scenarioId] ??
+    "Run a DWT submission that satisfies this DEFRA PAT scenario."
+  );
 }
 
 function toDateTimeLocalValue(value: string | null | undefined) {
   if (!value) return "";
 
   const date = new Date(value);
-
   if (!Number.isFinite(date.getTime())) return "";
 
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
@@ -1722,7 +1607,6 @@ function formatDateTime(value: string | null | undefined) {
   if (!value) return "—";
 
   const date = new Date(value);
-
   if (!Number.isFinite(date.getTime())) return "—";
 
   return new Intl.DateTimeFormat("en-GB", {
@@ -1746,4 +1630,8 @@ function shortId(value: string) {
   if (value.length <= 12) return value;
 
   return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function joinValues(values: string[]) {
+  return values.length > 0 ? values.join(", ") : "—";
 }

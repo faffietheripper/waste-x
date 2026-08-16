@@ -17,9 +17,15 @@ import {
 } from "@/db/schema";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 
-/* =========================================================
-   PAGE
-========================================================= */
+/*
+  DWT CONTROL ROOM
+  ================
+  The existing platform DWT queries, readiness checks, movement grouping,
+  submission inspection and audit links are retained.
+
+  This rebuild changes the admin presentation to black / red / white and adds
+  a direct PAT Tracker link. It does NOT submit, edit or mutate DWT records.
+*/
 
 export default async function AdminDigitalWasteTrackingPage() {
   await requirePlatformAdmin();
@@ -40,25 +46,24 @@ export default async function AdminDigitalWasteTrackingPage() {
       .orderBy(desc(wasteTrackingSubmissions.lastAttemptedAt)),
 
     database.select().from(wasteTrackingOrganisationSettings),
-
     database.select().from(organisations),
-
     database.select().from(users),
-
     database.select().from(wasteListings),
-
     database.select().from(carrierAssignments),
-
     database.select().from(wasteReceipts),
-
     database.select().from(incidents),
   ]);
 
   const organisationById = new Map(
-    organisationRows.map((organisation) => [organisation.id, organisation]),
+    organisationRows.map((organisation) => [
+      organisation.id,
+      organisation,
+    ]),
   );
 
-  const userById = new Map(userRows.map((user) => [user.id, user]));
+  const userById = new Map(
+    userRows.map((user) => [user.id, user]),
+  );
 
   const listingById = new Map(
     listingRows.map((listing) => [String(listing.id), listing]),
@@ -96,7 +101,8 @@ export default async function AdminDigitalWasteTrackingPage() {
   const enabledSettings = settings.filter((setting) => setting.isEnabled);
 
   const settingsMissingApiCode = settings.filter(
-    (setting) => setting.isEnabled && !cleanString(setting.apiCode),
+    (setting) =>
+      setting.isEnabled && !cleanString(setting.apiCode),
   );
 
   const latestSubmission = submissions[0] ?? null;
@@ -119,8 +125,9 @@ export default async function AdminDigitalWasteTrackingPage() {
     acceptedStatuses.includes(group.latest.status),
   );
 
-  const movementGroupsNeedingAttention = movementGroups.filter((group) =>
-    ["rejected", "failed"].includes(group.latest.status),
+  const movementGroupsNeedingAttention = movementGroups.filter(
+    (group) =>
+      ["rejected", "failed"].includes(group.latest.status),
   );
 
   const acceptedByAssignmentId = new Set(
@@ -132,7 +139,8 @@ export default async function AdminDigitalWasteTrackingPage() {
   const acceptedByListingId = new Set(
     acceptedSubmissions
       .map((submission) =>
-        submission.listingId === null || submission.listingId === undefined
+        submission.listingId === null ||
+        submission.listingId === undefined
           ? null
           : String(submission.listingId),
       )
@@ -145,7 +153,9 @@ export default async function AdminDigitalWasteTrackingPage() {
 
   const unresolvedIncidentByAssignmentId = new Set(
     unresolvedIncidentRows
-      .map((incident) => cleanString(getUnknownField(incident, "assignmentId")))
+      .map((incident) =>
+        cleanString(getUnknownField(incident, "assignmentId")),
+      )
       .filter(isNonEmptyString),
   );
 
@@ -165,7 +175,8 @@ export default async function AdminDigitalWasteTrackingPage() {
     assignmentRows
       .filter(
         (assignment) =>
-          assignment.status === "completed" || Boolean(assignment.completedAt),
+          assignment.status === "completed" ||
+          Boolean(assignment.completedAt),
       )
       .map((assignment) => assignment.id),
   );
@@ -179,7 +190,8 @@ export default async function AdminDigitalWasteTrackingPage() {
       const assignmentId = cleanString(receipt.assignmentId);
 
       const listingId =
-        receipt.listingId === null || receipt.listingId === undefined
+        receipt.listingId === null ||
+        receipt.listingId === undefined
           ? null
           : String(receipt.listingId);
 
@@ -192,14 +204,18 @@ export default async function AdminDigitalWasteTrackingPage() {
         : false;
 
       const alreadySubmitted =
-        (assignmentId ? acceptedByAssignmentId.has(assignmentId) : false) ||
+        (assignmentId
+          ? acceptedByAssignmentId.has(assignmentId)
+          : false) ||
         (listingId ? acceptedByListingId.has(listingId) : false);
 
       const hasUnresolvedIncident =
         (assignmentId
           ? unresolvedIncidentByAssignmentId.has(assignmentId)
           : false) ||
-        (listingId ? unresolvedIncidentByListingId.has(listingId) : false);
+        (listingId
+          ? unresolvedIncidentByListingId.has(listingId)
+          : false);
 
       return (
         (assignmentComplete || listingComplete) &&
@@ -214,7 +230,8 @@ export default async function AdminDigitalWasteTrackingPage() {
       const setting = settingsByOrganisationId.get(organisation.id);
 
       const orgSubmissions = submissions.filter(
-        (submission) => submission.organisationId === organisation.id,
+        (submission) =>
+          submission.organisationId === organisation.id,
       );
 
       const orgAccepted = orgSubmissions.filter((submission) =>
@@ -230,127 +247,155 @@ export default async function AdminDigitalWasteTrackingPage() {
       return {
         id: organisation.id,
         name: organisation.teamName ?? "Unnamed organisation",
-        status: getUnknownField(organisation, "status") as string | null,
+        status: getUnknownField(
+          organisation,
+          "status",
+        ) as string | null,
         environment: setting?.environment ?? "test",
         enabled: Boolean(setting?.isEnabled),
         hasApiCode,
         submissions: orgSubmissions.length,
         accepted: orgAccepted.length,
         problems: orgProblems.length,
-        successRate: calculateRate(orgAccepted.length, orgSubmissions.length),
+        successRate: calculateRate(
+          orgAccepted.length,
+          orgSubmissions.length,
+        ),
       };
     })
     .sort((first, second) => {
-      if (first.enabled !== second.enabled) return first.enabled ? -1 : 1;
+      if (first.enabled !== second.enabled) {
+        return first.enabled ? -1 : 1;
+      }
 
       return second.submissions - first.submissions;
     });
 
-  const submissionViews = submissions.slice(0, 30).map((submission) => {
-    const organisation = organisationById.get(submission.organisationId);
+  const submissionViews = submissions
+    .slice(0, 30)
+    .map((submission) => {
+      const organisation = organisationById.get(
+        submission.organisationId,
+      );
 
-    const submittedBy = submission.submittedByUserId
-      ? userById.get(submission.submittedByUserId)
-      : null;
+      const submittedBy = submission.submittedByUserId
+        ? userById.get(submission.submittedByUserId)
+        : null;
 
-    const listing =
-      submission.listingId === null || submission.listingId === undefined
-        ? null
-        : listingById.get(String(submission.listingId));
+      const listing =
+        submission.listingId === null ||
+        submission.listingId === undefined
+          ? null
+          : listingById.get(String(submission.listingId));
 
-    const payloadSummary = getPayloadSummary(submission.payloadSnapshot);
+      const payloadSummary = getPayloadSummary(
+        submission.payloadSnapshot,
+      );
 
-    return {
-      id: submission.id,
-      status: submission.status,
-      method: submission.method,
-      endpoint: submission.endpoint,
-      wasteTrackingId: submission.wasteTrackingId,
-      submissionType: submission.submissionType,
-      organisationName: organisation?.teamName ?? "Unknown organisation",
-      submittedByName: submittedBy?.name ?? submittedBy?.email ?? "System",
-      listingName: listing?.name ?? null,
-      listingId: submission.listingId,
-      assignmentId: submission.assignmentId,
-      submittedAt: submission.submittedAt,
-      lastAttemptedAt: submission.lastAttemptedAt,
-      statusCode: getResponseStatusCode(submission.responseSnapshot),
-      warningsCount: getJsonArrayLength(submission.validationWarnings),
-      errorsCount: getJsonArrayLength(submission.validationErrors),
-      description: payloadSummary.description,
-      ewcCodes: payloadSummary.ewcCodes,
-      carrierName: payloadSummary.carrierName,
-      receiverName: payloadSummary.receiverName,
-      weight: payloadSummary.weight,
-    };
-  });
+      return {
+        id: submission.id,
+        status: submission.status,
+        method: submission.method,
+        endpoint: submission.endpoint,
+        wasteTrackingId: submission.wasteTrackingId,
+        submissionType: submission.submissionType,
+        organisationName:
+          organisation?.teamName ?? "Unknown organisation",
+        submittedByName:
+          submittedBy?.name ??
+          submittedBy?.email ??
+          "System",
+        listingName: listing?.name ?? null,
+        listingId: submission.listingId,
+        assignmentId: submission.assignmentId,
+        submittedAt: submission.submittedAt,
+        lastAttemptedAt: submission.lastAttemptedAt,
+        statusCode: getResponseStatusCode(
+          submission.responseSnapshot,
+        ),
+        warningsCount: getJsonArrayLength(
+          submission.validationWarnings,
+        ),
+        errorsCount: getJsonArrayLength(
+          submission.validationErrors,
+        ),
+        description: payloadSummary.description,
+        ewcCodes: payloadSummary.ewcCodes,
+        carrierName: payloadSummary.carrierName,
+        receiverName: payloadSummary.receiverName,
+        weight: payloadSummary.weight,
+      };
+    });
 
   return (
-    <div className="space-y-8">
-      {/* ================= HEADER ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-7 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400">
-              Compliance Infrastructure
-            </p>
+    <div className="space-y-7">
+      <section className="overflow-hidden rounded-[1.8rem] border border-white/10 bg-black text-white shadow-2xl shadow-black/20">
+        <div className="border-t-4 border-red-600 p-7">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.32em] text-red-500">
+                Compliance Infrastructure
+              </p>
 
-            <h1 className="mt-3 text-3xl font-bold tracking-tight text-gray-950">
-              Digital Waste Tracking
-            </h1>
+              <h1 className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl">
+                Digital Waste Tracking
+              </h1>
 
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-              Platform-wide view of DEFRA Digital Waste Tracking setup,
-              organisation readiness, receive movement submissions, accepted
-              Waste Tracking IDs and failed or rejected API attempts.
-            </p>
-          </div>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
+                Platform-wide DWT control, organisation readiness,
+                receive-movement submissions, Waste Tracking IDs and
+                failed or rejected API attempts.
+              </p>
+            </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/admin/audit/compliance"
-              className="rounded-full border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
-            >
-              Compliance audit
-            </Link>
+            <div className="flex flex-wrap gap-3">
+              <Link
+                href="/admin/digital-waste-tracking/pat"
+                className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-black text-white transition hover:bg-red-700"
+              >
+                PAT Tracker
+              </Link>
 
-            <Link
-              href="/admin/audit/live"
-              className="rounded-full bg-gray-950 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800"
-            >
-              Live activity
-            </Link>
+              <Link
+                href="/admin/audit/compliance"
+                className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-bold text-white transition hover:border-red-500 hover:text-red-400"
+              >
+                Compliance audit
+              </Link>
+
+              <Link
+                href="/admin/audit/live"
+                className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-bold text-white transition hover:border-red-500 hover:text-red-400"
+              >
+                Live activity
+              </Link>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ================= TOP KPIS ================= */}
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <Metric
           label="API attempts"
           value={totalAttempts}
           helper="All DWT submission attempts"
         />
-
         <Metric
           label="Tracked movements"
           value={trackedMovements}
-          helper="Grouped by assignment/listing/tracking ID"
+          helper="Grouped movement records"
         />
-
         <Metric
           label="Accepted"
           value={acceptedSubmissions.length}
-          helper="Accepted or accepted with warnings"
+          helper="Including accepted with warnings"
         />
-
         <Metric
           label="Needs attention"
           value={rejectedOrFailedSubmissions.length}
           helper="Rejected or failed attempts"
-          tone={rejectedOrFailedSubmissions.length > 0 ? "danger" : "default"}
+          danger={rejectedOrFailedSubmissions.length > 0}
         />
-
         <Metric
           label="Success rate"
           value={`${dwtSuccessRate}%`}
@@ -358,8 +403,7 @@ export default async function AdminDigitalWasteTrackingPage() {
         />
       </section>
 
-      {/* ================= STATUS OVERVIEW ================= */}
-      <section className="grid gap-6 xl:grid-cols-3">
+      <section className="grid gap-5 xl:grid-cols-3">
         <Panel
           eyebrow="Latest Result"
           title="Latest DWT submission"
@@ -369,8 +413,9 @@ export default async function AdminDigitalWasteTrackingPage() {
             <LatestSubmissionCard
               submission={latestSubmission}
               organisationName={
-                organisationById.get(latestSubmission.organisationId)
-                  ?.teamName ?? "Unknown organisation"
+                organisationById.get(
+                  latestSubmission.organisationId,
+                )?.teamName ?? "Unknown organisation"
               }
             />
           ) : (
@@ -387,8 +432,9 @@ export default async function AdminDigitalWasteTrackingPage() {
             <LatestSubmissionCard
               submission={latestAcceptedSubmission}
               organisationName={
-                organisationById.get(latestAcceptedSubmission.organisationId)
-                  ?.teamName ?? "Unknown organisation"
+                organisationById.get(
+                  latestAcceptedSubmission.organisationId,
+                )?.teamName ?? "Unknown organisation"
               }
             />
           ) : (
@@ -405,8 +451,9 @@ export default async function AdminDigitalWasteTrackingPage() {
             <LatestSubmissionCard
               submission={latestProblemSubmission}
               organisationName={
-                organisationById.get(latestProblemSubmission.organisationId)
-                  ?.teamName ?? "Unknown organisation"
+                organisationById.get(
+                  latestProblemSubmission.organisationId,
+                )?.teamName ?? "Unknown organisation"
               }
             />
           ) : (
@@ -415,13 +462,12 @@ export default async function AdminDigitalWasteTrackingPage() {
         </Panel>
       </section>
 
-      {/* ================= DWT SETUP ================= */}
-      <section className="grid gap-6 xl:grid-cols-3">
+      <section className="grid gap-5 xl:grid-cols-3">
         <Panel
           className="xl:col-span-2"
           eyebrow="Organisation Setup"
           title="DWT organisation readiness"
-          description="Shows which organisations have DWT enabled, receiver API code stored, and successful submissions."
+          description="Shows DWT enablement, receiver API code configuration and submission performance."
           actionHref="/admin/organisations"
           actionLabel="View organisations"
         >
@@ -429,15 +475,14 @@ export default async function AdminDigitalWasteTrackingPage() {
             <MiniStat
               label="DWT enabled"
               value={enabledSettings.length}
-              helper="Organisations with DWT switched on"
+              helper="Organisations switched on"
             />
-
             <MiniStat
               label="Missing API code"
               value={settingsMissingApiCode.length}
-              helper="Enabled but no receiver API code"
+              helper="Enabled with no receiver API code"
+              danger={settingsMissingApiCode.length > 0}
             />
-
             <MiniStat
               label="Configured orgs"
               value={settings.length}
@@ -445,10 +490,10 @@ export default async function AdminDigitalWasteTrackingPage() {
             />
           </div>
 
-          <div className="mt-6 overflow-hidden rounded-2xl border border-gray-200">
+          <div className="mt-6 overflow-hidden rounded-2xl border border-black/10">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200 text-sm">
-                <thead className="bg-gray-50">
+              <table className="min-w-full divide-y divide-black/10 text-sm">
+                <thead className="bg-black text-white">
                   <tr>
                     <TableHead>Organisation</TableHead>
                     <TableHead>Status</TableHead>
@@ -460,62 +505,63 @@ export default async function AdminDigitalWasteTrackingPage() {
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {organisationReadiness.slice(0, 12).map((organisation) => (
-                    <tr
-                      key={organisation.id}
-                      className="transition hover:bg-gray-50"
-                    >
-                      <TableCell>
-                        <div>
-                          <p className="font-semibold text-gray-950">
-                            {organisation.name}
-                          </p>
+                <tbody className="divide-y divide-black/10 bg-white">
+                  {organisationReadiness
+                    .slice(0, 12)
+                    .map((organisation) => (
+                      <tr
+                        key={organisation.id}
+                        className="transition hover:bg-red-50/30"
+                      >
+                        <TableCell>
+                          <div>
+                            <p className="font-black text-black">
+                              {organisation.name}
+                            </p>
+                            <p className="mt-1 text-xs text-black/35">
+                              {organisation.id}
+                            </p>
+                          </div>
+                        </TableCell>
 
-                          <p className="mt-1 text-xs text-gray-400">
-                            {organisation.id}
-                          </p>
-                        </div>
-                      </TableCell>
+                        <TableCell>
+                          <StatusBadge status={organisation.status} />
+                        </TableCell>
 
-                      <TableCell>
-                        <StatusBadge status={organisation.status} />
-                      </TableCell>
+                        <TableCell>
+                          {formatStatus(
+                            organisation.environment,
+                          )}
+                        </TableCell>
 
-                      <TableCell>
-                        <span className="font-medium text-gray-700">
-                          {formatStatus(organisation.environment)}
-                        </span>
-                      </TableCell>
+                        <TableCell>
+                          {organisation.hasApiCode ? (
+                            <Pill dark>Stored</Pill>
+                          ) : (
+                            <Pill danger>Missing</Pill>
+                          )}
+                        </TableCell>
 
-                      <TableCell>
-                        {organisation.hasApiCode ? (
-                          <span className="rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
-                            Stored
-                          </span>
-                        ) : (
-                          <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-red-700">
-                            Missing
-                          </span>
-                        )}
-                      </TableCell>
+                        <TableCell>
+                          {organisation.submissions}
+                        </TableCell>
 
-                      <TableCell>{organisation.submissions}</TableCell>
+                        <TableCell>
+                          {organisation.successRate}%
+                        </TableCell>
 
-                      <TableCell>{organisation.successRate}%</TableCell>
-
-                      <TableCell>
-                        <Link
-                          href={`/admin/organisations/${encodeURIComponent(
-                            organisation.id,
-                          )}`}
-                          className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
-                        >
-                          Open
-                        </Link>
-                      </TableCell>
-                    </tr>
-                  ))}
+                        <TableCell>
+                          <Link
+                            href={`/admin/organisations/${encodeURIComponent(
+                              organisation.id,
+                            )}`}
+                            className="rounded-full bg-black px-3 py-1.5 text-xs font-black text-white transition hover:bg-red-600"
+                          >
+                            Open
+                          </Link>
+                        </TableCell>
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -535,25 +581,14 @@ export default async function AdminDigitalWasteTrackingPage() {
               value={readyForDwtReceipts.length}
               helper="Top records shown below"
             />
-
             <MiniStat
               label="Awaiting final status"
               value={awaitingFinalStatusSubmissions.length}
-              helper="Draft or submitted DWT records"
+              helper="Draft or submitted records"
             />
 
             {readyForDwtReceipts.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-5">
-                <p className="text-sm font-semibold text-gray-950">
-                  No ready receipts found.
-                </p>
-
-                <p className="mt-2 text-sm leading-6 text-gray-500">
-                  Receipts will appear here once an assignment is complete,
-                  receipt is confirmed, incidents are clear, and DWT is not yet
-                  accepted.
-                </p>
-              </div>
+              <EmptyState message="No ready receipts found." />
             ) : (
               <div className="space-y-3">
                 {readyForDwtReceipts.map((receipt) => (
@@ -561,8 +596,9 @@ export default async function AdminDigitalWasteTrackingPage() {
                     key={receipt.id}
                     receipt={receipt}
                     organisationName={
-                      organisationById.get(receipt.organisationId)?.teamName ??
-                      "Unknown organisation"
+                      organisationById.get(
+                        receipt.organisationId,
+                      )?.teamName ?? "Unknown organisation"
                     }
                   />
                 ))}
@@ -572,11 +608,10 @@ export default async function AdminDigitalWasteTrackingPage() {
         </Panel>
       </section>
 
-      {/* ================= MOVEMENT GROUPS ================= */}
       <Panel
         eyebrow="Movement Register"
         title="DWT movement groups"
-        description="One movement can have multiple attempts. This view groups attempts by assignment, listing or tracking ID."
+        description="One movement can have multiple attempts. Attempts remain grouped for audit visibility."
         actionHref="/admin/audit/chain"
         actionLabel="Chain of custody"
       >
@@ -584,15 +619,14 @@ export default async function AdminDigitalWasteTrackingPage() {
           <MiniStat
             label="Accepted movements"
             value={acceptedMovementGroups.length}
-            helper="Latest attempt is accepted"
+            helper="Latest attempt accepted"
           />
-
           <MiniStat
             label="Needs attention"
             value={movementGroupsNeedingAttention.length}
-            helper="Latest attempt rejected or failed"
+            helper="Latest attempt rejected/failed"
+            danger={movementGroupsNeedingAttention.length > 0}
           />
-
           <MiniStat
             label="Accepted with warnings"
             value={acceptedWithWarnings.length}
@@ -615,83 +649,95 @@ export default async function AdminDigitalWasteTrackingPage() {
               return (
                 <div
                   key={group.key}
-                  className="rounded-[1.5rem] border border-gray-200 bg-gray-50 p-5"
+                  className="rounded-[1.5rem] border border-black/10 bg-black/[0.025] p-5"
                 >
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge status={submission.status} />
-
-                        <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+                        <Pill>
                           {group.attempts.length} attempt
-                          {group.attempts.length === 1 ? "" : "s"}
-                        </span>
-
-                        {submission.wasteTrackingId && (
-                          <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+                          {group.attempts.length === 1
+                            ? ""
+                            : "s"}
+                        </Pill>
+                        {submission.wasteTrackingId ? (
+                          <Pill>
                             ID: {submission.wasteTrackingId}
-                          </span>
-                        )}
+                          </Pill>
+                        ) : null}
                       </div>
 
-                      <h3 className="mt-3 text-sm font-bold text-gray-950">
-                        {organisation?.teamName ?? "Unknown organisation"}
+                      <h3 className="mt-3 text-sm font-black text-black">
+                        {organisation?.teamName ??
+                          "Unknown organisation"}
                       </h3>
 
-                      <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-                        {submission.method} {submission.endpoint} • Latest
-                        attempt {formatDateTime(submission.lastAttemptedAt)}
+                      <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
+                        {submission.method ?? "—"}{" "}
+                        {submission.endpoint ?? "—"} • Latest
+                        attempt{" "}
+                        {formatDateTime(
+                          submission.lastAttemptedAt,
+                        )}
                       </p>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      {submission.listingId && (
+                      {submission.listingId ? (
                         <Link
                           href={`/admin/audit/chain/${submission.listingId}`}
-                          className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                          className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
                         >
                           Chain
                         </Link>
-                      )}
+                      ) : null}
 
                       <Link
                         href={`/admin/audit/entity?entityId=${encodeURIComponent(
                           group.entityId,
                         )}`}
-                        className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                        className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
                       >
                         Audit
                       </Link>
                     </div>
                   </div>
 
-                  {group.attempts.length > 1 && (
-                    <details className="mt-5 rounded-2xl border border-gray-200 bg-white p-4">
-                      <summary className="cursor-pointer text-sm font-semibold text-gray-900">
+                  {group.attempts.length > 1 ? (
+                    <details className="mt-5 rounded-2xl border border-black/10 bg-white p-4">
+                      <summary className="cursor-pointer text-sm font-black text-black">
                         Previous attempts hidden
                       </summary>
 
                       <div className="mt-4 space-y-2">
-                        {group.attempts.slice(1).map((attempt) => (
-                          <div
-                            key={attempt.id}
-                            className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm md:flex-row md:items-center md:justify-between"
-                          >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge status={attempt.status} />
-                              <span className="text-gray-500">
-                                {attempt.method} {attempt.endpoint}
+                        {group.attempts
+                          .slice(1)
+                          .map((attempt) => (
+                            <div
+                              key={attempt.id}
+                              className="flex flex-col gap-2 rounded-2xl border border-black/10 bg-black/[0.025] px-4 py-3 text-sm md:flex-row md:items-center md:justify-between"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  status={attempt.status}
+                                />
+                                <span className="text-black/50">
+                                  {attempt.method ?? "—"}{" "}
+                                  {attempt.endpoint ?? "—"}
+                                </span>
+                              </div>
+
+                              <span className="text-black/35">
+                                {formatDateTime(
+                                  attempt.lastAttemptedAt,
+                                )}
                               </span>
                             </div>
-
-                            <span className="text-gray-400">
-                              {formatDateTime(attempt.lastAttemptedAt)}
-                            </span>
-                          </div>
-                        ))}
+                          ))}
                       </div>
                     </details>
-                  )}
+                  ) : null}
                 </div>
               );
             })}
@@ -699,19 +745,18 @@ export default async function AdminDigitalWasteTrackingPage() {
         )}
       </Panel>
 
-      {/* ================= SUBMISSION REGISTER ================= */}
       <Panel
         eyebrow="Submission Register"
         title="Latest DWT API attempts"
-        description="Latest individual DWT submissions, including status, endpoint, payload summary and API response code."
+        description="Latest individual DWT submissions including status, payload summary and API response code."
       >
         {submissionViews.length === 0 ? (
           <EmptyState message="No DWT submissions found." />
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-gray-200">
+          <div className="overflow-hidden rounded-2xl border border-black/10">
             <div className="overflow-x-auto">
-              <table className="min-w-[1250px] w-full divide-y divide-gray-200 text-sm">
-                <thead className="bg-gray-50">
+              <table className="min-w-[1250px] w-full divide-y divide-black/10 text-sm">
+                <thead className="bg-black text-white">
                   <tr>
                     <TableHead>Status</TableHead>
                     <TableHead>Organisation</TableHead>
@@ -725,23 +770,24 @@ export default async function AdminDigitalWasteTrackingPage() {
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-gray-200 bg-white">
+                <tbody className="divide-y divide-black/10 bg-white">
                   {submissionViews.map((submission) => (
                     <tr
                       key={submission.id}
-                      className="transition hover:bg-gray-50"
+                      className="transition hover:bg-red-50/30"
                     >
                       <TableCell>
-                        <StatusBadge status={submission.status} />
+                        <StatusBadge
+                          status={submission.status}
+                        />
                       </TableCell>
 
                       <TableCell>
                         <div>
-                          <p className="font-semibold text-gray-950">
+                          <p className="font-black text-black">
                             {submission.organisationName}
                           </p>
-
-                          <p className="mt-1 text-xs text-gray-400">
+                          <p className="mt-1 text-xs text-black/35">
                             By {submission.submittedByName}
                           </p>
                         </div>
@@ -749,17 +795,18 @@ export default async function AdminDigitalWasteTrackingPage() {
 
                       <TableCell>
                         <div className="max-w-[20rem]">
-                          <p className="truncate font-semibold text-gray-950">
-                            {submission.description || "No description"}
+                          <p className="truncate font-bold text-black">
+                            {submission.description ||
+                              "No description"}
                           </p>
-
-                          <p className="mt-1 text-xs text-gray-400">
-                            EWC: {submission.ewcCodes || "—"} •{" "}
+                          <p className="mt-1 text-xs text-black/35">
+                            EWC:{" "}
+                            {submission.ewcCodes || "—"} •{" "}
                             {submission.weight || "No weight"}
                           </p>
-
-                          <p className="mt-1 text-xs text-gray-400">
-                            {submission.carrierName || "Carrier not recorded"}{" "}
+                          <p className="mt-1 text-xs text-black/35">
+                            {submission.carrierName ||
+                              "Carrier not recorded"}{" "}
                             →{" "}
                             {submission.receiverName ||
                               "Receiver not recorded"}
@@ -768,21 +815,25 @@ export default async function AdminDigitalWasteTrackingPage() {
                       </TableCell>
 
                       <TableCell>
-                        <span className="font-semibold text-gray-700">
+                        <span className="font-bold text-black/70">
                           {submission.wasteTrackingId ?? "—"}
                         </span>
                       </TableCell>
 
-                      <TableCell>{submission.statusCode ?? "—"}</TableCell>
+                      <TableCell>
+                        {submission.statusCode ?? "—"}
+                      </TableCell>
 
-                      <TableCell>{submission.warningsCount}</TableCell>
+                      <TableCell>
+                        {submission.warningsCount}
+                      </TableCell>
 
                       <TableCell>
                         <span
                           className={
                             submission.errorsCount > 0
-                              ? "font-semibold text-red-700"
-                              : "text-gray-600"
+                              ? "font-black text-red-600"
+                              : "text-black/60"
                           }
                         >
                           {submission.errorsCount}
@@ -791,27 +842,31 @@ export default async function AdminDigitalWasteTrackingPage() {
 
                       <TableCell>
                         {formatDateTime(
-                          submission.submittedAt ?? submission.lastAttemptedAt,
+                          submission.submittedAt ??
+                            submission.lastAttemptedAt,
                         )}
                       </TableCell>
 
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-2">
-                          {submission.listingId && (
+                          {submission.listingId ? (
                             <Link
                               href={`/admin/audit/chain/${submission.listingId}`}
-                              className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
+                              className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
                             >
                               Chain
                             </Link>
-                          )}
+                          ) : null}
 
                           <Link
                             href={`/admin/audit/entity?entityId=${encodeURIComponent(
                               submission.assignmentId ??
-                                String(submission.listingId ?? submission.id),
+                                String(
+                                  submission.listingId ??
+                                    submission.id,
+                                ),
                             )}`}
-                            className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
+                            className="rounded-full bg-black px-3 py-1.5 text-xs font-black text-white transition hover:bg-red-600"
                           >
                             Audit
                           </Link>
@@ -837,26 +892,26 @@ function Metric({
   label,
   value,
   helper,
-  tone = "default",
+  danger = false,
 }: {
   label: string;
   value: string | number;
   helper: string;
-  tone?: "default" | "danger";
+  danger?: boolean;
 }) {
   return (
-    <div className="rounded-[1.5rem] border border-gray-200 bg-white p-5 shadow-sm">
-      <p className="text-sm font-medium text-gray-500">{label}</p>
-
+    <div className="rounded-[1.5rem] border border-black/10 bg-white p-5 shadow-sm">
+      <p className="text-sm font-medium text-black/45">{label}</p>
       <p
-        className={`mt-3 text-3xl font-bold tracking-tight ${
-          tone === "danger" ? "text-red-700" : "text-gray-950"
+        className={`mt-3 text-3xl font-black tracking-tight ${
+          danger ? "text-red-600" : "text-black"
         }`}
       >
         {value}
       </p>
-
-      <p className="mt-2 text-xs leading-5 text-gray-400">{helper}</p>
+      <p className="mt-2 text-xs leading-5 text-black/35">
+        {helper}
+      </p>
     </div>
   );
 }
@@ -880,33 +935,35 @@ function Panel({
 }) {
   return (
     <section
-      className={`rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm ${className}`}
+      className={`rounded-[1.75rem] border border-black/10 bg-white p-6 shadow-sm ${className}`}
     >
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          {eyebrow && (
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+          {eyebrow ? (
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-red-600">
               {eyebrow}
             </p>
-          )}
+          ) : null}
 
-          <h2 className="mt-2 text-lg font-bold text-gray-950">{title}</h2>
+          <h2 className="mt-2 text-lg font-black text-black">
+            {title}
+          </h2>
 
-          {description && (
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
+          {description ? (
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-black/50">
               {description}
             </p>
-          )}
+          ) : null}
         </div>
 
-        {actionHref && actionLabel && (
+        {actionHref && actionLabel ? (
           <Link
             href={actionHref}
-            className="inline-flex rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
+            className="inline-flex rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
           >
             {actionLabel} →
           </Link>
-        )}
+        ) : null}
       </div>
 
       {children}
@@ -918,18 +975,26 @@ function MiniStat({
   label,
   value,
   helper,
+  danger = false,
 }: {
   label: string;
   value: string | number;
   helper: string;
+  danger?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-      <p className="text-sm text-gray-500">{label}</p>
-
-      <p className="mt-2 truncate text-xl font-bold text-gray-950">{value}</p>
-
-      <p className="mt-2 text-xs leading-5 text-gray-400">{helper}</p>
+    <div className="rounded-2xl border border-black/10 bg-black/[0.025] p-4">
+      <p className="text-sm text-black/45">{label}</p>
+      <p
+        className={`mt-2 truncate text-xl font-black ${
+          danger ? "text-red-600" : "text-black"
+        }`}
+      >
+        {value}
+      </p>
+      <p className="mt-2 text-xs leading-5 text-black/35">
+        {helper}
+      </p>
     </div>
   );
 }
@@ -941,8 +1006,8 @@ function LatestSubmissionCard({
   submission: {
     id: string;
     status: string;
-    method: string;
-    endpoint: string;
+    method: string | null;
+    endpoint: string | null;
     wasteTrackingId: string | null;
     submittedAt: Date | null;
     lastAttemptedAt: Date | null;
@@ -952,49 +1017,52 @@ function LatestSubmissionCard({
   };
   organisationName: string;
 }) {
-  const statusCode = getResponseStatusCode(submission.responseSnapshot);
+  const statusCode = getResponseStatusCode(
+    submission.responseSnapshot,
+  );
 
   return (
-    <div className="rounded-[1.5rem] border border-gray-200 bg-gray-50 p-5">
+    <div className="rounded-[1.5rem] border border-black/10 bg-black/[0.025] p-5">
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={submission.status} />
 
-        {submission.wasteTrackingId && (
-          <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
-            ID: {submission.wasteTrackingId}
-          </span>
-        )}
+        {submission.wasteTrackingId ? (
+          <Pill>ID: {submission.wasteTrackingId}</Pill>
+        ) : null}
       </div>
 
-      <h3 className="mt-4 text-sm font-bold text-gray-950">
+      <h3 className="mt-4 text-sm font-black text-black">
         {organisationName}
       </h3>
 
       <div className="mt-4 space-y-3">
         <InfoRow
           label="Endpoint"
-          value={`${submission.method} ${submission.endpoint}`}
+          value={`${submission.method ?? "—"} ${
+            submission.endpoint ?? "—"
+          }`}
         />
-
         <InfoRow
           label="HTTP status"
           value={statusCode ? String(statusCode) : "—"}
         />
-
         <InfoRow
           label="Warnings"
-          value={String(getJsonArrayLength(submission.validationWarnings))}
+          value={String(
+            getJsonArrayLength(submission.validationWarnings),
+          )}
         />
-
         <InfoRow
           label="Errors"
-          value={String(getJsonArrayLength(submission.validationErrors))}
+          value={String(
+            getJsonArrayLength(submission.validationErrors),
+          )}
         />
-
         <InfoRow
           label="Submitted"
           value={formatDateTime(
-            submission.submittedAt ?? submission.lastAttemptedAt,
+            submission.submittedAt ??
+              submission.lastAttemptedAt,
           )}
         />
       </div>
@@ -1017,77 +1085,107 @@ function ReadyReceiptCard({
   organisationName: string;
 }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+    <div className="rounded-2xl border border-black/10 bg-black/[0.025] p-4">
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={receipt.status} />
-
-        <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
-          Ready
-        </span>
+        <Pill>Ready</Pill>
       </div>
 
-      <p className="mt-3 text-sm font-bold text-gray-950">
+      <p className="mt-3 text-sm font-black text-black">
         {organisationName}
       </p>
 
-      <p className="mt-2 break-all text-xs leading-5 text-gray-500">
+      <p className="mt-2 break-all text-xs leading-5 text-black/50">
         Assignment: {receipt.assignmentId ?? "—"}
       </p>
 
-      <p className="mt-1 text-xs leading-5 text-gray-500">
+      <p className="mt-1 text-xs leading-5 text-black/50">
         Listing: {receipt.listingId ?? "—"} • Received{" "}
         {formatDateTime(receipt.receivedAt)}
       </p>
 
-      {receipt.assignmentId && (
+      {receipt.assignmentId ? (
         <Link
           href={`/admin/audit/entity?entityId=${encodeURIComponent(
             receipt.assignmentId,
           )}`}
-          className="mt-3 inline-flex rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+          className="mt-3 inline-flex rounded-full bg-black px-3 py-1.5 text-xs font-black text-white transition hover:bg-red-600"
         >
           Inspect →
         </Link>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: string | null | undefined }) {
-  const className =
+function StatusBadge({
+  status,
+}: {
+  status: string | null | undefined;
+}) {
+  const positive =
     status === "accepted" ||
     status === "ACTIVE" ||
     status === "active" ||
     status === "confirmed" ||
-    status === "submitted"
-      ? "border-gray-900 bg-gray-950 text-white"
-      : status === "accepted_with_warnings" ||
-          status === "draft" ||
-          status === "PENDING" ||
-          status === "pending"
-        ? "border-gray-300 bg-gray-100 text-gray-800"
-        : status === "rejected" ||
-            status === "failed" ||
-            status === "REJECTED" ||
-            status === "SUSPENDED"
-          ? "border-red-200 bg-red-50 text-red-700"
-          : "border-gray-200 bg-white text-gray-600";
+    status === "submitted";
+
+  const danger =
+    status === "rejected" ||
+    status === "failed" ||
+    status === "REJECTED" ||
+    status === "SUSPENDED";
 
   return (
     <span
-      className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${className}`}
+      className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
+        danger
+          ? "border-red-200 bg-red-50 text-red-700"
+          : positive
+            ? "border-black bg-black text-white"
+            : "border-black/10 bg-white text-black/60"
+      }`}
     >
       {formatStatus(status)}
     </span>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function Pill({
+  children,
+  dark = false,
+  danger = false,
+}: {
+  children: ReactNode;
+  dark?: boolean;
+  danger?: boolean;
+}) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
-      <p className="text-xs font-medium text-gray-400">{label}</p>
+    <span
+      className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
+        danger
+          ? "border-red-200 bg-red-50 text-red-700"
+          : dark
+            ? "border-black bg-black text-white"
+            : "border-black/10 bg-white text-black/55"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
 
-      <p className="mt-1 break-words text-sm font-semibold text-gray-950">
+function InfoRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-black/10 bg-white px-4 py-3">
+      <p className="text-xs font-medium text-black/35">{label}</p>
+      <p className="mt-1 break-words text-sm font-bold text-black">
         {value}
       </p>
     </div>
@@ -1096,12 +1194,11 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8">
-      <p className="text-sm font-semibold text-gray-950">{message}</p>
-
-      <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-        Digital Waste Tracking records will appear here once organisations start
-        submitting receive movements through Waste X.
+    <div className="rounded-2xl border border-dashed border-black/15 bg-black/[0.025] p-6">
+      <p className="text-sm font-black text-black">{message}</p>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-black/50">
+        Digital Waste Tracking records will appear here as
+        organisations use the existing Waste X DWT workflow.
       </p>
     </div>
   );
@@ -1109,7 +1206,7 @@ function EmptyState({ message }: { message: string }) {
 
 function TableHead({ children }: { children: ReactNode }) {
   return (
-    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-gray-400">
+    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-black uppercase tracking-[0.14em] text-white/55">
       {children}
     </th>
   );
@@ -1117,14 +1214,14 @@ function TableHead({ children }: { children: ReactNode }) {
 
 function TableCell({ children }: { children: ReactNode }) {
   return (
-    <td className="whitespace-nowrap px-4 py-4 align-middle text-sm text-gray-600">
+    <td className="whitespace-nowrap px-4 py-4 align-middle text-sm text-black/60">
       {children}
     </td>
   );
 }
 
 /* =========================================================
-   HELPERS
+   HELPERS — EXISTING DWT VIEW LOGIC
 ========================================================= */
 
 type SubmissionRow = typeof wasteTrackingSubmissions.$inferSelect;
@@ -1142,7 +1239,6 @@ function buildMovementGroups(submissions: SubmissionRow[]) {
 
   for (const submission of submissions) {
     const key = getMovementKey(submission);
-
     const existing = groups.get(key);
 
     if (!existing) {
@@ -1174,13 +1270,19 @@ function buildMovementGroups(submissions: SubmissionRow[]) {
 
   return Array.from(groups.values()).sort(
     (first, second) =>
-      getSubmissionTime(second.latest) - getSubmissionTime(first.latest),
+      getSubmissionTime(second.latest) -
+      getSubmissionTime(first.latest),
   );
 }
 
 function getMovementKey(submission: SubmissionRow) {
-  if (submission.assignmentId) return `assignment:${submission.assignmentId}`;
-  if (submission.listingId) return `listing:${submission.listingId}`;
+  if (submission.assignmentId) {
+    return `assignment:${submission.assignmentId}`;
+  }
+
+  if (submission.listingId) {
+    return `listing:${submission.listingId}`;
+  }
 
   if (submission.wasteTrackingId) {
     return `tracking:${submission.wasteTrackingId}`;
@@ -1190,7 +1292,8 @@ function getMovementKey(submission: SubmissionRow) {
 }
 
 function getSubmissionTime(submission: SubmissionRow) {
-  const value = submission.lastAttemptedAt ?? submission.submittedAt;
+  const value =
+    submission.lastAttemptedAt ?? submission.submittedAt;
 
   return value ? new Date(value).getTime() : 0;
 }
@@ -1231,8 +1334,14 @@ function parseJsonValue(value: unknown): unknown {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }
 
 function getJsonArrayLength(value: unknown) {
@@ -1279,8 +1388,13 @@ function getPayloadSummary(value: unknown) {
   const ewcCodes = firstWasteItem?.ewcCodes;
   const weight = firstWasteItem?.weight;
 
-  const carrier = isRecord(parsed.carrier) ? parsed.carrier : null;
-  const receiver = isRecord(parsed.receiver) ? parsed.receiver : null;
+  const carrier = isRecord(parsed.carrier)
+    ? parsed.carrier
+    : null;
+
+  const receiver = isRecord(parsed.receiver)
+    ? parsed.receiver
+    : null;
 
   return {
     description:
@@ -1288,7 +1402,9 @@ function getPayloadSummary(value: unknown) {
         ? firstWasteItem.wasteDescription
         : null,
 
-    ewcCodes: Array.isArray(ewcCodes) ? ewcCodes.join(", ") : null,
+    ewcCodes: Array.isArray(ewcCodes)
+      ? ewcCodes.join(", ")
+      : null,
 
     carrierName:
       typeof carrier?.organisationName === "string"
@@ -1296,7 +1412,9 @@ function getPayloadSummary(value: unknown) {
         : null,
 
     receiverName:
-      typeof receiver?.siteName === "string" ? receiver.siteName : null,
+      typeof receiver?.siteName === "string"
+        ? receiver.siteName
+        : null,
 
     weight: formatPayloadWeight(weight),
   };
@@ -1308,7 +1426,10 @@ function formatPayloadWeight(value: unknown) {
   const amount = value.amount;
   const metric = value.metric;
 
-  if (typeof amount !== "number" && typeof amount !== "string") {
+  if (
+    typeof amount !== "number" &&
+    typeof amount !== "string"
+  ) {
     return null;
   }
 
@@ -1329,7 +1450,9 @@ function formatStatus(status: string | null | undefined) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function formatDateTime(date: Date | string | null | undefined) {
+function formatDateTime(
+  date: Date | string | null | undefined,
+) {
   if (!date) return "—";
 
   const parsed = new Date(date);

@@ -1,404 +1,65 @@
-// src/app/admin/users/[id]/page.tsx
-
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { AdminMetric, AdminPageHeader, AdminPanel, AdminStatusPill } from "@/components/admin/AdminUi";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
+import { getAdminUser } from "@/modules/admin/core/getAdminControlTowerData";
+import { reactivateUser, suspendUser } from "../actions";
 
-import { getPlatformUserById, reactivateUser, suspendUser } from "../actions";
+type PageProps = { params: { id: string } };
 
-type AdminUserDetailParams =
-  | {
-      id: string;
-    }
-  | Promise<{
-      id: string;
-    }>;
-
-export default async function AdminUserDetailPage({
-  params,
-}: {
-  params: AdminUserDetailParams;
-}) {
+export default async function AdminUserDetailPage({ params }: PageProps) {
   await requirePlatformAdmin();
+  const user = await getAdminUser(params.id);
+  if (!user) notFound();
 
-  const resolvedParams = await params;
-  const user = await getPlatformUserById(resolvedParams.id);
-
-  if (!user) {
-    notFound();
-  }
-
-  const accountStatus = user.isSuspended
-    ? "Suspended"
-    : user.isActive
-      ? "Active"
-      : "Inactive";
-
-  const totalActivity =
-    Number(user.listingsCount ?? 0) + Number(user.bidsCount ?? 0);
+  const completedLoads = user.createdJobLoads.filter((load) => load.status === "completed").length;
+  const dwtAccepted = user.wasteTrackingSubmissionsSubmitted.filter((row) => ["accepted", "accepted_with_warnings"].includes(row.status)).length;
+  const dwtIssues = user.wasteTrackingSubmissionsSubmitted.filter((row) => ["rejected", "failed"].includes(row.status)).length;
 
   return (
-    <div className="space-y-8">
-      {/* ================= HEADER ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-7 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400">
-              User Profile
-            </p>
+    <div className="space-y-7">
+      <AdminPageHeader eyebrow="Platform Access" title={user.name} description="User identity, customer organisation membership, access state and high-level platform activity." actions={<Link href="/admin/users" className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-bold text-white hover:border-red-500">← Users</Link>} />
 
-            <h1 className="mt-3 text-3xl font-bold tracking-tight text-gray-950">
-              {user.name || "Unnamed user"}
-            </h1>
-
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-              {user.email}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/admin/users"
-              className="rounded-full border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
-            >
-              ← Users
-            </Link>
-
-            <Link
-              href={`/admin/audit/entity?entityId=${encodeURIComponent(
-                user.id,
-              )}`}
-              className="rounded-full border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
-            >
-              View audit
-            </Link>
-
-            {user.isSuspended ? (
-              <form action={reactivateUser.bind(null, user.id)}>
-                <button
-                  type="submit"
-                  className="rounded-full bg-gray-950 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800"
-                >
-                  Reactivate user
-                </button>
-              </form>
-            ) : (
-              <form action={suspendUser.bind(null, user.id)}>
-                <button
-                  type="submit"
-                  className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700"
-                >
-                  Suspend user
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <AdminMetric label="Role" value={formatLabel(user.role)} helper={user.organisation?.teamName ?? "Platform / unassigned"} />
+        <AdminMetric label="Jobs created" value={user.createdJobs.length} helper="Customer-side job records created" />
+        <AdminMetric label="Loads completed" value={completedLoads} helper={`${user.createdJobLoads.length} loads created`} />
+        <AdminMetric label="DWT issues" value={dwtIssues} helper={`${dwtAccepted} accepted DWT attempts`} danger={dwtIssues > 0} />
       </section>
 
-      {/* ================= STATUS CARDS ================= */}
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          label="Account status"
-          value={accountStatus}
-          helper="Current access state"
-          tone={user.isSuspended ? "danger" : "default"}
-        />
-
-        <SummaryCard
-          label="Role"
-          value={formatLabel(user.role)}
-          helper="Platform or organisation role"
-        />
-
-        <SummaryCard
-          label="Total activity"
-          value={totalActivity}
-          helper="Listings plus bids"
-        />
-
-        <SummaryCard
-          label="Last login"
-          value={formatDate(user.lastLoginAt)}
-          helper="Most recent platform access"
-        />
-      </section>
-
-      {/* ================= MAIN CONTENT ================= */}
-      <section className="grid gap-6 xl:grid-cols-3">
-        {/* PROFILE */}
-        <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm xl:col-span-2">
-          <div className="border-b border-gray-200 pb-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
-              Profile
-            </p>
-
-            <h2 className="mt-2 text-lg font-bold text-gray-950">
-              User information
-            </h2>
-
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-              Account details, organisation relationship and platform access
-              information for this user.
-            </p>
+      <section className="grid gap-6 xl:grid-cols-2">
+        <AdminPanel eyebrow="Account" title="Access details">
+          <div className="space-y-3">
+            <Info label="Email" value={user.email} />
+            <Info label="Organisation" value={user.organisation?.teamName ?? "Not linked"} />
+            <Info label="Role" value={formatLabel(user.role)} />
+            <Info label="Status" value={user.isSuspended ? "Suspended" : user.status} />
+            <Info label="Last seen" value={formatDateTime(user.lastSeenAt ?? user.lastLoginAt)} />
+            <Info label="Joined" value={formatDateTime(user.createdAt)} />
           </div>
+        </AdminPanel>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            <DetailCard label="Name" value={user.name || "Unnamed user"} />
-            <DetailCard label="Email" value={user.email} />
-            <DetailCard
-              label="Organisation"
-              value={user.organisationName ?? "—"}
-            />
-            <DetailCard label="Role" value={formatLabel(user.role)} />
-            <DetailCard label="Status" value={accountStatus} />
-            <DetailCard label="Joined" value={formatDate(user.createdAt)} />
-            <DetailCard
-              label="Last login"
-              value={formatDate(user.lastLoginAt)}
-            />
-            <DetailCard label="User ID" value={user.id} />
+        <AdminPanel eyebrow="Control" title="Access action" description="Platform access controls only. Operational customer data is not edited here.">
+          <div className="rounded-2xl border border-black/10 p-5">
+            <AdminStatusPill label={user.isSuspended ? "Suspended" : "Access active"} tone={user.isSuspended ? "danger" : "dark"} />
+            <p className="mt-4 text-sm leading-6 text-black/50">Suspension blocks user access. It does not delete historical jobs, loads, receipts, DWT records or audit history.</p>
+            {user.role !== "platform_admin" ? (
+              <div className="mt-5">
+                {user.isSuspended ? (
+                  <form action={reactivateUser.bind(null, user.id)}><button className="rounded-full bg-black px-5 py-2.5 text-sm font-black text-white hover:bg-red-600">Reactivate user</button></form>
+                ) : (
+                  <form action={suspendUser.bind(null, user.id)}><button className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-black text-white hover:bg-red-700">Suspend user</button></form>
+                )}
+              </div>
+            ) : <p className="mt-5 text-xs font-black uppercase tracking-[0.16em] text-red-600">Platform admin protection — no suspension action shown here.</p>}
           </div>
-        </section>
-
-        {/* ACCESS PANEL */}
-        <aside className="space-y-6">
-          <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
-              Access Control
-            </p>
-
-            <h2 className="mt-2 text-lg font-bold text-gray-950">
-              Account controls
-            </h2>
-
-            <p className="mt-2 text-sm leading-6 text-gray-500">
-              Suspend or reactivate this user’s access. Suspended users should
-              not be able to continue operational actions.
-            </p>
-
-            <div className="mt-5">
-              <UserStatusBadge
-                isActive={user.isActive}
-                isSuspended={user.isSuspended}
-              />
-            </div>
-
-            <div className="mt-6">
-              {user.isSuspended ? (
-                <form action={reactivateUser.bind(null, user.id)}>
-                  <button
-                    type="submit"
-                    className="w-full rounded-2xl bg-gray-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-gray-800"
-                  >
-                    Reactivate user
-                  </button>
-                </form>
-              ) : (
-                <form action={suspendUser.bind(null, user.id)}>
-                  <button
-                    type="submit"
-                    className="w-full rounded-2xl bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700"
-                  >
-                    Suspend user
-                  </button>
-                </form>
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
-              Investigation
-            </p>
-
-            <h2 className="mt-2 text-lg font-bold text-gray-950">
-              Audit links
-            </h2>
-
-            <div className="mt-5 space-y-3">
-              <Link
-                href={`/admin/audit/entity?entityId=${encodeURIComponent(
-                  user.id,
-                )}`}
-                className="block rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
-              >
-                Open entity audit →
-              </Link>
-
-              <Link
-                href="/admin/audit/live"
-                className="block rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
-              >
-                Open live activity →
-              </Link>
-
-              <Link
-                href="/admin/organisations"
-                className="block rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-white"
-              >
-                View organisations →
-              </Link>
-            </div>
-          </section>
-        </aside>
-      </section>
-
-      {/* ================= ACTIVITY ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-6 shadow-sm">
-        <div className="border-b border-gray-200 pb-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
-            Activity
-          </p>
-
-          <h2 className="mt-2 text-lg font-bold text-gray-950">
-            User activity summary
-          </h2>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-            Quick view of user contribution across listings and bids.
-          </p>
-        </div>
-
-        <div className="mt-6 grid gap-4 md:grid-cols-3">
-          <ActivityCard
-            label="Listings created"
-            value={user.listingsCount}
-            helper="Waste listings created by this user"
-          />
-
-          <ActivityCard
-            label="Bids placed"
-            value={user.bidsCount}
-            helper="Marketplace bids submitted"
-          />
-
-          <ActivityCard
-            label="Total activity"
-            value={totalActivity}
-            helper="Listings plus bids"
-          />
-        </div>
+        </AdminPanel>
       </section>
     </div>
   );
 }
 
-/* =========================================================
-   COMPONENTS
-========================================================= */
-
-function SummaryCard({
-  label,
-  value,
-  helper,
-  tone = "default",
-}: {
-  label: string;
-  value: number | string;
-  helper: string;
-  tone?: "default" | "danger";
-}) {
-  return (
-    <div className="rounded-[1.5rem] border border-gray-200 bg-white p-5 shadow-sm">
-      <p className="text-sm font-medium text-gray-500">{label}</p>
-
-      <p
-        className={`mt-3 truncate text-2xl font-bold tracking-tight ${
-          tone === "danger" ? "text-red-700" : "text-gray-950"
-        }`}
-      >
-        {value}
-      </p>
-
-      <p className="mt-2 text-xs leading-5 text-gray-400">{helper}</p>
-    </div>
-  );
-}
-
-function DetailCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
-        {label}
-      </p>
-
-      <p className="mt-2 break-words text-sm font-semibold text-gray-950">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ActivityCard({
-  label,
-  value,
-  helper,
-}: {
-  label: string;
-  value: number | string;
-  helper: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5">
-      <p className="text-sm text-gray-500">{label}</p>
-
-      <p className="mt-2 text-2xl font-bold text-gray-950">{value}</p>
-
-      <p className="mt-2 text-xs leading-5 text-gray-400">{helper}</p>
-    </div>
-  );
-}
-
-function UserStatusBadge({
-  isActive,
-  isSuspended,
-}: {
-  isActive: boolean;
-  isSuspended: boolean;
-}) {
-  if (isSuspended) {
-    return (
-      <span className="inline-flex rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-red-700">
-        Suspended
-      </span>
-    );
-  }
-
-  if (!isActive) {
-    return (
-      <span className="inline-flex rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-600">
-        Inactive
-      </span>
-    );
-  }
-
-  return (
-    <span className="inline-flex rounded-full border border-gray-900 bg-gray-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
-      Active
-    </span>
-  );
-}
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function formatDate(date: Date | string | null) {
-  if (!date) return "—";
-
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-  }).format(new Date(date));
-}
-
-function formatLabel(value: string | null | undefined) {
-  if (!value) return "Unknown";
-
-  return value
-    .replaceAll("_", " ")
-    .replaceAll("-", " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
+function Info({ label, value }: { label: string; value: string }) { return <div className="flex items-center justify-between gap-4 rounded-2xl border border-black/10 px-4 py-3"><span className="text-xs font-black uppercase tracking-[0.14em] text-black/35">{label}</span><span className="text-sm font-black text-black">{value}</span></div>; }
+function formatLabel(value: string) { return value.replaceAll("_", " ").replaceAll("-", " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()); }
+function formatDateTime(value: Date | string | null | undefined) { if (!value) return "—"; return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }

@@ -1,125 +1,22 @@
-// src/app/admin/organisations/actions.ts
-
 "use server";
 
 import crypto from "crypto";
-
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 
 import { database } from "@/db/database";
-import {
-  carrierAssignments,
-  departments,
-  organisations,
-  reviews,
-  users,
-  wasteListings,
-} from "@/db/schema";
+import { departments, organisations, users } from "@/db/schema";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 import { createDefaultSiteForOrganisation } from "@/modules/sites/data-access/createDefaultSiteForOrganisation";
-
-/* =========================================
-   TYPES
-========================================= */
 
 type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
 type Capability = "generator" | "carrier" | "manager";
 
 const SOLO_CAPABILITIES: Capability[] = ["generator", "carrier", "manager"];
 
-/* =========================================
-   HELPERS
-========================================= */
-
 function isSoloOperatingMode(value: unknown) {
   return String(value ?? "").toLowerCase() === "solo";
 }
-
-/* =========================================
-   GET ALL ORGANISATIONS (WITH SEARCH)
-========================================= */
-
-export async function getAllOrganisations(search?: string) {
-  const searchTerm = search?.trim();
-
-  const searchFilter = searchTerm
-    ? or(
-        ilike(organisations.teamName, `%${searchTerm}%`),
-        ilike(organisations.emailAddress, `%${searchTerm}%`),
-      )
-    : undefined;
-
-  return database
-    .select({
-      id: organisations.id,
-      teamName: organisations.teamName,
-      industry: organisations.industry,
-      email: organisations.emailAddress,
-      telephone: organisations.telephone,
-      country: organisations.country,
-      createdAt: organisations.createdAt,
-      status: organisations.status,
-
-      memberCount: sql<number>`count(distinct ${users.id})`,
-      listingsCount: sql<number>`count(distinct ${wasteListings.id})`,
-      carrierJobsCount: sql<number>`count(distinct ${carrierAssignments.id})`,
-      avgRating: sql<number>`avg(${reviews.rating})`,
-    })
-    .from(organisations)
-    .leftJoin(users, eq(users.organisationId, organisations.id))
-    .leftJoin(wasteListings, eq(wasteListings.organisationId, organisations.id))
-    .leftJoin(
-      carrierAssignments,
-      eq(carrierAssignments.carrierOrganisationId, organisations.id),
-    )
-    .leftJoin(reviews, eq(reviews.reviewedOrganisationId, organisations.id))
-    .where(searchFilter)
-    .groupBy(organisations.id)
-    .orderBy(desc(organisations.createdAt));
-}
-
-/* =========================================
-   GET SINGLE ORGANISATION
-========================================= */
-
-export async function getOrganisationById(orgId: string) {
-  const [org] = await database
-    .select({
-      id: organisations.id,
-      teamName: organisations.teamName,
-      industry: organisations.industry,
-      email: organisations.emailAddress,
-      telephone: organisations.telephone,
-      country: organisations.country,
-      city: organisations.city,
-      region: organisations.region,
-      postCode: organisations.postCode,
-      streetAddress: organisations.streetAddress,
-      createdAt: organisations.createdAt,
-      status: organisations.status,
-
-      memberCount: sql<number>`count(distinct ${users.id})`,
-      listingsCount: sql<number>`count(distinct ${wasteListings.id})`,
-      carrierJobsCount: sql<number>`count(distinct ${carrierAssignments.id})`,
-      avgRating: sql<number>`avg(${reviews.rating})`,
-    })
-    .from(organisations)
-    .leftJoin(users, eq(users.organisationId, organisations.id))
-    .leftJoin(wasteListings, eq(wasteListings.organisationId, organisations.id))
-    .leftJoin(
-      carrierAssignments,
-      eq(carrierAssignments.carrierOrganisationId, organisations.id),
-    )
-    .leftJoin(reviews, eq(reviews.reviewedOrganisationId, organisations.id))
-    .where(eq(organisations.id, orgId))
-    .groupBy(organisations.id);
-
-  return org;
-}
-
-/* =========================================
-   ENSURE DEFAULT DEPARTMENTS
-========================================= */
 
 async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
   const existingDepartments = await database
@@ -127,16 +24,14 @@ async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
     .from(departments)
     .where(eq(departments.organisationId, orgId));
 
-  const existingTypes = existingDepartments.map(
-    (department) => department.type,
-  );
+  const existingTypes = new Set(existingDepartments.map((department) => department.type));
 
-  const defaultDepartments: {
+  const defaults: Array<{
     id: string;
     organisationId: string;
     name: string;
     type: DepartmentType;
-  }[] = [
+  }> = [
     {
       id: crypto.randomUUID(),
       organisationId: orgId,
@@ -163,12 +58,10 @@ async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
     },
   ];
 
-  const departmentsToCreate = defaultDepartments.filter(
-    (department) => !existingTypes.includes(department.type),
-  );
+  const missing = defaults.filter((department) => !existingTypes.has(department.type));
 
-  if (departmentsToCreate.length > 0) {
-    await database.insert(departments).values(departmentsToCreate);
+  if (missing.length > 0) {
+    await database.insert(departments).values(missing);
   }
 
   const allDepartments = await database
@@ -176,97 +69,32 @@ async function ensureDefaultDepartmentsForOrganisation(orgId: string) {
     .from(departments)
     .where(eq(departments.organisationId, orgId));
 
-  const generatorDepartment = allDepartments.find(
-    (department) => department.type === "generator",
-  );
+  const generator = allDepartments.find((department) => department.type === "generator");
+  const compliance = allDepartments.find((department) => department.type === "compliance");
 
-  const managerDepartment = allDepartments.find(
-    (department) => department.type === "manager",
-  );
-
-  const carrierDepartment = allDepartments.find(
-    (department) => department.type === "carrier",
-  );
-
-  const complianceDepartment = allDepartments.find(
-    (department) => department.type === "compliance",
-  );
-
-  if (!generatorDepartment) {
-    throw new Error("Failed to create generator department.");
-  }
-
-  if (!managerDepartment) {
-    throw new Error("Failed to create manager department.");
-  }
-
-  if (!carrierDepartment) {
-    throw new Error("Failed to create carrier department.");
-  }
-
-  if (!complianceDepartment) {
-    throw new Error("Failed to create compliance department.");
-  }
+  if (!generator) throw new Error("Failed to create generator department.");
+  if (!compliance) throw new Error("Failed to create compliance department.");
 
   return {
-    generatorDepartmentId: generatorDepartment.id,
-    managerDepartmentId: managerDepartment.id,
-    carrierDepartmentId: carrierDepartment.id,
-    complianceDepartmentId: complianceDepartment.id,
+    generatorDepartmentId: generator.id,
+    complianceDepartmentId: compliance.id,
   };
 }
 
-/* =========================================
-   SOLO USER ASSIGNMENT
-========================================= */
-
-async function assignSoloUsersToGeneratorDepartment({
-  orgId,
-  generatorDepartmentId,
-}: {
-  orgId: string;
-  generatorDepartmentId: string;
-}) {
-  /*
-    Solo workspace rule:
-
-    Store solo users in Generator Operations.
-
-    Their solo workflow access does not come from the stored department alone.
-    It comes from:
-    - organisation.operatingMode = "solo"
-    - organisation.capabilities = generator + carrier + manager
-    - solo-aware permission helpers/nav
-
-    This prevents solo admins landing in Compliance after approval.
-  */
-
+async function assignSoloUsersToGeneratorDepartment(
+  orgId: string,
+  generatorDepartmentId: string,
+) {
   await database
     .update(users)
-    .set({
-      departmentId: generatorDepartmentId,
-    })
+    .set({ departmentId: generatorDepartmentId })
     .where(eq(users.organisationId, orgId));
 }
 
-/* =========================================
-   TEAM USER ASSIGNMENT
-========================================= */
-
-async function assignFirstTeamAdminToComplianceDepartment({
-  orgId,
-  complianceDepartmentId,
-}: {
-  orgId: string;
-  complianceDepartmentId: string;
-}) {
-  /*
-    Team workspace rule:
-
-    First admin/senior manager starts in Compliance by default.
-    Do not override an existing department for team organisations.
-  */
-
+async function assignFirstTeamAdminToComplianceDepartment(
+  orgId: string,
+  complianceDepartmentId: string,
+) {
   const firstAdmin = await database.query.users.findFirst({
     where: and(
       eq(users.organisationId, orgId),
@@ -274,49 +102,32 @@ async function assignFirstTeamAdminToComplianceDepartment({
     ),
   });
 
-  if (!firstAdmin) return;
-
-  if (firstAdmin.departmentId) return;
+  if (!firstAdmin || firstAdmin.departmentId) return;
 
   await database
     .update(users)
-    .set({
-      departmentId: complianceDepartmentId,
-    })
+    .set({ departmentId: complianceDepartmentId })
     .where(eq(users.id, firstAdmin.id));
 }
-
-/* =========================================
-   APPROVE ORGANISATION
-========================================= */
 
 export async function approveOrganisation(formData: FormData) {
   await requirePlatformAdmin();
 
-  const orgId = formData.get("orgId")?.toString();
+  const orgId = String(formData.get("orgId") ?? "").trim();
+  if (!orgId) throw new Error("Missing organisation ID");
 
-  if (!orgId) {
-    throw new Error("Missing organisation ID");
-  }
+  const organisation = await database.query.organisations.findFirst({
+    where: eq(organisations.id, orgId),
+  });
 
-  const [organisation] = await database
-    .select()
-    .from(organisations)
-    .where(eq(organisations.id, orgId));
-
-  if (!organisation) {
-    throw new Error("Organisation not found");
-  }
+  if (!organisation) throw new Error("Organisation not found");
 
   const isSoloOrganisation = isSoloOperatingMode(organisation.operatingMode);
-
   const currentCapabilities =
     (organisation.capabilities as Capability[] | null) ?? [];
 
   const approvedCapabilities = isSoloOrganisation
-    ? Array.from(
-        new Set<Capability>([...currentCapabilities, ...SOLO_CAPABILITIES]),
-      )
+    ? Array.from(new Set<Capability>([...currentCapabilities, ...SOLO_CAPABILITIES]))
     : currentCapabilities;
 
   await database
@@ -332,46 +143,33 @@ export async function approveOrganisation(formData: FormData) {
     await ensureDefaultDepartmentsForOrganisation(orgId);
 
   if (isSoloOrganisation) {
-    await assignSoloUsersToGeneratorDepartment({
-      orgId,
-      generatorDepartmentId,
-    });
+    await assignSoloUsersToGeneratorDepartment(orgId, generatorDepartmentId);
   } else {
-    await assignFirstTeamAdminToComplianceDepartment({
+    await assignFirstTeamAdminToComplianceDepartment(
       orgId,
       complianceDepartmentId,
-    });
+    );
   }
 
-  /*
-    Site model safety check.
+  await createDefaultSiteForOrganisation({ organisationId: orgId });
 
-    New organisations should already get a Main Site during organisation
-    creation. This keeps approval safe for older pending organisations or any
-    organisation created before the sites model existed.
-  */
-  await createDefaultSiteForOrganisation({
-    organisationId: orgId,
-  });
+  revalidatePath("/admin");
+  revalidatePath("/admin/organisations");
+  revalidatePath(`/admin/organisations/${orgId}`);
 }
-
-/* =========================================
-   REJECT ORGANISATION
-========================================= */
 
 export async function rejectOrganisation(formData: FormData) {
   await requirePlatformAdmin();
 
-  const orgId = formData.get("orgId")?.toString();
-
-  if (!orgId) {
-    throw new Error("Missing organisation ID");
-  }
+  const orgId = String(formData.get("orgId") ?? "").trim();
+  if (!orgId) throw new Error("Missing organisation ID");
 
   await database
     .update(organisations)
-    .set({
-      status: "REJECTED",
-    })
+    .set({ status: "REJECTED" })
     .where(eq(organisations.id, orgId));
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/organisations");
+  revalidatePath(`/admin/organisations/${orgId}`);
 }

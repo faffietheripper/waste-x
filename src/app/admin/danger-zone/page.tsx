@@ -1,92 +1,34 @@
+import { AdminPageHeader, AdminPanel } from "@/components/admin/AdminUi";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
-import {
-  suspendOrganisation,
-  cancelListing,
-  resolveIncident,
-  resetUserAccount,
-} from "./actions";
+import { resetUserAccount, suspendOrganisation } from "./actions";
 
 export default async function DangerZonePage() {
   await requirePlatformAdmin();
 
   return (
-    <div className="space-y-10 max-w-3xl">
-      <h1 className="text-2xl font-bold text-red-600">Danger Zone</h1>
+    <div className="space-y-7">
+      <AdminPageHeader eyebrow="System" title="Danger Zone" description="High-impact platform access controls. Legacy listing cancellation and assignment-incident controls are intentionally not surfaced in the Solo Waste Manager admin experience." />
 
-      <p className="text-sm text-gray-500">
-        Administrative tools for resolving critical platform issues.
-      </p>
-
-      {/* Suspend Organisation */}
-
-      <section className="bg-white p-6 rounded shadow space-y-3">
-        <h2 className="font-semibold">Suspend Organisation</h2>
-
-        <form action={suspendOrganisation}>
-          <input
-            name="organisationId"
-            placeholder="Organisation ID"
-            className="border p-2 w-full rounded"
-          />
-
-          <button className="mt-3 bg-red-600 text-white px-4 py-2 rounded">
-            Suspend Organisation
-          </button>
-        </form>
+      <section className="rounded-[1.8rem] border border-red-800 bg-red-950/25 p-6 text-white">
+        <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-500">Caution</p>
+        <h2 className="mt-2 text-xl font-black">These actions affect customer access.</h2>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-white/50">Use the organisation and user overview pages first. Do not use this screen as a normal workflow shortcut.</p>
       </section>
 
-      {/* Cancel Listing */}
+      <section className="grid gap-6 xl:grid-cols-2">
+        <AdminPanel eyebrow="Organisation Access" title="Suspend organisation" description="Suspends the organisation account. Historical operational and compliance records remain in the database.">
+          <form action={suspendOrganisation} className="space-y-4">
+            <label className="block"><span className="text-xs font-black uppercase tracking-[0.14em] text-black/40">Organisation ID</span><input name="organisationId" required placeholder="Organisation ID" className="mt-2 w-full rounded-2xl border border-black/15 px-4 py-3 text-sm font-semibold outline-none focus:border-red-500" /></label>
+            <button className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-black text-white hover:bg-red-700">Suspend organisation</button>
+          </form>
+        </AdminPanel>
 
-      <section className="bg-white p-6 rounded shadow space-y-3">
-        <h2 className="font-semibold">Cancel Listing</h2>
-
-        <form action={cancelListing}>
-          <input
-            name="listingId"
-            placeholder="Listing ID"
-            className="border p-2 w-full rounded"
-          />
-
-          <button className="mt-3 bg-red-600 text-white px-4 py-2 rounded">
-            Cancel Listing
-          </button>
-        </form>
-      </section>
-
-      {/* Resolve Incident */}
-
-      <section className="bg-white p-6 rounded shadow space-y-3">
-        <h2 className="font-semibold">Resolve Incident</h2>
-
-        <form action={resolveIncident}>
-          <input
-            name="incidentId"
-            placeholder="Incident ID"
-            className="border p-2 w-full rounded"
-          />
-
-          <button className="mt-3 bg-red-600 text-white px-4 py-2 rounded">
-            Resolve Incident
-          </button>
-        </form>
-      </section>
-
-      {/* Reset User */}
-
-      <section className="bg-white p-6 rounded shadow space-y-3">
-        <h2 className="font-semibold">Reset User Account</h2>
-
-        <form action={resetUserAccount}>
-          <input
-            name="userId"
-            placeholder="User ID"
-            className="border p-2 w-full rounded"
-          />
-
-          <button className="mt-3 bg-red-600 text-white px-4 py-2 rounded">
-            Reset User
-          </button>
-        </form>
+        <AdminPanel eyebrow="User Access" title="Reset user account" description="Use only when a platform-level account reset is genuinely required.">
+          <form action={resetUserAccount} className="space-y-4">
+            <label className="block"><span className="text-xs font-black uppercase tracking-[0.14em] text-black/40">User ID</span><input name="userId" required placeholder="User ID" className="mt-2 w-full rounded-2xl border border-black/15 px-4 py-3 text-sm font-semibold outline-none focus:border-red-500" /></label>
+            <button className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-black text-white hover:bg-red-700">Reset user account</button>
+          </form>
+        </AdminPanel>
       </section>
     </div>
   );

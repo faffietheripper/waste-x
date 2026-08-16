@@ -24,6 +24,7 @@ type DefraStatus =
   | "failed";
 
 const PAT_PATH = "/admin/digital-waste-tracking/pat";
+
 /* =========================================================
    QUERIES
 ========================================================= */

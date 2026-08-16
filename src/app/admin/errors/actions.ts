@@ -2,7 +2,9 @@
 
 import { database } from "@/db/database";
 import { errorLogs } from "@/db/schema";
-import { and, eq, desc, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
+import { revalidatePath } from "next/cache";
 
 type Severity = "low" | "medium" | "high" | "critical";
 type Status = "active" | "resolved" | "all";
@@ -18,28 +20,16 @@ export async function getErrorsAction({
   code,
   status = "active",
 }: GetErrorsParams) {
+  await requirePlatformAdmin();
+
   const conditions = [];
 
-  // ✅ STATUS (controls resolved state)
-  if (status === "active") {
-    conditions.push(eq(errorLogs.resolved, false));
-  }
+  if (status === "active") conditions.push(eq(errorLogs.resolved, false));
+  if (status === "resolved") conditions.push(eq(errorLogs.resolved, true));
+  if (severity) conditions.push(eq(errorLogs.severity, severity));
+  if (code) conditions.push(eq(errorLogs.code, code));
 
-  if (status === "resolved") {
-    conditions.push(eq(errorLogs.resolved, true));
-  }
-
-  // ✅ SEVERITY
-  if (severity) {
-    conditions.push(eq(errorLogs.severity, severity));
-  }
-
-  // ✅ CODE (simple exact match for now)
-  if (code) {
-    conditions.push(eq(errorLogs.code, code));
-  }
-
-  return await database
+  return database
     .select()
     .from(errorLogs)
     .where(conditions.length ? and(...conditions) : undefined)
@@ -47,12 +37,15 @@ export async function getErrorsAction({
     .limit(100);
 }
 
-// resolve action (unchanged)
 export async function resolveErrorAction(id: string) {
+  await requirePlatformAdmin();
+
   await database
     .update(errorLogs)
     .set({ resolved: true })
     .where(eq(errorLogs.id, id));
+
+  revalidatePath("/admin/errors");
 }
 
 export async function getGroupedErrorsAction({
@@ -60,25 +53,16 @@ export async function getGroupedErrorsAction({
   code,
   status = "active",
 }: GetErrorsParams) {
+  await requirePlatformAdmin();
+
   const conditions = [];
 
-  if (status === "active") {
-    conditions.push(eq(errorLogs.resolved, false));
-  }
+  if (status === "active") conditions.push(eq(errorLogs.resolved, false));
+  if (status === "resolved") conditions.push(eq(errorLogs.resolved, true));
+  if (severity) conditions.push(eq(errorLogs.severity, severity));
+  if (code) conditions.push(eq(errorLogs.code, code));
 
-  if (status === "resolved") {
-    conditions.push(eq(errorLogs.resolved, true));
-  }
-
-  if (severity) {
-    conditions.push(eq(errorLogs.severity, severity));
-  }
-
-  if (code) {
-    conditions.push(eq(errorLogs.code, code));
-  }
-
-  return await database
+  return database
     .select({
       code: errorLogs.code,
       severity: errorLogs.severity,

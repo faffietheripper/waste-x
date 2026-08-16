@@ -16,6 +16,14 @@ import PatTrackerClient, {
   type PatResult,
 } from "./PatTrackerClient";
 
+/*
+  PAT BUSINESS LOGIC
+  ==================
+  The evidence-scanning and scenario-matching logic below is preserved from
+  the existing admin PAT implementation. This pass changes the admin header
+  and presentation only.
+*/
+
 export default async function DigitalWasteTrackingPatPage() {
   const [patResults, submissions] = await Promise.all([
     getPatResultsAction(),
@@ -72,39 +80,40 @@ export default async function DigitalWasteTrackingPatPage() {
 
   return (
     <div className="space-y-8">
-      {/* ================= HEADER ================= */}
-      <section className="rounded-[1.75rem] border border-gray-200 bg-white p-7 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400">
-              Digital Waste Tracking
-            </p>
+      <section className="overflow-hidden rounded-[1.8rem] border border-white/10 bg-black text-white shadow-2xl shadow-black/20">
+        <div className="border-t-4 border-red-600 p-7">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.32em] text-red-500">
+                Digital Waste Tracking
+              </p>
 
-            <h1 className="mt-3 text-3xl font-bold tracking-tight text-gray-950">
-              DEFRA PAT Evidence Scanner
-            </h1>
+              <h1 className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl">
+                DEFRA PAT Evidence Scanner
+              </h1>
 
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-              Waste X scans existing DWT submissions, suggests only records labelled
-              for the correct PAT scenario, and highlights attached evidence
-              that needs review before it is sent back to DEFRA.
-            </p>
-          </div>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
+                Existing PAT evidence scanning, scenario matching and DEFRA
+                evidence controls — now presented inside the Waste X Admin
+                black, red and white control environment.
+              </p>
+            </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/admin/digital-waste-tracking"
-              className="rounded-full border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
-            >
-              ← DWT control room
-            </Link>
+            <div className="flex flex-wrap gap-3">
+              <Link
+                href="/admin/digital-waste-tracking"
+                className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-bold text-white transition hover:border-red-500 hover:text-red-400"
+              >
+                ← DWT Control
+              </Link>
 
-            <Link
-              href="/admin/audit/compliance"
-              className="rounded-full bg-gray-950 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800"
-            >
-              Compliance audit
-            </Link>
+              <Link
+                href="/admin/audit/compliance"
+                className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-700"
+              >
+                Compliance audit
+              </Link>
+            </div>
           </div>
         </div>
       </section>
@@ -166,11 +175,14 @@ function buildEvidenceSuggestions(
 
     const sorted = scenarioSuggestions.sort((first, second) => {
       const confidenceDiff =
-        getConfidenceRank(second.confidence) - getConfidenceRank(first.confidence);
+        getConfidenceRank(second.confidence) -
+        getConfidenceRank(first.confidence);
 
       if (confidenceDiff !== 0) return confidenceDiff;
 
-      const firstTime = first.testedAt ? new Date(first.testedAt).getTime() : 0;
+      const firstTime = first.testedAt
+        ? new Date(first.testedAt).getTime()
+        : 0;
       const secondTime = second.testedAt
         ? new Date(second.testedAt).getTime()
         : 0;
@@ -200,7 +212,7 @@ function matchSubmissionToScenario(
     The old scanner matched by broad payload features, so one successful
     payload could appear suitable for several scenarios. DEFRA PAT evidence
     needs to prove the specific scenario that was run, so automatic suggestions
-    now require the payload reference to say WX-PAT-<scenarioId>.
+    require the payload reference to say WX-PAT-<scenarioId>.
   */
   if (declaredScenarioId !== result.scenarioId) return null;
 
@@ -220,7 +232,9 @@ function matchSubmissionToScenario(
 
   const responseError = getErrorMessageFromResponse(response);
   const submissionId = getString(getField(submission, "id"));
-  const wasteTrackingId = getString(getField(submission, "wasteTrackingId"));
+  const wasteTrackingId = getString(
+    getField(submission, "wasteTrackingId"),
+  );
 
   const confidence =
     result.expectedResult === "error"
@@ -241,9 +255,11 @@ function matchSubmissionToScenario(
     patResultId: result.id,
 
     dwtSubmissionId: submissionId,
-    wasteTrackingId: result.expectedResult === "error" ? null : wasteTrackingId,
+    wasteTrackingId:
+      result.expectedResult === "error" ? null : wasteTrackingId,
 
-    assignmentId: getString(getField(submission, "assignmentId")) || null,
+    assignmentId:
+      getString(getField(submission, "assignmentId")) || null,
     listingId: getNumberOrNull(getField(submission, "listingId")),
     receiptId: getString(getField(submission, "receiptId")) || null,
 
@@ -258,7 +274,8 @@ function matchSubmissionToScenario(
 
     ewcCodes: evidenceSummary.ewcCodes.join(", "),
     reason: buildSuggestionReason(result.scenarioId, matchReasons),
-    errorMessage: result.expectedResult === "error" ? responseError : null,
+    errorMessage:
+      result.expectedResult === "error" ? responseError : null,
     evidenceSummary,
     payloadScenarioId: declaredScenarioId,
 
@@ -346,17 +363,23 @@ function evaluateScenarioRequirement({
     }
 
     case "R03": {
-      matched = isAccepted && evidenceSummary.meansOfTransport === "Road";
+      matched =
+        isAccepted && evidenceSummary.meansOfTransport === "Road";
 
       if (matched) {
-        matchReasons.push("Accepted submission", "Means of transport is Road");
+        matchReasons.push(
+          "Accepted submission",
+          "Means of transport is Road",
+        );
       }
 
       break;
     }
 
     case "R04": {
-      matched = isAccepted && evidenceSummary.disposalOrRecoveryCodes.length === 0;
+      matched =
+        isAccepted &&
+        evidenceSummary.disposalOrRecoveryCodes.length === 0;
 
       if (matched) {
         matchReasons.push(
@@ -369,7 +392,9 @@ function evaluateScenarioRequirement({
     }
 
     case "R05": {
-      matched = isAccepted && evidenceSummary.disposalOrRecoveryCodes.length > 1;
+      matched =
+        isAccepted &&
+        evidenceSummary.disposalOrRecoveryCodes.length > 1;
 
       if (matched) {
         matchReasons.push(
@@ -393,7 +418,9 @@ function evaluateScenarioRequirement({
 
     case "C01": {
       matched =
-        isRejected && !carrierRegistration && !carrierNoRegistrationReason;
+        isRejected &&
+        !carrierRegistration &&
+        !carrierNoRegistrationReason;
 
       if (matched) {
         matchReasons.push(
@@ -408,7 +435,9 @@ function evaluateScenarioRequirement({
 
     case "C02": {
       matched =
-        isAccepted && !carrierRegistration && Boolean(carrierNoRegistrationReason);
+        isAccepted &&
+        !carrierRegistration &&
+        Boolean(carrierNoRegistrationReason);
 
       if (matched) {
         matchReasons.push(
@@ -425,7 +454,10 @@ function evaluateScenarioRequirement({
       matched = isAccepted && evidenceSummary.brokerDealerIncluded;
 
       if (matched) {
-        matchReasons.push("Accepted submission", "Broker/dealer details found");
+        matchReasons.push(
+          "Accepted submission",
+          "Broker/dealer details found",
+        );
       }
 
       break;
@@ -438,7 +470,10 @@ function evaluateScenarioRequirement({
         evidenceSummary.popsComponentCount >= 2;
 
       if (matched) {
-        matchReasons.push("Accepted submission", "Multiple POPs components");
+        matchReasons.push(
+          "Accepted submission",
+          "Multiple POPs components",
+        );
       }
 
       break;
@@ -500,7 +535,9 @@ function evaluateScenarioRequirement({
 
     case "X01": {
       matched =
-        isAccepted && evidenceSummary.containsHazardous && evidenceSummary.containsPops;
+        isAccepted &&
+        evidenceSummary.containsHazardous &&
+        evidenceSummary.containsPops;
 
       if (matched) {
         matchReasons.push(
@@ -532,7 +569,9 @@ function buildAttachedEvidenceValidation(
   if (!result.dwtSubmissionId) return null;
 
   const matchingSubmission = submissions.find((submission) => {
-    return getString(getField(submission, "id")) === result.dwtSubmissionId;
+    return (
+      getString(getField(submission, "id")) === result.dwtSubmissionId
+    );
   });
 
   if (!matchingSubmission) {
@@ -540,19 +579,27 @@ function buildAttachedEvidenceValidation(
       valid: false,
       scenarioReference: null,
       message: "Attached evidence needs review.",
-      warnings: ["The attached DWT submission could not be found in the scanned submissions."],
+      warnings: [
+        "The attached DWT submission could not be found in the scanned submissions.",
+      ],
     };
   }
 
-  const payload = parseJsonValue(getField(matchingSubmission, "payloadSnapshot"));
-  const response = parseJsonValue(getField(matchingSubmission, "responseSnapshot"));
+  const payload = parseJsonValue(
+    getField(matchingSubmission, "payloadSnapshot"),
+  );
+  const response = parseJsonValue(
+    getField(matchingSubmission, "responseSnapshot"),
+  );
 
   if (!isRecord(payload)) {
     return {
       valid: false,
       scenarioReference: null,
       message: "Attached evidence needs review.",
-      warnings: ["The attached DWT submission does not have a readable payload snapshot."],
+      warnings: [
+        "The attached DWT submission does not have a readable payload snapshot.",
+      ],
     };
   }
 
@@ -609,12 +656,16 @@ function buildAttachedEvidenceSummary(
   if (!result.dwtSubmissionId) return null;
 
   const matchingSubmission = submissions.find((submission) => {
-    return getString(getField(submission, "id")) === result.dwtSubmissionId;
+    return (
+      getString(getField(submission, "id")) === result.dwtSubmissionId
+    );
   });
 
   if (!matchingSubmission) return null;
 
-  const payload = parseJsonValue(getField(matchingSubmission, "payloadSnapshot"));
+  const payload = parseJsonValue(
+    getField(matchingSubmission, "payloadSnapshot"),
+  );
 
   if (!isRecord(payload)) return null;
 
@@ -678,7 +729,8 @@ function buildEvidenceSummaryFromPayload(
     hazardousPropertyCodes,
     hazardousComponents,
     meansOfTransport: getString(carrier.meansOfTransport) || null,
-    carrierRegistrationNumber: getString(carrier.registrationNumber) || null,
+    carrierRegistrationNumber:
+      getString(carrier.registrationNumber) || null,
     brokerDealerIncluded: Boolean(brokerOrDealer),
     brokerOrDealer,
     wasteItems: wasteItemSummaries,
@@ -713,7 +765,8 @@ function buildWasteItemSummary(
     popsComponents,
     containsHazardous:
       item.containsHazardous === true ||
-      getString(getField(item, "hazardous.containsHazardous")) === "true" ||
+      getString(getField(item, "hazardous.containsHazardous")) ===
+        "true" ||
       hazardousPropertyCodes.length > 0 ||
       hazardousComponents.length > 0,
     hazardousPropertyCodes,
@@ -789,7 +842,8 @@ function getBrokerOrDealer(
   );
 
   const fromArray =
-    getRecordArray(payload.brokers)[0] ?? getRecordArray(payload.dealers)[0];
+    getRecordArray(payload.brokers)[0] ??
+    getRecordArray(payload.dealers)[0];
 
   const party = direct ?? fromArray;
 
@@ -800,7 +854,8 @@ function getBrokerOrDealer(
   return {
     organisationName: getString(party.organisationName) || null,
     registrationNumber: getString(party.registrationNumber) || null,
-    postcode: getString(address.postcode) || getString(party.postcode) || null,
+    postcode:
+      getString(address.postcode) || getString(party.postcode) || null,
     emailAddress: getString(party.emailAddress) || null,
     phoneNumber: getString(party.phoneNumber) || null,
   };
@@ -813,7 +868,9 @@ function getBrokerOrDealer(
 const PAT_SCENARIO_PATTERN =
   /\b(R01|R02|R03|R04|R05|R07|C01|C02|B01|P01|H01|H02|H03|X01)\b/i;
 
-function getPatScenarioIdFromPayload(payload: Record<string, unknown>) {
+function getPatScenarioIdFromPayload(
+  payload: Record<string, unknown>,
+) {
   const directCandidates = [
     payload.scenarioId,
     payload.patScenarioId,
@@ -827,7 +884,9 @@ function getPatScenarioIdFromPayload(payload: Record<string, unknown>) {
     if (scenarioId) return scenarioId;
   }
 
-  for (const reference of getRecordArray(payload.otherReferencesForMovement)) {
+  for (const reference of getRecordArray(
+    payload.otherReferencesForMovement,
+  )) {
     const fromLabel = extractPatScenarioId(reference.label);
     const fromReference = extractPatScenarioId(reference.reference);
 
@@ -854,13 +913,18 @@ function extractPatScenarioId(value: unknown) {
   return looseMatch?.[1] ? looseMatch[1].toUpperCase() : null;
 }
 
-function buildSuggestionReason(scenarioId: string, reasons: string[]) {
+function buildSuggestionReason(
+  scenarioId: string,
+  reasons: string[],
+) {
   return `Waste X matched this DWT submission to PAT scenario ${scenarioId}. ${reasons.join(
     ". ",
   )}.`;
 }
 
-function getConfidenceRank(value: DwtEvidenceSuggestion["confidence"]) {
+function getConfidenceRank(
+  value: DwtEvidenceSuggestion["confidence"],
+) {
   const rank: Record<DwtEvidenceSuggestion["confidence"], number> = {
     low: 1,
     medium: 2,
@@ -870,7 +934,9 @@ function getConfidenceRank(value: DwtEvidenceSuggestion["confidence"]) {
   return rank[value];
 }
 
-function getWasteItems(payload: Record<string, unknown>): Record<string, unknown>[] {
+function getWasteItems(
+  payload: Record<string, unknown>,
+): Record<string, unknown>[] {
   const value = payload.wasteItems;
 
   if (!Array.isArray(value)) return [];
@@ -892,7 +958,11 @@ function getStringArray(value: unknown): string[] {
       }
 
       if (isRecord(item)) {
-        return getString(item.code) || getString(item.name) || getString(item.value);
+        return (
+          getString(item.code) ||
+          getString(item.name) ||
+          getString(item.value)
+        );
       }
 
       return "";
@@ -901,7 +971,9 @@ function getStringArray(value: unknown): string[] {
 }
 
 function firstRecord(...values: unknown[]) {
-  return values.find(isRecord) as Record<string, unknown> | undefined;
+  return values.find(isRecord) as
+    | Record<string, unknown>
+    | undefined;
 }
 
 function unique(values: string[]) {
@@ -917,11 +989,9 @@ function formatWeight(value: unknown) {
 
   if (!amount && !metric) return null;
 
-  return `${amount || "—"} ${metric || ""}${isEstimate ? " estimated" : ""}`.trim();
-}
-
-function getArrayLength(value: unknown) {
-  return Array.isArray(value) ? value.length : 0;
+  return `${amount || "—"} ${metric || ""}${
+    isEstimate ? " estimated" : ""
+  }`.trim();
 }
 
 function getField(row: unknown, key: string): unknown {
@@ -949,7 +1019,13 @@ function getString(value: unknown) {
 }
 
 function getNumberOrNull(value: unknown) {
-  if (value === null || value === undefined || value === "") return null;
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
 
   const parsed = Number(value);
 
@@ -968,8 +1044,14 @@ function parseJsonValue(value: unknown): unknown {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }
 
 function getResponseStatusCode(value: unknown) {
