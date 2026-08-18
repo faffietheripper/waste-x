@@ -171,7 +171,7 @@ export default async function DataReadinessPage() {
       : null;
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] px-8 py-32 pl-[24vw]">
+    <main className="min-h-screen bg-[#f7f3ed] px-8 ">
       <div className="mx-auto max-w-7xl space-y-7">
         {/* =================================================
             HEADER
