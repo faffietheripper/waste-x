@@ -421,24 +421,41 @@ const assignments = await database.query.carrierAssignments.findMany({
         })
       : [];
 
-  const latestReceiptByAssignment = new Map<string, (typeof receipts)[number]>();
+ const latestReceiptByAssignment = new Map<
+  string,
+  (typeof receipts)[number]
+>();
 
-  for (const receipt of receipts) {
-    if (!latestReceiptByAssignment.has(receipt.assignmentId)) {
-      latestReceiptByAssignment.set(receipt.assignmentId, receipt);
-    }
+for (const receipt of receipts) {
+  if (!receipt.assignmentId) {
+    continue;
   }
 
-  const latestSubmissionByAssignment = new Map<
-    string,
-    (typeof latestSubmissions)[number]
-  >();
-
-  for (const submission of latestSubmissions) {
-    if (!latestSubmissionByAssignment.has(submission.assignmentId)) {
-      latestSubmissionByAssignment.set(submission.assignmentId, submission);
-    }
+  if (!latestReceiptByAssignment.has(receipt.assignmentId)) {
+    latestReceiptByAssignment.set(
+      receipt.assignmentId,
+      receipt,
+    );
   }
+}
+
+const latestSubmissionByAssignment = new Map<
+  string,
+  (typeof latestSubmissions)[number]
+>();
+
+for (const submission of latestSubmissions) {
+  if (!submission.assignmentId) {
+    continue;
+  }
+
+  if (!latestSubmissionByAssignment.has(submission.assignmentId)) {
+    latestSubmissionByAssignment.set(
+      submission.assignmentId,
+      submission,
+    );
+  }
+}
 
   const unresolvedIncidentCounts = new Map<string, number>();
 

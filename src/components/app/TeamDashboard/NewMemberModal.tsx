@@ -2,63 +2,42 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  FiUserPlus,
-  FiX,
   FiAlertTriangle,
   FiCheckCircle,
+  FiUserPlus,
+  FiX,
 } from "react-icons/fi";
-import { useForm } from "react-hook-form";
 import { useState, type Dispatch, type SetStateAction } from "react";
+import { useForm } from "react-hook-form";
 
+import { useAction } from "@/lib/actions/useAction";
+import type { SoloAccessPreset } from "@/modules/solo-permissions/core/permissions";
+import { SOLO_ACCESS_PRESET_OPTIONS } from "@/modules/solo-permissions/core/presets";
 import { inviteTeamMemberAction } from "@/modules/team/actions/inviteTeamMemberAction";
 import { sendRegEmail } from "@/util/sendRegEmail";
-import { useAction } from "@/lib/actions/useAction";
-
-/* =========================================================
-   TYPES
-========================================================= */
-
-type Department = {
-  id: string;
-  name: string;
-  type: string;
-};
-
-type InviteRole = "employee" | "seniorManagement" | "administrator";
 
 type NewMemberModalProps = {
   isOpen: boolean;
   setIsOpen: Dispatch<SetStateAction<boolean>>;
-  departments?: Department[];
 };
+
+type InvitePreset = Exclude<SoloAccessPreset, "custom">;
 
 type InviteFormData = {
   name: string;
   email: string;
-  role: InviteRole;
-  departmentId: string;
+  accessPreset: InvitePreset;
 };
 
-/*
-  Keep this intentionally loose.
-
-  inviteTeamMemberAction currently returns success as boolean, not literal
-  true/false, so a discriminated union causes production build errors.
-*/
 type InviteResponse = {
   success?: boolean;
   message?: string;
   token?: string;
 };
 
-/* =========================================================
-   MODAL
-========================================================= */
-
 export default function NewMemberModal({
   isOpen,
   setIsOpen,
-  departments = [],
 }: NewMemberModalProps) {
   function closeModal() {
     setIsOpen(false);
@@ -66,7 +45,7 @@ export default function NewMemberModal({
 
   return (
     <AnimatePresence>
-      {isOpen && (
+      {isOpen ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -79,7 +58,7 @@ export default function NewMemberModal({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.96 }}
             onClick={(event) => event.stopPropagation()}
-            className="relative mt-20 w-full max-w-2xl overflow-hidden rounded-3xl border border-white/10 bg-[#111111] text-white shadow-2xl"
+            className="relative mt-16 w-full max-w-3xl overflow-hidden rounded-3xl border border-white/10 bg-[#111111] text-white shadow-2xl"
           >
             <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-orange-500/20 blur-3xl" />
 
@@ -100,7 +79,7 @@ export default function NewMemberModal({
 
                 <div>
                   <p className="text-xs uppercase tracking-[0.25em] text-orange-400">
-                    Team Onboarding
+                    Solo Workspace Team
                   </p>
 
                   <h3 className="mt-1 text-2xl font-semibold">
@@ -108,43 +87,34 @@ export default function NewMemberModal({
                   </h3>
 
                   <p className="mt-1 text-sm text-white/50">
-                    Assign role and department access before the user joins.
+                    Choose access before the user joins. Solo Workspace does not
+                    require a department.
                   </p>
                 </div>
               </div>
             </div>
 
             <div className="relative p-6">
-              <RegisterForm departments={departments} onSuccess={closeModal} />
+              <RegisterForm onSuccess={closeModal} />
             </div>
           </motion.div>
         </motion.div>
-      )}
+      ) : null}
     </AnimatePresence>
   );
 }
 
-/* =========================================================
-   FORM
-========================================================= */
-
-function RegisterForm({
-  departments,
-  onSuccess,
-}: {
-  departments: Department[];
-  onSuccess: () => void;
-}) {
-  const { register, handleSubmit, reset } = useForm<InviteFormData>({
+function RegisterForm({ onSuccess }: { onSuccess: () => void }) {
+  const { register, handleSubmit, reset, watch } = useForm<InviteFormData>({
     defaultValues: {
       name: "",
       email: "",
-      role: "employee",
-      departmentId: "",
+      accessPreset: "operations",
     },
   });
 
   const run = useAction();
+  const selectedPreset = watch("accessPreset");
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -160,20 +130,9 @@ function RegisterForm({
     try {
       const name = data.name.trim();
       const email = data.email.trim();
-      const departmentId = data.departmentId.trim();
 
-      if (!name) {
-        setError("Please enter the team member name.");
-        return;
-      }
-
-      if (!email) {
-        setError("Please enter the team member email.");
-        return;
-      }
-
-      if (!departmentId) {
-        setError("Please assign the user to a department.");
+      if (!name || !email) {
+        setError("Name and email are required.");
         return;
       }
 
@@ -181,8 +140,7 @@ function RegisterForm({
         inviteTeamMemberAction({
           name,
           email,
-          role: data.role,
-          departmentId,
+          accessPreset: data.accessPreset,
         }),
       )) as InviteResponse | null;
 
@@ -196,27 +154,31 @@ function RegisterForm({
         return;
       }
 
-      await sendRegEmail({
+      const emailResult = await sendRegEmail({
         name,
         email,
         token: response.token,
       });
+
+      if (!emailResult.success) {
+        setError(
+          emailResult.message ??
+            "Invitation was created, but the email could not be sent.",
+        );
+        return;
+      }
 
       setMessage("Invitation sent successfully.");
 
       reset({
         name: "",
         email: "",
-        role: "employee",
-        departmentId: "",
+        accessPreset: "operations",
       });
 
-      setTimeout(() => {
-        onSuccess();
-      }, 800);
+      setTimeout(onSuccess, 700);
     } catch (caughtError) {
       console.error("Invite team member error:", caughtError);
-
       setError("Something went wrong while sending the invitation.");
     } finally {
       setLoading(false);
@@ -225,30 +187,22 @@ function RegisterForm({
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-6 gap-5">
-      {message && (
+      {message ? (
         <div className="col-span-6 flex gap-3 rounded-2xl border border-green-500/20 bg-green-500/10 p-4 text-sm text-green-300">
           <FiCheckCircle className="mt-0.5 shrink-0" />
           <span>{message}</span>
         </div>
-      )}
+      ) : null}
 
-      {error && (
+      {error ? (
         <div className="col-span-6 flex gap-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
           <FiAlertTriangle className="mt-0.5 shrink-0" />
           <span>{error}</span>
         </div>
-      )}
-
-      {departments.length === 0 && (
-        <div className="col-span-6 rounded-2xl border border-orange-500/20 bg-orange-500/10 p-4 text-sm leading-6 text-orange-300">
-          No departments found. Create organisation departments before inviting
-          team members.
-        </div>
-      )}
+      ) : null}
 
       <div className="col-span-6 md:col-span-3">
-        <label className="text-sm text-white/70">Full Name</label>
-
+        <label className="text-sm text-white/70">Full name</label>
         <input
           required
           {...register("name", { required: true })}
@@ -259,7 +213,6 @@ function RegisterForm({
 
       <div className="col-span-6 md:col-span-3">
         <label className="text-sm text-white/70">Email</label>
-
         <input
           required
           type="email"
@@ -270,77 +223,44 @@ function RegisterForm({
       </div>
 
       <div className="col-span-6">
-        <label className="text-sm text-white/70">Organisation Role</label>
-
-        <select
-          required
-          {...register("role", { required: true })}
-          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-orange-500"
-        >
-          <option className="bg-black" value="employee">
-            Employee
-          </option>
-
-          <option className="bg-black" value="seniorManagement">
-            Senior Management
-          </option>
-
-          <option className="bg-black" value="administrator">
-            Administrator
-          </option>
-        </select>
-      </div>
-
-      <div className="col-span-6">
-        <label className="text-sm text-white/70">Department</label>
-
+        <label className="text-sm text-white/70">Access preset</label>
         <p className="mt-1 text-xs text-white/40">
-          This controls which operational area the user works in.
+          You can customise individual permissions after the invitation is created.
         </p>
 
         <select
-          required
-          disabled={departments.length === 0}
-          {...register("departmentId", { required: true })}
-          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+          {...register("accessPreset")}
+          className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-orange-500"
         >
-          <option className="bg-black" value="">
-            Select department
-          </option>
-
-          {departments.map((department) => (
+          {SOLO_ACCESS_PRESET_OPTIONS.map((option) => (
             <option
-              key={department.id}
+              key={option.value}
+              value={option.value}
               className="bg-black"
-              value={department.id}
             >
-              {department.name} — {formatDepartmentType(department.type)}
+              {option.label}
             </option>
           ))}
         </select>
+
+        <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-4 text-xs leading-5 text-white/50">
+          {
+            SOLO_ACCESS_PRESET_OPTIONS.find(
+              (option) => option.value === selectedPreset,
+            )?.description
+          }
+        </div>
       </div>
 
       <div className="col-span-6 mt-2">
         <button
           type="submit"
-          disabled={loading || departments.length === 0}
+          disabled={loading}
           className="w-full rounded-xl bg-orange-500 py-3 text-sm font-semibold text-black transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Sending invitation..." : "Send Invitation"}
+          {loading ? "Sending invitation..." : "Send invitation"}
         </button>
       </div>
     </form>
   );
-}
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function formatDepartmentType(value: string) {
-  return value
-    .replaceAll("_", " ")
-    .replaceAll("-", " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

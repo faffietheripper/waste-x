@@ -1380,6 +1380,52 @@ export const jobLoads = pgTable(
       .notNull()
       .default("manual"),
 
+    /*
+      TRANSPORT CARBON INTELLIGENCE
+      -----------------------------
+      Carbon is calculated from the factual Job Load, not from the Job plan.
+
+      Waste X stores the calculation inputs and factor snapshot on the Load so
+      later factor updates never silently rewrite historical reporting.
+
+      MVP method:
+        tonnes moved × movement distance km × kg CO2e / tonne-km factor
+
+      This is an estimated transport-emissions allocation only. It is NOT a
+      complete organisational carbon footprint or full Scope 1/2/3 inventory.
+    */
+    transportDistanceKm: numeric("transportDistanceKm", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    transportDistanceSource: text("transportDistanceSource").$type<
+      "measured" | "estimated" | "customer_provided"
+    >(),
+
+    transportCarbonMethod: text("transportCarbonMethod").$type<"tonne_km">(),
+
+    transportCarbonFactorKgPerTonneKm: numeric(
+      "transportCarbonFactorKgPerTonneKm",
+      {
+        precision: 14,
+        scale: 6,
+      },
+    ),
+
+    transportCarbonFactorSource: text("transportCarbonFactorSource"),
+
+    transportCarbonFactorYear: integer("transportCarbonFactorYear"),
+
+    transportCo2eKg: numeric("transportCo2eKg", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    transportCarbonCalculatedAt: timestamp("transportCarbonCalculatedAt", {
+      mode: "date",
+    }),
+
     ticketNumber: text("ticketNumber"),
     purchaseOrder: text("purchaseOrder"),
     customerReference: text("customerReference"),
@@ -1626,6 +1672,15 @@ lastSeenAt: timestamp("lastSeenAt"),
       >()
       .notNull()
       .default("operations"),
+      soloAccessPreset: text("soloAccessPreset").$type<
+  | "administrator"
+  | "management"
+  | "operations"
+  | "compliance"
+  | "accounts"
+  | "read_only"
+  | "custom"
+>(),
 
     isActive: boolean("isActive").notNull().default(true),
     isSuspended: boolean("isSuspended").notNull().default(false),
@@ -1644,7 +1699,66 @@ lastSeenAt: timestamp("lastSeenAt"),
     orgIdx: index("user_org_idx").on(table.organisationId),
     roleIdx: index("user_role_idx").on(table.role),
   }),
-  
+
+);
+
+/* =========================================================
+   SOLO USER PERMISSIONS
+========================================================= */
+
+export const userPermissions = pgTable(
+  "bb_user_permission",
+  {
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, {
+        onDelete: "cascade",
+      }),
+
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, {
+        onDelete: "cascade",
+      }),
+
+    permission: text("permission").notNull(),
+
+    effect: text("effect")
+      .$type<"allow" | "deny">()
+      .notNull(),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", {
+      mode: "date",
+    }).defaultNow(),
+
+    updatedAt: timestamp("updatedAt", {
+      mode: "date",
+    }).defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [
+        table.userId,
+        table.permission,
+      ],
+    }),
+
+    orgIdx: index("user_permission_org_idx").on(
+      table.organisationId,
+    ),
+
+    userIdx: index("user_permission_user_idx").on(
+      table.userId,
+    ),
+
+    permissionIdx: index(
+      "user_permission_permission_idx",
+    ).on(table.permission),
+  }),
 );
 
 /* =========================================================

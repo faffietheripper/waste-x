@@ -354,14 +354,20 @@ export default async function CarrierJobsPage({ searchParams }: PageProps) {
           orderBy: [desc(wasteReceipts.updatedAt)],
         })
       : [];
+const latestReceiptByAssignment = new Map<string, ReceiptRow>();
 
-  const latestReceiptByAssignment = new Map<string, ReceiptRow>();
-
-  for (const receipt of receipts) {
-    if (!latestReceiptByAssignment.has(receipt.assignmentId)) {
-      latestReceiptByAssignment.set(receipt.assignmentId, receipt);
-    }
+for (const receipt of receipts) {
+  if (!receipt.assignmentId) {
+    continue;
   }
+
+  if (!latestReceiptByAssignment.has(receipt.assignmentId)) {
+    latestReceiptByAssignment.set(
+      receipt.assignmentId,
+      receipt,
+    );
+  }
+}
 
   const receiptIds = receipts.map((receipt) => receipt.id);
 

@@ -7,7 +7,7 @@ export default async function PermissionLayout({
 }: {
   children: ReactNode;
 }) {
-  await requireSoloRouteAccess("jobs:view");
+  await requireSoloRouteAccess("materials:view");
 
   return children;
 }

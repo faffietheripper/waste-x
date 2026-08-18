@@ -739,7 +739,10 @@ export default async function DigitalWasteTrackingDashboardPage() {
                           tone={getStatusTone(submission.status)}
                         />
 
-                        <StatusPill label={submission.method} tone="muted" />
+                       <StatusPill
+  label={formatStatus(submission.method)}
+  tone="muted"
+/>
 
                         {submission.wasteTrackingId && (
                           <StatusPill

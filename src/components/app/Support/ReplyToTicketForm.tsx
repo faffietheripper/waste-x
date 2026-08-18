@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { replyToTicketAction } from "@/app/admin/support/action";
+
+import { replyToTicketAction } from "@/modules/support/tickets/actions/replyToTicket";
 import { useToast } from "@/components/ui/use-toast";
 
 export default function ReplyToTicketForm({
@@ -15,53 +16,102 @@ export default function ReplyToTicketForm({
   const router = useRouter();
   const { toast } = useToast();
 
-  const [message, setMessage] = useState("");
-  const [isInternalNote, setIsInternalNote] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [message, setMessage] =
+    useState("");
 
-  const canSubmit = message.trim().length > 0 && !isSubmitting;
+  const [
+    isInternalNote,
+    setIsInternalNote,
+  ] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  const [
+    isSubmitting,
+    setIsSubmitting,
+  ] = useState(false);
+
+  const canSubmit =
+    message.trim().length > 0 &&
+    !isSubmitting;
+
+  async function handleSubmit(
+    e: React.FormEvent<HTMLFormElement>,
+  ) {
     e.preventDefault();
 
-    if (!message.trim()) return;
+    if (!message.trim()) {
+      return;
+    }
 
     setIsSubmitting(true);
 
-    const formData = new FormData();
-    formData.append("ticketId", ticketId);
-    formData.append("message", message.trim());
+    const formData =
+      new FormData();
+
+    formData.append(
+      "ticketId",
+      ticketId,
+    );
+
+    formData.append(
+      "message",
+      message.trim(),
+    );
+
     formData.append(
       "isInternalNote",
-      isPlatformAdmin && isInternalNote ? "true" : "false",
+      isPlatformAdmin &&
+        isInternalNote
+        ? "true"
+        : "false",
     );
 
     try {
-      const result = await replyToTicketAction(null, formData);
+      const result =
+        await replyToTicketAction(
+          null,
+          formData,
+        );
 
       if (result.success) {
         toast({
-          title: "Reply sent",
-          description: result.message,
+          title:
+            isPlatformAdmin &&
+            isInternalNote
+              ? "Internal note saved"
+              : "Reply sent",
+
+          description:
+            result.message,
         });
 
         setMessage("");
         setIsInternalNote(false);
+
         router.refresh();
       } else {
         toast({
-          title: "Could not send reply",
-          description: result.message,
-          variant: "destructive",
+          title:
+            "Could not send reply",
+
+          description:
+            result.message,
+
+          variant:
+            "destructive",
         });
       }
     } catch (error) {
       console.error(error);
 
       toast({
-        title: "Something went wrong",
-        description: "Your reply could not be sent. Please try again.",
-        variant: "destructive",
+        title:
+          "Something went wrong",
+
+        description:
+          "Your reply could not be sent. Please try again.",
+
+        variant:
+          "destructive",
       });
     } finally {
       setIsSubmitting(false);
@@ -69,7 +119,10 @@ export default function ReplyToTicketForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form
+      onSubmit={handleSubmit}
+      className="space-y-5"
+    >
       <div className="rounded-3xl border border-black/10 bg-[#fbfaf7] p-5">
         <label
           htmlFor="support-message"
@@ -81,21 +134,36 @@ export default function ReplyToTicketForm({
         <textarea
           id="support-message"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) =>
+            setMessage(
+              e.target.value,
+            )
+          }
           placeholder="Write your reply..."
+          maxLength={5000}
           className="mt-4 min-h-[140px] w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm leading-6 text-black outline-none transition placeholder:text-black/30 focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
           rows={5}
         />
 
         <div className="mt-3 flex items-center justify-between gap-4">
           <p className="text-xs text-black/35">
-            {message.trim().length} characters
+            {
+              message.trim()
+                .length
+            }{" "}
+            / 5,000 characters
           </p>
 
           <p className="text-xs text-black/35">
             Ticket ID:{" "}
             <span className="font-mono">
-              {ticketId.length > 10 ? `${ticketId.slice(0, 10)}...` : ticketId}
+              {ticketId.length >
+              10
+                ? `${ticketId.slice(
+                    0,
+                    10,
+                  )}...`
+                : ticketId}
             </span>
           </p>
         </div>
@@ -105,17 +173,28 @@ export default function ReplyToTicketForm({
         <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-yellow-200 bg-yellow-50 p-4 transition hover:border-yellow-300">
           <input
             type="checkbox"
-            checked={isInternalNote}
-            onChange={(e) => setIsInternalNote(e.target.checked)}
+            checked={
+              isInternalNote
+            }
+            onChange={(e) =>
+              setIsInternalNote(
+                e.target.checked,
+              )
+            }
             className="mt-1 h-4 w-4 rounded border-yellow-300 text-orange-600 focus:ring-orange-500"
           />
 
           <span>
             <span className="block text-sm font-semibold text-yellow-900">
-              Add as internal note
+              Add as internal
+              note
             </span>
+
             <span className="mt-1 block text-sm leading-6 text-yellow-800/70">
-              Internal notes are hidden from the organisation and only visible to
+              Internal notes are
+              hidden from the
+              organisation and
+              only visible to
               platform admins.
             </span>
           </span>
@@ -124,7 +203,10 @@ export default function ReplyToTicketForm({
 
       <div className="flex flex-col gap-3 border-t border-black/5 pt-5 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm leading-6 text-black/45">
-          Replies are saved to this ticket thread and visible to permitted users.
+          Replies are saved to
+          this ticket thread and
+          visible to permitted
+          users.
         </p>
 
         <button

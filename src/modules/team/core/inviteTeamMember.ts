@@ -1,36 +1,37 @@
 import crypto from "crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
-import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { users, departments } from "@/db/schema";
+import { users } from "@/db/schema";
+import type { SoloAccessPreset } from "@/modules/solo-permissions/core/permissions";
+import { getRoleForPreset } from "@/modules/solo-permissions/core/presets";
+import { requireSoloPermission } from "@/modules/solo-permissions/core/requireSoloPermission";
+import { writeSoloAccessAudit } from "@/modules/solo-permissions/core/writeSoloAccessAudit";
 
 type InviteTeamMemberInput = {
   name: string;
   email: string;
-  role: "employee" | "seniorManagement" | "administrator";
-  departmentId: string;
+  accessPreset: Exclude<SoloAccessPreset, "custom">;
 };
 
 export async function inviteTeamMember(input: InviteTeamMemberInput) {
-  const session = await auth();
+  const context = await requireSoloPermission("team:invite");
 
-  if (!session?.user?.organisationId) {
+  const name = input.name.trim();
+  const email = input.email.trim().toLowerCase();
+
+  if (!name || !email || !input.accessPreset) {
     return {
       success: false,
-      message: "You must belong to an organisation to invite members.",
-    };
-  }
-
-  if (!input.name || !input.email || !input.role || !input.departmentId) {
-    return {
-      success: false,
-      message: "Name, email, role and department are required.",
+      message: "Name, email and access preset are required.",
     };
   }
 
   const existingUser = await database.query.users.findFirst({
-    where: eq(users.email, input.email),
+    where: eq(users.email, email),
+    columns: {
+      id: true,
+    },
   });
 
   if (existingUser) {
@@ -40,36 +41,54 @@ export async function inviteTeamMember(input: InviteTeamMemberInput) {
     };
   }
 
-  const department = await database.query.departments.findFirst({
-    where: and(
-      eq(departments.id, input.departmentId),
-      eq(departments.organisationId, session.user.organisationId),
-    ),
-  });
-
-  if (!department) {
-    return {
-      success: false,
-      message: "Selected department does not belong to this organisation.",
-    };
-  }
-
   const token = crypto.randomBytes(32).toString("hex");
 
   const inviteExpiry = new Date();
   inviteExpiry.setDate(inviteExpiry.getDate() + 7);
 
-  await database.insert(users).values({
-    name: input.name,
-    email: input.email,
-    role: input.role,
-    organisationId: session.user.organisationId,
-    departmentId: input.departmentId,
+  const [created] = await database
+    .insert(users)
+    .values({
+      name,
+      email,
+      role: getRoleForPreset({
+        preset: input.accessPreset,
+        currentRole: "operations",
+      }),
+      soloAccessPreset: input.accessPreset,
+      organisationId: context.organisationId,
 
-    status: "INVITED",
-    isActive: false,
-    inviteToken: token,
-    inviteExpiry,
+      // Solo Workspace intentionally does not require a department.
+      departmentId: null,
+
+      status: "INVITED",
+      isActive: false,
+      isSuspended: false,
+      inviteToken: token,
+      inviteExpiry,
+    })
+    .returning({
+      id: users.id,
+    });
+
+  if (!created) {
+    return {
+      success: false,
+      message: "Waste X could not create the invitation.",
+    };
+  }
+
+  await writeSoloAccessAudit({
+    organisationId: context.organisationId,
+    actorUserId: context.userId,
+    targetUserId: created.id,
+    action: "USER_INVITED",
+    newState: {
+      name,
+      email,
+      accessPreset: input.accessPreset,
+      inviteExpiry,
+    },
   });
 
   return {

@@ -1,9 +1,4 @@
-import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
-
-import { auth } from "@/auth";
-import { database } from "@/db/database";
-import { users } from "@/db/schema";
+import { getCurrentSoloPermissionContext } from "@/modules/solo-permissions/core/requireSoloPermission";
 
 export type SoloWorkspaceRole =
   | "administrator"
@@ -25,60 +20,27 @@ export type SoloWorkspaceAccess = {
   canManageOrganisation: boolean;
 };
 
-const FINANCIAL_ROLES = new Set<SoloWorkspaceRole>([
-  "administrator",
-  "accounts",
-  "seniorManagement",
-  "platform_admin",
-]);
-
-const AUDIT_EXPORT_ROLES = new Set<SoloWorkspaceRole>([
-  "administrator",
-  "accounts",
-  "seniorManagement",
-  "platform_admin",
-]);
-
-const MANAGEMENT_ROLES = new Set<SoloWorkspaceRole>([
-  "administrator",
-  "seniorManagement",
-  "platform_admin",
-]);
-
 export async function requireSoloWorkspaceAccess(): Promise<SoloWorkspaceAccess> {
-  const session = await auth();
-
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
-
-  const currentUser = await database.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    with: {
-      organisation: true,
-    },
-  });
-
-  if (
-    !currentUser?.organisationId ||
-    !currentUser.organisation ||
-    !currentUser.isActive ||
-    currentUser.isSuspended ||
-    currentUser.status === "SUSPENDED"
-  ) {
-    redirect("/home/settings/organisation?reason=no-organisation");
-  }
-
-  const role = currentUser.role as SoloWorkspaceRole;
+  const context = await getCurrentSoloPermissionContext();
 
   return {
-    userId: currentUser.id,
-    userName: currentUser.name,
-    organisationId: currentUser.organisationId,
-    organisationName: currentUser.organisation.teamName,
-    role,
-    canSeeFinancials: FINANCIAL_ROLES.has(role),
-    canExportAudit: AUDIT_EXPORT_ROLES.has(role),
-    canManageOrganisation: MANAGEMENT_ROLES.has(role),
+    userId: context.userId,
+    userName: context.userName,
+    organisationId: context.organisationId,
+    organisationName: context.organisationName,
+    role: context.role as SoloWorkspaceRole,
+
+    canSeeFinancials:
+      context.role === "platform_admin" ||
+      context.permissions.has("accounts:view") ||
+      context.permissions.has("reports:financial"),
+
+    canExportAudit:
+      context.role === "platform_admin" ||
+      context.permissions.has("activity:export"),
+
+    canManageOrganisation:
+      context.role === "platform_admin" ||
+      context.permissions.has("permissions:manage"),
   };
 }

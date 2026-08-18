@@ -137,25 +137,27 @@ export async function getQuarterlyWasteReturnData(params: {
     : siteOptions[0]?.id ?? null;
 
   const selectedSite =
-    siteOptions.find((site) => site.id === selectedSiteId) ?? null;
+  siteOptions.find(
+    (site) => site.id === selectedSiteId,
+  ) ?? null;
 
-  if (!selectedSiteId) {
-    return {
-      period: params.period,
-      sites: siteOptions,
-      selectedSiteId: null,
-      selectedSite: null,
-      detailRows: [],
-      aggregateRows: [],
-      exceptions: [],
-      totals: {
-        receivedLoads: 0,
-        receivedTonnes: 0,
-        removedLoads: 0,
-        removedTonnes: 0,
-      },
-    };
-  }
+if (!selectedSiteId || !selectedSite) {
+  return {
+    period: params.period,
+    sites: siteOptions,
+    selectedSiteId: null,
+    selectedSite: null,
+    detailRows: [],
+    aggregateRows: [],
+    exceptions: [],
+    totals: {
+      receivedLoads: 0,
+      receivedTonnes: 0,
+      removedLoads: 0,
+      removedTonnes: 0,
+    },
+  };
+}
 
   /*
     We include completedAt as a candidate date only so loads with a missing

@@ -40,6 +40,9 @@ import {
   type OrganisationCapability,
 } from "@/modules/organisations/core/operatingModes";
 
+import type { SoloPermission } from "@/modules/solo-permissions/core/permissions";
+import { getSoloUserAccess } from "@/modules/solo-permissions/data-access/getSoloUserAccess";
+
 import SignOutButton from "../SignOutButton";
 import SiteSwitcher from "./SiteSwitcher";
 
@@ -294,12 +297,13 @@ function ActiveDepartmentPill({
   );
 }
 
-function SoloWorkspacePill() {
-  return (
-    <Link
-      href="/home/settings/organisation"
-      className="hidden items-center gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-2 transition hover:border-orange-300 hover:bg-orange-100 lg:flex"
-    >
+function SoloWorkspacePill({
+  canManageOrganisation,
+}: {
+  canManageOrganisation: boolean;
+}) {
+  const content = (
+    <>
       <span className="relative flex h-2.5 w-2.5">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-40" />
 
@@ -315,6 +319,26 @@ function SoloWorkspacePill() {
           Main operational workspace
         </span>
       </span>
+    </>
+  );
+
+  if (!canManageOrganisation) {
+    return (
+      <div
+        title="Organisation settings are restricted"
+        className="hidden items-center gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-2 lg:flex"
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      href="/home/settings/organisation"
+      className="hidden items-center gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-2 transition hover:border-orange-300 hover:bg-orange-100 lg:flex"
+    >
+      {content}
     </Link>
   );
 }
@@ -426,28 +450,31 @@ function NavigationSections({
 
 function SoloOperationalNav({
   hasOrganisation,
+  permissions,
 }: {
   hasOrganisation: boolean;
+  permissions: Set<SoloPermission>;
 }) {
-  const sections: NavSection[] = [
-    /* =========================================================
-       OVERVIEW
-    ========================================================= */
+  function can(permission: SoloPermission) {
+    return hasOrganisation && permissions.has(permission);
+  }
 
+  function canAny(required: SoloPermission[]) {
+    return hasOrganisation && required.some((permission) => permissions.has(permission));
+  }
+
+  const sections: NavSection[] = [
     {
       label: "Overview",
       items: [
         {
           label: "Dashboard",
           href: "/home",
+          // Dashboard remains the safe landing page for every active Solo user.
           show: true,
         },
       ],
     },
-
-    /* =========================================================
-       OPERATIONS
-    ========================================================= */
 
     {
       label: "Operations",
@@ -455,38 +482,31 @@ function SoloOperationalNav({
         {
           label: "+ Book a Job",
           href: "/home/jobs/new",
-          show: hasOrganisation,
+          show: can("jobs:create"),
+          variant: "primary",
         },
-
         {
           label: "Jobs",
           href: "/home/jobs",
-          show: hasOrganisation,
+          show: can("jobs:view"),
         },
-
         {
           label: "Daily Worksheet",
           href: "/home/worksheet",
-          show: hasOrganisation,
+          show: can("worksheet:view"),
         },
-
         {
           label: "Incoming",
           href: "/home/movements/incoming",
-          show: hasOrganisation,
+          show: can("worksheet:view"),
         },
-
         {
           label: "Outgoing",
           href: "/home/movements/outgoing",
-          show: hasOrganisation,
+          show: can("worksheet:view"),
         },
       ],
     },
-
-    /* =========================================================
-       BUSINESS DATA
-    ========================================================= */
 
     {
       label: "Business Data",
@@ -494,44 +514,38 @@ function SoloOperationalNav({
         {
           label: "Clients",
           href: "/home/clients",
-          show: hasOrganisation,
+          show: can("clients:view"),
         },
-
         {
           label: "Hauliers",
           href: "/home/hauliers",
-          show: hasOrganisation,
+          show: can("transport:view"),
         },
-
         {
           label: "Drivers & Vehicles",
           href: "/home/transport",
-          show: hasOrganisation,
+          show: can("transport:view"),
         },
-
         {
           label: "Materials",
           href: "/home/materials",
-          show: hasOrganisation,
+          show: can("materials:view"),
         },
-
         {
-          label: "Third-Party Tips",
+          label: "Third-Party Facilities",
           href: "/home/tips",
-          show: hasOrganisation,
+          // The current permission catalogue does not have a dedicated
+          // third-party-facility permission. For MVP, users involved in
+          // transport OR site/compliance work may view this master data.
+          show: canAny(["transport:view", "site_permit:view"]),
         },
-
         {
           label: "Rates",
           href: "/home/rates",
-          show: hasOrganisation,
+          show: can("rates:view"),
         },
       ],
     },
-
-    /* =========================================================
-       COMPLIANCE
-    ========================================================= */
 
     {
       label: "Compliance",
@@ -539,32 +553,25 @@ function SoloOperationalNav({
         {
           label: "Receiving Site & Permit",
           href: "/home/sites",
-          show: hasOrganisation,
+          show: can("site_permit:view"),
         },
-
         {
           label: "DWT Centre",
           href: "/home/dwt",
-          show: hasOrganisation,
+          show: can("dwt:view"),
         },
-
         {
           label: "Quarterly Returns",
           href: "/home/returns",
-          show: hasOrganisation,
+          show: can("returns:view"),
         },
-
         {
           label: "Activity",
           href: "/home/activity",
-          show: hasOrganisation,
+          show: can("activity:view"),
         },
       ],
     },
-
-    /* =========================================================
-       ACCOUNTS
-    ========================================================= */
 
     {
       label: "Accounts",
@@ -572,20 +579,20 @@ function SoloOperationalNav({
         {
           label: "Billing & Exports",
           href: "/home/accounts",
-          show: hasOrganisation,
+          show: can("accounts:view"),
         },
-
         {
           label: "Reports",
           href: "/home/reports",
-          show: hasOrganisation,
+          show: can("reports:view"),
+        },
+        {
+          label: "Transport Emissions",
+          href: "/home/reports/transport-emissions",
+          show: can("reports:view"),
         },
       ],
     },
-
-    /* =========================================================
-       MARKETPLACE
-    ========================================================= */
 
     {
       label: "Marketplace",
@@ -593,19 +600,29 @@ function SoloOperationalNav({
         {
           label: "Browse Marketplace",
           href: "/home/marketplace/browse",
-          show: hasOrganisation,
+          // Marketplace is treated as part of job visibility for the Solo MVP.
+          show: can("jobs:view"),
         },
-
         {
           label: "My Listings",
           href: "/home/operations/listings",
-          show: hasOrganisation,
+          show: can("jobs:view"),
         },
-
         {
           label: "My Bids",
           href: "/home/marketplace/bids",
-          show: hasOrganisation,
+          show: can("jobs:view"),
+        },
+      ],
+    },
+
+    {
+      label: "Workspace",
+      items: [
+        {
+          label: "Team & Permissions",
+          href: "/home/team/members",
+          show: can("team:view"),
         },
       ],
     },
@@ -613,6 +630,7 @@ function SoloOperationalNav({
 
   return <NavigationSections sections={sections} />;
 }
+
 /* =========================================================
    LEGACY / FUTURE NETWORK NAVIGATION
 
@@ -956,11 +974,13 @@ function OperationalNav({
   activeDepartmentType,
   hasOrganisation,
   organisation,
+  soloPermissions,
 }: {
   capabilities: Capability[];
   activeDepartmentType: DepartmentType | null;
   hasOrganisation: boolean;
   organisation: OrganisationNavigationContext;
+  soloPermissions: Set<SoloPermission>;
 }) {
   const useSoloNavigation =
     shouldUseSimplifiedNavigation(organisation);
@@ -969,6 +989,7 @@ function OperationalNav({
     return (
       <SoloOperationalNav
         hasOrganisation={hasOrganisation}
+        permissions={soloPermissions}
       />
     );
   }
@@ -1100,6 +1121,27 @@ export default async function SystemNav() {
       organisationContext,
     );
 
+  /*
+    SOLO PERMISSION-AWARE NAVIGATION
+
+    The sidebar now uses the exact same effective access snapshot as
+    Team & Permissions. No new DB fields or schema changes are required.
+  */
+  const soloAccess =
+    isSoloOrganisation &&
+    user?.organisationId &&
+    user.role !== "platform_admin"
+      ? await getSoloUserAccess({
+          organisationId: user.organisationId,
+          userId: user.id,
+        })
+      : null;
+
+  const soloPermissions =
+    new Set<SoloPermission>(
+      soloAccess?.permissions ?? [],
+    );
+
   const showSoloWorkspacePill =
     hasOrganisation &&
     isSoloOrganisation;
@@ -1229,7 +1271,11 @@ export default async function SystemNav() {
             )}
 
           {showSoloWorkspacePill && (
-            <SoloWorkspacePill />
+            <SoloWorkspacePill
+              canManageOrganisation={
+                soloPermissions.has("permissions:manage")
+              }
+            />
           )}
 
           {showActiveDepartmentPill && (
@@ -1283,6 +1329,9 @@ export default async function SystemNav() {
               }
               organisation={
                 organisationContext
+              }
+              soloPermissions={
+                soloPermissions
               }
             />
           </div>

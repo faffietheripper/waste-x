@@ -1,37 +1,69 @@
-import { auth } from "@/auth";
+import { asc, eq } from "drizzle-orm";
+
 import { database } from "@/db/database";
-import { departments, users } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { users } from "@/db/schema";
+import { requireSoloPermission } from "@/modules/solo-permissions/core/requireSoloPermission";
+import { getOrganisationSoloAccess } from "@/modules/solo-permissions/data-access/getSoloUserAccess";
+
 import MembersClient from "./MembersClient";
 
 export default async function MembersPage() {
-  const session = await auth();
+  const context = await requireSoloPermission("team:view");
 
-  if (!session?.user?.organisationId) {
-    return <div className="p-10">Unauthorized</div>;
-  }
+  const organisationUsers = await database.query.users.findMany({
+    where: eq(users.organisationId, context.organisationId),
+    columns: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      soloAccessPreset: true,
+      status: true,
+      isActive: true,
+      isSuspended: true,
+      createdAt: true,
+      lastSeenAt: true,
+      inviteExpiry: true,
+    },
+    orderBy: [asc(users.name)],
+  });
 
-  const orgId = session.user.organisationId;
+  // Platform admins belong to /admin, not customer Team & Permissions.
+  const customerUsers = organisationUsers.filter(
+    (user) => user.role !== "platform_admin",
+  );
 
-  const allUsers = await database
-    .select()
-    .from(users)
-    .where(eq(users.organisationId, orgId));
+  const accessByUser = await getOrganisationSoloAccess({
+    organisationId: context.organisationId,
+    userIds: customerUsers.map((user) => user.id),
+  });
 
-  const orgDepartments = await database
-    .select()
-    .from(departments)
-    .where(eq(departments.organisationId, orgId));
+  const members = customerUsers.map((user) => {
+    const access = accessByUser.get(user.id);
 
-  const members = allUsers.filter((u) => u.status === "ACTIVE");
-  const invited = allUsers.filter((u) => u.status === "INVITED");
+    return {
+      ...user,
+      effectivePreset: access?.preset ?? fallbackPreset(user.role),
+      permissionCount: access?.permissions.length ?? 0,
+      isCurrentUser: user.id === context.userId,
+    };
+  });
 
   return (
-   <MembersClient
-  members={members}
-  invited={invited}
-  departments={orgDepartments}
-  canInviteMembers={session.user.role === "administrator"}
-/>
+    <MembersClient
+      members={members}
+      organisationName={context.organisationName}
+      canInvite={context.permissions.has("team:invite")}
+      canManage={context.permissions.has("team:manage")}
+      canManagePermissions={context.permissions.has("permissions:manage")}
+    />
   );
+}
+
+function fallbackPreset(role: string) {
+  if (role === "administrator") return "administrator" as const;
+  if (role === "seniorManagement") return "management" as const;
+  if (role === "accounts") return "accounts" as const;
+  if (role === "read_only") return "read_only" as const;
+  return "operations" as const;
 }

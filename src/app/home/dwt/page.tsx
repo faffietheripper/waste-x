@@ -192,14 +192,22 @@ export default async function DwtCentrePage({ searchParams }: PageProps) {
 
             <div className="flex flex-wrap gap-3">
               <Link
+                href="/home/dwt/batch"
+                className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black"
+              >
+                Batch review
+              </Link>
+
+              <Link
                 href="/home/dwt/submissions"
                 className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-black"
               >
                 Submission history
               </Link>
+
               <Link
                 href="/home/settings/digital-waste-tracking"
-                className="rounded-full bg-orange-500 px-5 py-3 text-sm font-semibold text-black"
+                className="rounded-full border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-white"
               >
                 DWT settings
               </Link>
