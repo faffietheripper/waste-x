@@ -28,6 +28,11 @@ import {
 } from "@/db/schema";
 
 import {
+  formatEwcCode,
+  normaliseEwcCode,
+} from "@/lib/ewc";
+
+import {
   addPermitEwcCodeAction,
   createSitePermitAction,
   removePermitEwcCodeAction,
@@ -57,31 +62,6 @@ function firstParam(
     : value ?? "";
 }
 
-function normaliseCode(
-  value: string,
-) {
-  return value
-    .replaceAll(" ", "")
-    .replaceAll("*", "")
-    .trim();
-}
-
-function formatEwcCode(
-  code: string,
-) {
-  if (code.length !== 6) {
-    return code;
-  }
-
-  return `${code.slice(
-    0,
-    2,
-  )} ${code.slice(
-    2,
-    4,
-  )} ${code.slice(4, 6)}`;
-}
-
 function dateInputValue(
   value: Date | null,
 ) {
@@ -97,33 +77,21 @@ function dateInputValue(
 function regulatorLabel(
   regulator: string,
 ) {
-  const labels: Record<
-    string,
-    string
-  > = {
+  const labels: Record<string, string> = {
     EA: "Environment Agency",
-    NRW:
-      "Natural Resources Wales",
-    SEPA:
-      "Scottish Environment Protection Agency",
-    NIEA:
-      "Northern Ireland Environment Agency",
+    NRW: "Natural Resources Wales",
+    SEPA: "Scottish Environment Protection Agency",
+    NIEA: "Northern Ireland Environment Agency",
     other: "Other",
   };
 
-  return (
-    labels[regulator] ??
-    regulator
-  );
+  return labels[regulator] ?? regulator;
 }
 
 function errorMessage(
   key: string,
 ) {
-  const messages: Record<
-    string,
-    string
-  > = {
+  const messages: Record<string, string> = {
     site_name_required:
       "Enter a receiving-site name.",
 
@@ -158,10 +126,7 @@ function errorMessage(
 function successMessage(
   key: string,
 ) {
-  const messages: Record<
-    string,
-    string
-  > = {
+  const messages: Record<string, string> = {
     receiving_site_created:
       "Receiving site created.",
 
@@ -208,20 +173,18 @@ export default async function ReceivingSiteDetailPage({
   }
 
   const currentUser =
-    await database.query.users.findFirst(
-      {
-        where: eq(
-          users.id,
-          session.user.id,
-        ),
+    await database.query.users.findFirst({
+      where: eq(
+        users.id,
+        session.user.id,
+      ),
 
-        columns: {
-          id: true,
-          organisationId: true,
-          role: true,
-        },
+      columns: {
+        id: true,
+        organisationId: true,
+        role: true,
       },
-    );
+    });
 
   if (!currentUser?.organisationId) {
     redirect(
@@ -258,21 +221,19 @@ export default async function ReceivingSiteDetailPage({
   ======================================================= */
 
   const site =
-    await database.query.sites.findFirst(
-      {
-        where: and(
-          eq(
-            sites.id,
-            siteId,
-          ),
-
-          eq(
-            sites.organisationId,
-            organisationId,
-          ),
+    await database.query.sites.findFirst({
+      where: and(
+        eq(
+          sites.id,
+          siteId,
         ),
-      },
-    );
+
+        eq(
+          sites.organisationId,
+          organisationId,
+        ),
+      ),
+    });
 
   if (!site) {
     notFound();
@@ -383,8 +344,63 @@ export default async function ReceivingSiteDetailPage({
     permit &&
     query.length > 0
   ) {
-    const normalised =
-      normaliseCode(query);
+    const normalisedCode =
+      normaliseEwcCode(query);
+
+    /*
+     * IMPORTANT:
+     *
+     * Text searches such as "soil" contain no EWC digits.
+     *
+     * normaliseEwcCode("soil") returns "".
+     *
+     * We therefore MUST NOT generate:
+     *
+     *   ILIKE '%%'
+     *
+     * against ewcCodes.code, because that would match every
+     * EWC record.
+     */
+    const searchConditions = [
+      ilike(
+        ewcCodes.description,
+        `%${query}%`,
+      ),
+
+      ilike(
+        ewcCodes.chapterDescription,
+        `%${query}%`,
+      ),
+
+      ilike(
+        ewcCodes.subChapterDescription,
+        `%${query}%`,
+      ),
+
+      ilike(
+        ewcCodes.entryType,
+        `%${query}%`,
+      ),
+    ];
+
+    /*
+     * Only search the canonical six-digit code column when
+     * the user's search actually contains numeric EWC data.
+     *
+     * Examples:
+     *
+     * 17 05 04   -> 170504
+     * 17-05-04   -> 170504
+     * 17 05 03*  -> 170503
+     */
+    if (normalisedCode.length > 0) {
+      searchConditions.unshift(
+        ilike(
+          ewcCodes.code,
+          `%${normalisedCode}%`,
+        ),
+      );
+    }
 
     ewcSearchResults =
       await database
@@ -407,25 +423,7 @@ export default async function ReceivingSiteDetailPage({
             ),
 
             or(
-              ilike(
-                ewcCodes.code,
-                `%${normalised}%`,
-              ),
-
-              ilike(
-                ewcCodes.description,
-                `%${query}%`,
-              ),
-
-              ilike(
-                ewcCodes.chapterDescription,
-                `%${query}%`,
-              ),
-
-              ilike(
-                ewcCodes.subChapterDescription,
-                `%${query}%`,
-              ),
+              ...searchConditions,
             ),
           ),
         )
@@ -976,11 +974,9 @@ export default async function ReceivingSiteDetailPage({
                             <span className="font-mono text-base font-semibold text-black">
                               {formatEwcCode(
                                 record.code,
+                                record.isHazardous ===
+                                  true,
                               )}
-
-                              {record.isHazardous
-                                ? "*"
-                                : ""}
                             </span>
                           </div>
 
@@ -1056,9 +1052,8 @@ export default async function ReceivingSiteDetailPage({
                   </h3>
 
                   <p className="mt-2 text-sm text-black/45">
-                    Search the reference
-                    catalogue you seeded
-                    in step 2.1.
+                    Search the Waste X
+                    EWC reference catalogue.
                   </p>
 
                   <form
@@ -1121,11 +1116,9 @@ export default async function ReceivingSiteDetailPage({
                                     <span className="font-mono font-semibold text-black">
                                       {formatEwcCode(
                                         record.code,
+                                        record.isHazardous ===
+                                          true,
                                       )}
-
-                                      {record.isHazardous
-                                        ? "*"
-                                        : ""}
                                     </span>
                                   </div>
 

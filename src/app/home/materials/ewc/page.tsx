@@ -16,6 +16,11 @@ import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { ewcCodes } from "@/db/schema";
 
+import {
+  formatEwcCode,
+  normaliseEwcCode,
+} from "@/lib/ewc";
+
 /* =========================================================
    CONSTANTS
 ========================================================= */
@@ -46,33 +51,19 @@ function firstParam(
   return value ?? "";
 }
 
-function normaliseSearchCode(value: string) {
-  return value
-    .replace(/\s/g, "")
-    .replace(/\*/g, "")
-    .trim();
-}
-
-function formatEwcCode(code: string) {
-  if (code.length !== 6) {
-    return code;
-  }
-
-  return `${code.slice(0, 2)} ${code.slice(
-    2,
-    4,
-  )} ${code.slice(4, 6)}`;
-}
-
 function buildHref(params: {
   q: string;
   hazardous: string;
   page: number;
 }) {
-  const search = new URLSearchParams();
+  const search =
+    new URLSearchParams();
 
   if (params.q) {
-    search.set("q", params.q);
+    search.set(
+      "q",
+      params.q,
+    );
   }
 
   if (
@@ -88,11 +79,14 @@ function buildHref(params: {
   if (params.page > 1) {
     search.set(
       "page",
-      String(params.page),
+      String(
+        params.page,
+      ),
     );
   }
 
-  const query = search.toString();
+  const query =
+    search.toString();
 
   return query
     ? `/home/materials/ewc?${query}`
@@ -118,18 +112,22 @@ export default async function EwcCataloguePage({
      SEARCH PARAMS
   ======================================================= */
 
-  const query = firstParam(
-    searchParams.q,
-  ).trim();
+  const query =
+    firstParam(
+      searchParams.q,
+    ).trim();
 
   const hazardousFilter =
     firstParam(
       searchParams.hazardous,
     ) || "all";
 
-  const rawPage = Number(
-    firstParam(searchParams.page) || "1",
-  );
+  const rawPage =
+    Number(
+      firstParam(
+        searchParams.page,
+      ) || "1",
+    );
 
   const page =
     Number.isFinite(rawPage) &&
@@ -138,51 +136,89 @@ export default async function EwcCataloguePage({
       : 1;
 
   const normalisedCode =
-    normaliseSearchCode(query);
+    normaliseEwcCode(
+      query,
+    );
 
   /* =======================================================
      FILTERS
   ======================================================= */
 
   const filters = [
-    eq(ewcCodes.isActive, true),
+    eq(
+      ewcCodes.isActive,
+      true,
+    ),
   ];
 
   if (query) {
-    const textSearch = `%${query}%`;
-    const codeSearch = `%${normalisedCode}%`;
+    const textSearch =
+      `%${query}%`;
+
+    /*
+     * Text conditions always remain available.
+     *
+     * If somebody searches "soil", normaliseEwcCode("soil")
+     * returns an empty string. We must NOT turn that into:
+     *
+     *   ewcCodes.code ILIKE '%%'
+     *
+     * because that would make every EWC row match.
+     */
+    const searchConditions = [
+      ilike(
+        ewcCodes.description,
+        textSearch,
+      ),
+
+      ilike(
+        ewcCodes.chapterDescription,
+        textSearch,
+      ),
+
+      ilike(
+        ewcCodes.subChapterDescription,
+        textSearch,
+      ),
+
+      ilike(
+        ewcCodes.entryType,
+        textSearch,
+      ),
+    ];
+
+    /*
+     * Only include the canonical code condition if the query
+     * contains numeric EWC data.
+     *
+     * Examples:
+     *
+     * 17 05 04   -> 170504
+     * 170504     -> 170504
+     * 17-05-04   -> 170504
+     * 17 05 03*  -> 170503
+     */
+    if (
+      normalisedCode.length > 0
+    ) {
+      searchConditions.unshift(
+        ilike(
+          ewcCodes.code,
+          `%${normalisedCode}%`,
+        ),
+      );
+    }
 
     filters.push(
       or(
-        ilike(
-          ewcCodes.code,
-          codeSearch,
-        ),
-
-        ilike(
-          ewcCodes.description,
-          textSearch,
-        ),
-
-        ilike(
-          ewcCodes.chapterDescription,
-          textSearch,
-        ),
-
-        ilike(
-          ewcCodes.subChapterDescription,
-          textSearch,
-        ),
-
-        ilike(
-          ewcCodes.entryType,
-          textSearch,
-        ),
+        ...searchConditions,
       )!,
     );
   }
 
-  if (hazardousFilter === "yes") {
+  if (
+    hazardousFilter === "yes"
+  ) {
     filters.push(
       eq(
         ewcCodes.isHazardous,
@@ -191,7 +227,9 @@ export default async function EwcCataloguePage({
     );
   }
 
-  if (hazardousFilter === "no") {
+  if (
+    hazardousFilter === "no"
+  ) {
     filters.push(
       eq(
         ewcCodes.isHazardous,
@@ -200,7 +238,10 @@ export default async function EwcCataloguePage({
     );
   }
 
-  const where = and(...filters);
+  const where =
+    and(
+      ...filters,
+    );
 
   /* =======================================================
      DATA
@@ -215,27 +256,40 @@ export default async function EwcCataloguePage({
       .select()
       .from(ewcCodes)
       .where(where)
-      .orderBy(asc(ewcCodes.code))
-      .limit(PAGE_SIZE)
+      .orderBy(
+        asc(
+          ewcCodes.code,
+        ),
+      )
+      .limit(
+        PAGE_SIZE,
+      )
       .offset(
-        (page - 1) * PAGE_SIZE,
+        (page - 1) *
+          PAGE_SIZE,
       ),
 
     database
       .select({
-        count: sql<number>`count(*)`,
+        count:
+          sql<number>`count(*)`,
       })
       .from(ewcCodes)
       .where(where),
 
     database
       .select({
-        count: sql<number>`count(*)`,
+        count:
+          sql<number>`count(*)`,
       })
       .from(ewcCodes)
       .where(
         and(
-          eq(ewcCodes.isActive, true),
+          eq(
+            ewcCodes.isActive,
+            true,
+          ),
+
           eq(
             ewcCodes.isHazardous,
             true,
@@ -244,18 +298,26 @@ export default async function EwcCataloguePage({
       ),
   ]);
 
-  const total = Number(
-    totalResult[0]?.count ?? 0,
-  );
+  const total =
+    Number(
+      totalResult[0]
+        ?.count ?? 0,
+    );
 
-  const hazardousCount = Number(
-    hazardousResult[0]?.count ?? 0,
-  );
+  const hazardousCount =
+    Number(
+      hazardousResult[0]
+        ?.count ?? 0,
+    );
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(total / PAGE_SIZE),
-  );
+  const totalPages =
+    Math.max(
+      1,
+      Math.ceil(
+        total /
+          PAGE_SIZE,
+      ),
+    );
 
   /* =======================================================
      RENDER
@@ -306,7 +368,9 @@ export default async function EwcCataloguePage({
 
           <Stat
             label="Hazardous catalogue entries"
-            value={hazardousCount}
+            value={
+              hazardousCount
+            }
           />
 
           <Stat
@@ -335,7 +399,9 @@ export default async function EwcCataloguePage({
               <input
                 id="q"
                 name="q"
-                defaultValue={query}
+                defaultValue={
+                  query
+                }
                 placeholder="Try 17 09 04, soil, concrete, wood..."
                 className="h-12 w-full rounded-2xl border border-black/10 bg-[#faf8f4] px-4 text-sm text-black outline-none transition placeholder:text-black/30 focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
               />
@@ -430,20 +496,22 @@ export default async function EwcCataloguePage({
           ) : (
             <div className="divide-y divide-black/5">
               {records.map(
-                (record) => (
+                (
+                  record,
+                ) => (
                   <article
-                    key={record.id}
+                    key={
+                      record.id
+                    }
                     className="grid gap-5 px-6 py-5 transition hover:bg-orange-50/40 lg:grid-cols-[170px_1fr_180px]"
                   >
                     <div>
                       <p className="font-mono text-lg font-semibold tracking-wide text-black">
                         {formatEwcCode(
                           record.code,
+                          record.isHazardous ===
+                            true,
                         )}
-
-                        {record.isHazardous
-                          ? "*"
-                          : ""}
                       </p>
 
                       <p className="mt-1 text-xs text-black/35">
@@ -509,7 +577,8 @@ export default async function EwcCataloguePage({
                       q: query,
                       hazardous:
                         hazardousFilter,
-                      page: page - 1,
+                      page:
+                        page - 1,
                     })}
                     className="inline-flex rounded-xl border border-black/10 px-4 py-2 text-sm font-semibold text-black/60 transition hover:bg-black/5"
                   >
@@ -526,13 +595,15 @@ export default async function EwcCataloguePage({
               </span>
 
               <div>
-                {page < totalPages ? (
+                {page <
+                totalPages ? (
                   <Link
                     href={buildHref({
                       q: query,
                       hazardous:
                         hazardousFilter,
-                      page: page + 1,
+                      page:
+                        page + 1,
                     })}
                     className="inline-flex rounded-xl bg-black px-4 py-2 text-sm font-semibold text-orange-400 transition hover:bg-black/85"
                   >
@@ -559,7 +630,9 @@ function Stat({
   value,
 }: {
   label: string;
-  value: number | string;
+  value:
+    | number
+    | string;
 }) {
   return (
     <article className="rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
@@ -568,7 +641,8 @@ function Stat({
       </p>
 
       <p className="mt-3 text-2xl font-semibold text-black">
-        {typeof value === "number"
+        {typeof value ===
+        "number"
           ? value.toLocaleString()
           : value}
       </p>
