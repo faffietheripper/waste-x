@@ -33,6 +33,8 @@ type Props = {
   dwtEnabled: boolean;
   receiverApiCodeConfigured: boolean;
   maxBatchSize: number;
+  initialValidationItems: BatchValidationItem[];
+  initialValidationErrors: string[];
 };
 
 type Notice = {
@@ -65,21 +67,27 @@ export default function BatchDwtSubmissionClient({
   dwtEnabled,
   receiverApiCodeConfigured,
   maxBatchSize,
+  initialValidationItems,
+  initialValidationErrors,
 }: Props) {
   const router = useRouter();
-  const [validationItems, setValidationItems] = useState<BatchValidationItem[]>([]);
-  const [validationErrors, setValidationErrors] = useState<string[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [validationItems, setValidationItems] =
+    useState<BatchValidationItem[]>(initialValidationItems);
+  const [validationErrors, setValidationErrors] =
+    useState<string[]>(initialValidationErrors);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () =>
+      new Set(
+        initialValidationItems
+          .filter((item) => item.ready)
+          .map((item) => item.jobLoadId),
+      ),
+  );
   const [notice, setNotice] = useState<Notice>(null);
   const [lastSubmission, setLastSubmission] = useState<BatchSubmissionResult | null>(null);
   const [isValidating, startValidation] = useTransition();
   const [isPreparing, startPreparing] = useTransition();
   const [isSubmitting, startSubmitting] = useTransition();
-
-  const candidateSignature = useMemo(
-    () => candidateRows.map((row) => `${row.jobLoadId}:${row.previousSubmissionStatus ?? "new"}`).join("|"),
-    [candidateRows],
-  );
 
   const validationById = useMemo(
     () => new Map(validationItems.map((item) => [item.jobLoadId, item])),
@@ -106,6 +114,24 @@ export default function BatchDwtSubmissionClient({
   );
 
   const settingsReady = dwtEnabled && receiverApiCodeConfigured;
+
+  /*
+   * router.refresh() can replace the server-rendered queue without remounting
+   * this Client Component. Keep local UI state aligned with the new server
+   * preflight result after draft preparation or a completed submission.
+   * This does NOT contact Defra and does NOT run a second validation request.
+   */
+  useEffect(() => {
+    setValidationItems(initialValidationItems);
+    setValidationErrors(initialValidationErrors);
+    setSelectedIds(
+      new Set(
+        initialValidationItems
+          .filter((item) => item.ready)
+          .map((item) => item.jobLoadId),
+      ),
+    );
+  }, [initialValidationItems, initialValidationErrors]);
 
   function runValidation(showNotice = false) {
     if (candidateRows.length === 0) {
@@ -140,12 +166,6 @@ export default function BatchDwtSubmissionClient({
       }
     });
   }
-
-  useEffect(() => {
-    runValidation(false);
-    // The signature changes only when the server queue materially changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidateSignature]);
 
   function toggleRow(jobLoadId: string) {
     const validation = validationById.get(jobLoadId);
@@ -191,21 +211,19 @@ export default function BatchDwtSubmissionClient({
     });
   }
 
-  function submitSelected() {
-    const ids = readyRows
-      .filter((row) => selectedIds.has(row.jobLoadId))
-      .map((row) => row.jobLoadId);
-
+  function submitIds(ids: string[], label: string) {
     if (ids.length === 0 || !canSubmit || !settingsReady) return;
 
     setNotice({
       tone: "info",
-      title: "Submitting batch",
-      message: `Waste X is submitting ${ids.length} separate DWT movement${ids.length === 1 ? "" : "s"}.`,
+      title: label,
+      message: `Waste X is submitting ${ids.length} separate DWT movement${ids.length === 1 ? "" : "s"}. Exceptions are excluded automatically.`,
     });
     setLastSubmission(null);
 
     startSubmitting(async () => {
+      // The server re-runs the full preflight immediately before each batch
+      // submission. A row that is no longer valid is NOT sent to Defra.
       const result = await submitBatchDwtAction(ids);
       setLastSubmission(result);
       setSelectedIds(new Set());
@@ -221,6 +239,22 @@ export default function BatchDwtSubmissionClient({
 
       router.refresh();
     });
+  }
+
+  function submitSelected() {
+    submitIds(
+      readyRows
+        .filter((row) => selectedIds.has(row.jobLoadId))
+        .map((row) => row.jobLoadId),
+      "Submitting selected movements",
+    );
+  }
+
+  function submitAllReady() {
+    submitIds(
+      readyRows.map((row) => row.jobLoadId),
+      "Submitting all ready movements",
+    );
   }
 
   return (
@@ -306,7 +340,7 @@ export default function BatchDwtSubmissionClient({
               </p>
               <h2 className="mt-1 text-2xl font-semibold">Current batch</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-black/40">
-                Waste X validates up to {maxBatchSize} movements at a time. Ready rows are selected automatically; exceptions stay outside the submission until fixed.
+                Waste X server-validates up to {maxBatchSize} movements before this list is shown. Only rows that pass preflight can ever display as Ready; exceptions stay outside submission until fixed.
               </p>
               {batchOverflow > 0 ? (
                 <p className="mt-2 text-xs font-semibold text-orange-700">
@@ -327,7 +361,7 @@ export default function BatchDwtSubmissionClient({
               <button
                 type="button"
                 onClick={selectAllReady}
-                disabled={readyRows.length === 0}
+                disabled={readyRows.length === 0 || isSubmitting}
                 className="rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black/60 transition hover:border-black/20 hover:text-black disabled:opacity-40"
               >
                 Select all ready
@@ -335,7 +369,7 @@ export default function BatchDwtSubmissionClient({
               <button
                 type="button"
                 onClick={clearSelection}
-                disabled={selectedIds.size === 0}
+                disabled={selectedIds.size === 0 || isSubmitting}
                 className="rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black/60 transition hover:border-black/20 hover:text-black disabled:opacity-40"
               >
                 Clear
@@ -351,11 +385,28 @@ export default function BatchDwtSubmissionClient({
                   !settingsReady ||
                   validationErrors.length > 0
                 }
-                className="rounded-full bg-black px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-orange-500 hover:text-black disabled:cursor-not-allowed disabled:bg-black/20 disabled:text-black/35"
+                className="rounded-full border border-black bg-black px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-black/80 disabled:cursor-not-allowed disabled:border-black/10 disabled:bg-black/10 disabled:text-black/30"
               >
                 {isSubmitting
-                  ? `Submitting ${selectedReadyCount}...`
-                  : `Submit ${selectedReadyCount || "selected"} to DWT`}
+                  ? "Submitting..."
+                  : `Submit selected (${selectedReadyCount})`}
+              </button>
+              <button
+                type="button"
+                onClick={submitAllReady}
+                disabled={
+                  isSubmitting ||
+                  isValidating ||
+                  readyRows.length === 0 ||
+                  !canSubmit ||
+                  !settingsReady ||
+                  validationErrors.length > 0
+                }
+                className="rounded-full bg-orange-500 px-6 py-2.5 text-sm font-semibold text-black shadow-sm transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:bg-black/10 disabled:text-black/30"
+              >
+                {isSubmitting
+                  ? "Submitting ready..."
+                  : `Submit all ready (${readyRows.length})`}
               </button>
             </div>
           </div>

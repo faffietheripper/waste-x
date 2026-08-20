@@ -7,6 +7,7 @@ import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tr
 import { requireSoloPermission } from "@/modules/solo-permissions/core/requireSoloPermission";
 
 import BatchDwtSubmissionClient from "./BatchDwtSubmissionClient";
+import { validateBatchDwtAction } from "./actions";
 import type { BatchQueueRow, MissingDraftRow, SubmittedBatchRow } from "./types";
 
 const MAX_BATCH_SIZE = 50;
@@ -143,6 +144,18 @@ export default async function BatchDwtSubmissionPage({ searchParams }: PageProps
   const missingOverflow = Math.max(0, missingDrafts.length - missingBatchRows.length);
   const canSubmit = context.permissions.has("dwt:submit");
 
+  /*
+   * IMPORTANT UX RULE:
+   * A receipt is NEVER labelled Ready just because a draft exists.
+   * The server runs the exact batch preflight before this page renders, so
+   * invalid carrier/email/permit/reference data appears immediately as an
+   * exception instead of briefly looking submit-ready in the browser.
+   */
+  const initialValidation =
+    batchRows.length > 0
+      ? await validateBatchDwtAction(batchRows.map((row) => row.jobLoadId))
+      : { success: true, items: [], globalErrors: [] };
+
   return (
     <main className="min-h-screen bg-[#f4f1eb] pl-[22vw] pt-[14vh] text-black">
       <div className="px-10 py-10">
@@ -207,6 +220,8 @@ export default async function BatchDwtSubmissionPage({ searchParams }: PageProps
           dwtEnabled={Boolean(settings?.isEnabled)}
           receiverApiCodeConfigured={Boolean(settings?.apiCode)}
           maxBatchSize={MAX_BATCH_SIZE}
+          initialValidationItems={initialValidation.items}
+          initialValidationErrors={initialValidation.globalErrors}
         />
       </div>
     </main>

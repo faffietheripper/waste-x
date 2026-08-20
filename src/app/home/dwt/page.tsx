@@ -22,7 +22,7 @@ type PageProps = {
 
 type QueueStatus =
   | "draft_missing"
-  | "ready"
+  | "prepared"
   | "attention"
   | "submitted"
   | "submitted_with_warnings";
@@ -43,7 +43,7 @@ function formatWeight(value: string | null, metric: string) {
 
 function statusLabel(status: QueueStatus) {
   if (status === "draft_missing") return "Draft missing";
-  if (status === "ready") return "Ready for batch";
+  if (status === "prepared") return "Prepared for validation";
   if (status === "attention") return "Needs attention";
   if (status === "submitted_with_warnings") return "Submitted · warnings";
   return "Submitted";
@@ -51,7 +51,7 @@ function statusLabel(status: QueueStatus) {
 
 function statusClass(status: QueueStatus) {
   if (status === "draft_missing") return "border-black/10 bg-black/[0.04] text-black/50";
-  if (status === "ready") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (status === "prepared") return "border-blue-200 bg-blue-50 text-blue-700";
   if (status === "attention") return "border-red-200 bg-red-50 text-red-700";
   if (status === "submitted_with_warnings") return "border-orange-200 bg-orange-50 text-orange-700";
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -107,7 +107,9 @@ export default async function DwtCentrePage({ searchParams }: PageProps) {
     const receipt = receiptByLoad.get(load.id) ?? null;
     const latestSubmission = latestSubmissionByLoad.get(load.id) ?? null;
 
-    let status: QueueStatus = receipt ? "ready" : "draft_missing";
+    // A prepared receipt is NOT automatically "ready".
+    // Final Ready status belongs only to the batch preflight screen.
+    let status: QueueStatus = receipt ? "prepared" : "draft_missing";
 
     if (
       receipt?.status === "submitted" ||
@@ -150,8 +152,8 @@ export default async function DwtCentrePage({ searchParams }: PageProps) {
               <h1 className="mt-4 text-4xl font-semibold tracking-tight">DWT Centre</h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
                 Completed incoming loads flow into one batch queue. Waste X prepares the
-                receipt, validates the movement, isolates exceptions and lets you submit
-                all ready movements together.
+                receipt, then the batch screen validates the movement, isolates exceptions
+                and lets you submit all genuinely ready movements together.
               </p>
             </div>
 

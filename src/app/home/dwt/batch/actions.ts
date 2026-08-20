@@ -356,6 +356,31 @@ async function validateBatchInternal(params: {
       );
     }
 
+    /*
+     * DEFRA rejects malformed Environment Agency carrier registrations.
+     * The core validator deliberately stays permissive across all UK nation
+     * formats, but a CBDU value is unambiguous: CBDU + exactly six digits.
+     * Catch that predictable failure during batch preflight so the row cannot
+     * display as Ready and then immediately fail at submission time.
+     */
+    const carrierRegistration =
+      draft.receiveMovementInput.carrier.registrationNumber
+        ?.replace(/[\s-]+/g, "")
+        .toUpperCase() ?? "";
+
+    if (
+      carrierRegistration.startsWith("CBDU") &&
+      !/^CBDU\d{6}$/.test(carrierRegistration)
+    ) {
+      errors.push(
+        issue(
+          "carrier.registrationNumber",
+          "England carrier registration numbers must use CBDU followed by exactly six digits.",
+          "InvalidFormat",
+        ),
+      );
+    }
+
     if (!load.sitePermitId) {
       errors.push(
         issue(
