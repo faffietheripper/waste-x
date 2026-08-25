@@ -6,17 +6,30 @@ import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { jobs, users } from "@/db/schema";
 
+export const dynamic = "force-dynamic";
+
 type SearchParams = {
   q?: string | string[];
   status?: string | string[];
+  view?: string | string[];
 };
 
 function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function londonDateKey(value: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(value);
+}
+
 function formatDate(value: Date) {
   return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -28,11 +41,27 @@ function pretty(value: string) {
 }
 
 function statusClass(status: string) {
-  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "in_progress") return "border-orange-200 bg-orange-50 text-orange-700";
-  if (status === "cancelled") return "border-red-200 bg-red-50 text-red-700";
-  if (status === "draft") return "border-black/10 bg-black/5 text-black/50";
+  if (status === "completed") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (status === "in_progress") {
+    return "border-orange-200 bg-orange-50 text-orange-700";
+  }
+
+  if (status === "cancelled") {
+    return "border-red-200 bg-red-50 text-red-700";
+  }
+
+  if (status === "draft") {
+    return "border-black/10 bg-black/5 text-black/50";
+  }
+
   return "border-blue-200 bg-blue-50 text-blue-700";
+}
+
+function viewHref(view: string) {
+  return view === "all" ? "/home/jobs" : `/home/jobs?view=${view}`;
 }
 
 export default async function JobsPage({
@@ -41,7 +70,10 @@ export default async function JobsPage({
   searchParams?: SearchParams;
 }) {
   const session = await auth();
-  if (!session?.user?.id) redirect("/login");
+
+  if (!session?.user?.id) {
+    redirect("/login");
+  }
 
   const user = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
@@ -59,20 +91,61 @@ export default async function JobsPage({
   const allJobs = await database.query.jobs.findMany({
     where: eq(jobs.organisationId, user.organisationId),
     with: {
-      client: { columns: { name: true } },
-      clientSite: { columns: { name: true, postcode: true } },
-      ownSite: { columns: { name: true, postcode: true } },
-      thirdPartyDestinationSite: { columns: { name: true, postcode: true } },
-      haulier: { columns: { name: true } },
-      driver: { columns: { name: true } },
-      vehicle: { columns: { registrationNumber: true } },
-      materialProfile: {
-        columns: { name: true },
-        with: {
-          ewcCode: { columns: { code: true } },
+      client: {
+        columns: {
+          name: true,
         },
       },
-      sourceTemplate: { columns: { name: true } },
+      clientSite: {
+        columns: {
+          name: true,
+          postcode: true,
+        },
+      },
+      ownSite: {
+        columns: {
+          name: true,
+          postcode: true,
+        },
+      },
+      thirdPartyDestinationSite: {
+        columns: {
+          name: true,
+          postcode: true,
+        },
+      },
+      haulier: {
+        columns: {
+          name: true,
+        },
+      },
+      driver: {
+        columns: {
+          name: true,
+        },
+      },
+      vehicle: {
+        columns: {
+          registrationNumber: true,
+        },
+      },
+      materialProfile: {
+        columns: {
+          name: true,
+        },
+        with: {
+          ewcCode: {
+            columns: {
+              code: true,
+            },
+          },
+        },
+      },
+      sourceTemplate: {
+        columns: {
+          name: true,
+        },
+      },
       loads: {
         columns: {
           id: true,
@@ -85,14 +158,50 @@ export default async function JobsPage({
   });
 
   const q = first(searchParams?.q).trim().toLowerCase();
-  const status = first(searchParams?.status);
-  const validStatus = ["draft", "booked", "in_progress", "completed", "cancelled"].includes(status)
-    ? status
+  const requestedStatus = first(searchParams?.status);
+  const requestedView = first(searchParams?.view);
+
+  const validStatus = [
+    "draft",
+    "booked",
+    "in_progress",
+    "completed",
+    "cancelled",
+  ].includes(requestedStatus)
+    ? requestedStatus
     : "all";
 
+  const validView = ["today", "upcoming", "completed"].includes(requestedView)
+    ? requestedView
+    : "all";
+
+  const today = londonDateKey(new Date());
+
   const filteredJobs = allJobs.filter((job) => {
-    if (validStatus !== "all" && job.status !== validStatus) return false;
-    if (!q) return true;
+    if (validStatus !== "all" && job.status !== validStatus) {
+      return false;
+    }
+
+    if (validView === "today" && londonDateKey(job.jobDate) !== today) {
+      return false;
+    }
+
+    if (
+      validView === "upcoming" &&
+      (londonDateKey(job.jobDate) < today ||
+        job.status === "completed" ||
+        job.status === "cancelled")
+    ) {
+      return false;
+    }
+
+    if (validView === "completed" && job.status !== "completed") {
+      return false;
+    }
+
+    if (!q) {
+      return true;
+    }
 
     return [
       job.jobNumber,
@@ -109,212 +218,320 @@ export default async function JobsPage({
     ].some((value) => value?.toLowerCase().includes(q));
   });
 
-  const count = (target: string) => allJobs.filter((job) => job.status === target).length;
-  const loadCount = allJobs.reduce((sum, job) => sum + job.loads.length, 0);
-  const completedLoadCount = allJobs.reduce(
-    (sum, job) => sum + job.loads.filter((load) => load.status === "completed").length,
+  const count = (target: string) =>
+    allJobs.filter((job) => job.status === target).length;
+
+  const liveLoads = allJobs.reduce(
+    (sum, job) =>
+      sum +
+      job.loads.filter(
+        (load) =>
+          load.status !== "completed" &&
+          load.status !== "cancelled" &&
+          load.status !== "rejected",
+      ).length,
     0,
   );
 
   return (
-    <main className="min-h-screen bg-[#f7f3ed] px-8 py-32 pl-[24vw]">
-      <div className="mx-auto max-w-7xl space-y-7">
-        <section className="relative overflow-hidden rounded-[2rem] bg-black p-8 text-white">
-          <div className="absolute -right-24 -top-24 size-72 rounded-full bg-orange-500/20 blur-3xl" />
-          <div className="relative flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+    <main className="min-h-screen bg-[#f7f3ed] px-8 pb-20 pt-[15vh] pl-[24vw]">
+      <div className="mx-auto max-w-[1650px] space-y-5">
+        <section className="relative overflow-hidden rounded-[28px] bg-black px-7 py-6 text-white shadow-sm">
+          <div className="absolute -right-20 -top-24 size-72 rounded-full bg-orange-500/20 blur-3xl" />
+
+          <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-orange-400">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-orange-400">
                 Operations
               </p>
-              <h1 className="mt-3 text-4xl font-semibold tracking-tight">Jobs</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Jobs are the planned commercial work. Each job creates planned loads that
-                later flow into the Daily Worksheet and the actual receipt/DWT workflow.
+
+              <div className="mt-2 flex flex-wrap items-baseline gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight">
+                  Jobs
+                </h1>
+
+                <span className="text-sm text-white/40">
+                  {allJobs.length} total
+                </span>
+              </div>
+
+              <p className="mt-2 max-w-3xl text-sm text-white/45">
+                Dense operational register. Search, repeat and open work without
+                scrolling through large job cards.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2">
               <Link
                 href="/home/jobs/templates"
-                className="rounded-2xl border border-white/15 px-4 py-3 text-xs font-semibold text-white/75 transition hover:bg-white/10"
+                className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/70 transition hover:border-orange-400 hover:text-orange-400"
               >
-                Job templates
+                Templates
               </Link>
+
               <Link
                 href="/home/jobs/new"
-                className="rounded-2xl bg-orange-500 px-5 py-3 text-sm font-bold text-black transition hover:bg-orange-400"
+                className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-black transition hover:bg-orange-400"
               >
-                + Book a Job
+                + Book Job
               </Link>
             </div>
           </div>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <Metric label="All jobs" value={allJobs.length} sub={`${loadCount} loads`} />
-          <Metric label="Booked" value={count("booked")} sub="Waiting to run" />
-          <Metric label="In progress" value={count("in_progress")} sub="Live work" highlight />
-          <Metric label="Completed" value={count("completed")} sub="Finished jobs" />
-          <Metric label="Completed loads" value={completedLoadCount} sub={`of ${loadCount}`} />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric label="Booked" value={count("booked")} />
+          <Metric label="In progress" value={count("in_progress")} highlight />
+          <Metric label="Completed" value={count("completed")} />
+          <Metric label="Live loads" value={liveLoads} />
         </section>
 
-        <section className="rounded-[2rem] border border-black/10 bg-white p-5 shadow-sm">
-          <form method="get" className="grid gap-3 md:grid-cols-[1fr_220px_auto_auto]">
-            <input
-              name="q"
-              defaultValue={first(searchParams?.q)}
-              placeholder="Search job, client, origin, material, EWC, vehicle..."
-              className="h-12 rounded-2xl border border-black/10 bg-[#faf8f4] px-4 text-sm outline-none focus:border-orange-400"
-            />
-            <select
-              name="status"
-              defaultValue={validStatus}
-              className="h-12 rounded-2xl border border-black/10 bg-[#faf8f4] px-4 text-sm outline-none focus:border-orange-400"
-            >
-              <option value="all">All statuses</option>
-              <option value="draft">Draft</option>
-              <option value="booked">Booked</option>
-              <option value="in_progress">In progress</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-            <button className="h-12 rounded-2xl bg-black px-5 text-sm font-semibold text-white transition hover:bg-orange-500 hover:text-black">
-              Apply
-            </button>
-            <Link
-              href="/home/jobs"
-              className="flex h-12 items-center justify-center rounded-2xl border border-black/10 px-5 text-sm font-semibold text-black/45 hover:border-orange-300"
-            >
-              Clear
-            </Link>
-          </form>
-        </section>
+        <section className="rounded-[24px] border border-black/10 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap gap-2">
+              {[
+                ["all", "All"],
+                ["today", "Today"],
+                ["upcoming", "Upcoming"],
+                ["completed", "Completed"],
+              ].map(([value, label]) => (
+                <Link
+                  key={value}
+                  href={viewHref(value)}
+                  className={`rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+                    validView === value
+                      ? "bg-black text-white"
+                      : "border border-black/10 bg-[#fbfaf7] text-black/50 hover:border-orange-300 hover:text-black"
+                  }`}
+                >
+                  {label}
+                </Link>
+              ))}
+            </div>
 
-        <section className="flex items-end justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-orange-600">
-              Job register
-            </p>
-            <h2 className="mt-2 text-2xl font-semibold text-black">
-              {filteredJobs.length} {filteredJobs.length === 1 ? "job" : "jobs"}
-            </h2>
+            <form
+              method="get"
+              className="grid flex-1 gap-2 md:grid-cols-[1fr_180px_auto_auto] xl:max-w-4xl"
+            >
+              {validView !== "all" && (
+                <input type="hidden" name="view" value={validView} />
+              )}
+
+              <input
+                name="q"
+                defaultValue={first(searchParams?.q)}
+                placeholder="Search job, client, site, material, EWC, vehicle..."
+                className="h-10 rounded-xl border border-black/10 bg-[#fbfaf7] px-3 text-sm outline-none focus:border-orange-400"
+              />
+
+              <select
+                name="status"
+                defaultValue={validStatus}
+                className="h-10 rounded-xl border border-black/10 bg-[#fbfaf7] px-3 text-sm outline-none focus:border-orange-400"
+              >
+                <option value="all">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="booked">Booked</option>
+                <option value="in_progress">In progress</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+
+              <button className="h-10 rounded-xl bg-black px-4 text-xs font-semibold text-white transition hover:bg-orange-500 hover:text-black">
+                Apply
+              </button>
+
+              <Link
+                href={viewHref(validView)}
+                className="flex h-10 items-center justify-center rounded-xl border border-black/10 px-4 text-xs font-semibold text-black/40 hover:border-orange-300"
+              >
+                Clear
+              </Link>
+            </form>
           </div>
         </section>
 
-        {filteredJobs.length === 0 ? (
-          <section className="rounded-[2rem] border border-dashed border-black/15 bg-white p-14 text-center">
-            <h3 className="text-xl font-semibold text-black">
-              {allJobs.length === 0 ? "No jobs booked yet" : "No jobs match this filter"}
-            </h3>
-            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-black/45">
-              {allJobs.length === 0
-                ? "Book the first job and Waste X will create the planned load records underneath it."
-                : "Clear or adjust the filters to see more jobs."}
+        <section className="overflow-hidden rounded-[26px] border border-black/10 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-black/5 px-5 py-4">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-600">
+                Job register
+              </p>
+
+              <h2 className="mt-1 text-lg font-semibold text-black">
+                {filteredJobs.length} {filteredJobs.length === 1 ? "job" : "jobs"}
+              </h2>
+            </div>
+
+            <p className="hidden text-xs text-black/35 lg:block">
+              Repeat is the fastest way to reuse regular work.
             </p>
-            <Link
-              href="/home/jobs/new"
-              className="mt-6 inline-flex rounded-2xl bg-orange-500 px-5 py-3 text-sm font-bold text-black"
-            >
-              + Book a Job
-            </Link>
-          </section>
-        ) : (
-          <section className="space-y-4">
-            {filteredJobs.map((job) => {
-              const completedLoads = job.loads.filter((load) => load.status === "completed").length;
-              const destination =
-                job.direction === "outgoing" && job.thirdPartyDestinationSite
-                  ? job.thirdPartyDestinationSite
-                  : job.ownSite;
+          </div>
 
-              return (
-                <article
-                  key={job.id}
-                  className="overflow-hidden rounded-[2rem] border border-black/10 bg-white shadow-sm"
-                >
-                  <div className="flex flex-col justify-between gap-5 p-6 lg:flex-row lg:items-start">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusClass(job.status)}`}>
-                          {pretty(job.status)}
-                        </span>
-                        <span className="rounded-full border border-black/10 bg-[#faf8f4] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-black/45">
-                          {pretty(job.source)}
-                        </span>
-                        {job.sourceTemplate?.name && (
-                          <span className="text-[10px] font-medium text-black/35">
-                            {job.sourceTemplate.name}
+          {filteredJobs.length === 0 ? (
+            <div className="p-12 text-center">
+              <p className="text-sm font-semibold text-black">
+                No jobs match this view.
+              </p>
+
+              <Link
+                href="/home/jobs/new"
+                className="mt-5 inline-flex rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-black"
+              >
+                + Book Job
+              </Link>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1250px] border-collapse text-left">
+                <thead className="bg-[#fbfaf7]">
+                  <tr className="border-b border-black/5">
+                    <Th>Date</Th>
+                    <Th>Job</Th>
+                    <Th>Customer / site</Th>
+                    <Th>Material</Th>
+                    <Th>Transport</Th>
+                    <Th>Loads</Th>
+                    <Th>Status</Th>
+                    <Th alignRight>Actions</Th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {filteredJobs.map((job) => {
+                    const completedLoads = job.loads.filter(
+                      (load) => load.status === "completed",
+                    ).length;
+
+                    const destination =
+                      job.direction === "outgoing" &&
+                      job.thirdPartyDestinationSite
+                        ? job.thirdPartyDestinationSite
+                        : job.ownSite;
+
+                    return (
+                      <tr
+                        key={job.id}
+                        className="border-b border-black/5 align-middle transition last:border-b-0 hover:bg-orange-50/35"
+                      >
+                        <Td>
+                          <p className="whitespace-nowrap text-sm font-semibold text-black/70">
+                            {formatDate(job.jobDate)}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <Link
+                            href={`/home/jobs/${job.id}`}
+                            className="font-semibold text-black hover:text-orange-700"
+                          >
+                            {job.jobNumber}
+                          </Link>
+
+                          <div className="mt-1 flex items-center gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-black/35">
+                              {job.direction}
+                            </span>
+
+                            <span className="text-black/15">·</span>
+
+                            <span className="text-[10px] uppercase tracking-[0.1em] text-black/30">
+                              {pretty(job.source)}
+                            </span>
+                          </div>
+                        </Td>
+
+                        <Td>
+                          <p className="max-w-[220px] truncate text-sm font-semibold text-black/70">
+                            {job.client?.name ??
+                              (job.direction === "outgoing"
+                                ? destination?.name ?? "Outgoing movement"
+                                : "No client")}
+                          </p>
+
+                          <p className="mt-1 max-w-[220px] truncate text-xs text-black/35">
+                            {job.clientSite?.name ??
+                              destination?.name ??
+                              "Site not assigned"}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <p className="max-w-[220px] truncate text-sm font-semibold text-black/70">
+                            {job.materialProfile?.name ?? "Not assigned"}
+                          </p>
+
+                          <p className="mt-1 text-xs text-black/35">
+                            {job.materialProfile?.ewcCode?.code
+                              ? `EWC ${job.materialProfile.ewcCode.code}`
+                              : "No EWC"}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <p className="max-w-[180px] truncate text-sm font-semibold text-black/70">
+                            {job.haulier?.name ?? "Own transport"}
+                          </p>
+
+                          <p className="mt-1 text-xs text-black/35">
+                            {job.vehicle?.registrationNumber ??
+                              job.driver?.name ??
+                              "Assign later"}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <p className="text-sm font-semibold text-black">
+                            {completedLoads}/{job.loads.length}
+                          </p>
+
+                          <p className="mt-1 text-xs text-black/35">
+                            {job.plannedLoads} planned
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusClass(
+                              job.status,
+                            )}`}
+                          >
+                            {pretty(job.status)}
                           </span>
-                        )}
-                      </div>
+                        </Td>
 
-                      <Link href={`/home/jobs/${job.id}`} className="group mt-4 block">
-                        <h3 className="text-xl font-semibold text-black transition group-hover:text-orange-700">
-                          {job.jobNumber}
-                        </h3>
-                        <p className="mt-1 text-sm font-medium text-black/65">
-                          {job.client?.name ?? "No client"}
-                        </p>
-                        <p className="mt-1 text-xs text-black/40">
-                          {formatDate(job.jobDate)} · {job.clientSite?.name ?? "No origin"}
-                        </p>
-                      </Link>
-                    </div>
+                        <Td>
+                          <div className="flex justify-end gap-1.5">
+                            <Link
+                              href={`/home/jobs/new?repeat=${job.id}`}
+                              className="rounded-lg bg-orange-500 px-3 py-2 text-xs font-bold text-black transition hover:bg-orange-400"
+                            >
+                              Repeat
+                            </Link>
 
-                    <div className="flex flex-wrap gap-2">
-                      <Link
-                        href={`/home/jobs/new?repeat=${job.id}`}
-                        className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-black hover:bg-orange-400"
-                      >
-                        Repeat
-                      </Link>
-                      <Link
-                        href={`/home/jobs/new?duplicate=${job.id}`}
-                        className="rounded-xl border border-black/10 px-3 py-2 text-xs font-semibold text-black/50 hover:border-orange-300"
-                      >
-                        Duplicate
-                      </Link>
-                      <Link
-                        href={`/home/jobs/${job.id}`}
-                        className="rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-orange-500 hover:text-black"
-                      >
-                        Open
-                      </Link>
-                    </div>
-                  </div>
+                            <Link
+                              href={`/home/jobs/${job.id}`}
+                              className="rounded-lg bg-black px-3 py-2 text-xs font-semibold text-white transition hover:bg-orange-500 hover:text-black"
+                            >
+                              Open
+                            </Link>
 
-                  <div className="grid border-t border-black/5 md:grid-cols-2 xl:grid-cols-5">
-                    <Cell
-                      label="Material"
-                      value={job.materialProfile?.name ?? "Not assigned"}
-                      sub={job.materialProfile?.ewcCode?.code ? `EWC ${job.materialProfile.ewcCode.code}` : "—"}
-                    />
-                    <Cell
-                      label="Transport"
-                      value={job.haulier?.name ?? "Own transport"}
-                      sub={job.vehicle?.registrationNumber ?? job.driver?.name ?? "Assign later"}
-                    />
-                    <Cell
-                      label="Destination"
-                      value={destination?.name ?? "Not assigned"}
-                      sub={destination?.postcode ?? "—"}
-                    />
-                    <Cell
-                      label="PO / Reference"
-                      value={job.purchaseOrder ?? job.customerReference ?? "—"}
-                      sub={job.purchaseOrder && job.customerReference ? job.customerReference : ""}
-                    />
-                    <Cell
-                      label="Loads"
-                      value={`${completedLoads}/${job.loads.length} completed`}
-                      sub={`${job.plannedLoads} planned`}
-                    />
-                  </div>
-                </article>
-              );
-            })}
-          </section>
-        )}
+                            <Link
+                              href={`/home/jobs/new?duplicate=${job.id}`}
+                              className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-black/45 transition hover:border-orange-300 hover:text-black"
+                            >
+                              Copy
+                            </Link>
+                          </div>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
     </main>
   );
@@ -323,33 +540,47 @@ export default async function JobsPage({
 function Metric({
   label,
   value,
-  sub,
   highlight = false,
 }: {
   label: string;
   value: number;
-  sub: string;
   highlight?: boolean;
 }) {
   return (
-    <div className={`rounded-[1.5rem] border p-5 shadow-sm ${highlight ? "border-orange-200 bg-orange-50" : "border-black/10 bg-white"}`}>
-      <p className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${highlight ? "text-orange-700" : "text-black/35"}`}>
+    <div
+      className={`rounded-[20px] border px-4 py-3.5 shadow-sm ${
+        highlight
+          ? "border-orange-200 bg-orange-50"
+          : "border-black/10 bg-white"
+      }`}
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
         {label}
       </p>
-      <p className="mt-3 text-3xl font-semibold text-black">{value}</p>
-      <p className="mt-1 text-xs text-black/40">{sub}</p>
+
+      <p className="mt-1.5 text-2xl font-semibold text-black">{value}</p>
     </div>
   );
 }
 
-function Cell({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Th({
+  children,
+  alignRight = false,
+}: {
+  children: React.ReactNode;
+  alignRight?: boolean;
+}) {
   return (
-    <div className="min-h-24 border-t border-black/5 px-5 py-4 md:border-l xl:border-t-0">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/30">
-        {label}
-      </p>
-      <p className="mt-2 truncate text-sm font-semibold text-black">{value}</p>
-      {sub && <p className="mt-1 truncate text-xs text-black/35">{sub}</p>}
-    </div>
+    <th
+      className={`px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35 ${
+        alignRight ? "text-right" : ""
+      }`}
+    >
+      {children}
+    </th>
   );
+}
+
+function Td({ children }: { children: React.ReactNode }) {
+  return <td className="px-4 py-3.5">{children}</td>;
 }

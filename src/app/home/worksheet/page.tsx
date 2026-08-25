@@ -6,6 +6,8 @@ import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { drivers, jobs, users, vehicles } from "@/db/schema";
 
+export const dynamic = "force-dynamic";
+
 import {
   acceptLoadAction,
   addExtraLoadAction,
@@ -70,9 +72,7 @@ function formatTime(value: Date | null | undefined) {
 }
 
 function formatStatus(value: string) {
-  return value
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function statusClasses(status: string) {
@@ -133,14 +133,14 @@ const errorMessages: Record<string, string> = {
   vehicle_not_for_haulier: "That vehicle belongs to a different haulier.",
   driver_not_for_own_transport: "Choose one of your own drivers for own transport.",
   vehicle_not_for_own_transport: "Choose one of your own vehicles for own transport.",
-  only_planned_loads_can_cancel: "Only planned loads can be cancelled from the worksheet.",
+  only_planned_loads_can_cancel: "Only planned loads can be cancelled from Daily Operations.",
   job_required: "A job was not supplied.",
   job_not_available: "That job is not available.",
   job_not_operational: "That job is cancelled or not operational.",
   source_load_missing: "Waste X could not find a source load to copy.",
 };
 
-export default async function DailyWorksheetPage({
+export default async function DailyOperationsPage({
   searchParams,
 }: {
   searchParams?: SearchParams;
@@ -170,9 +170,7 @@ export default async function DailyWorksheetPage({
   }
 
   const requestedDate = firstParam(searchParams?.date);
-  const selectedDate = validDate(requestedDate)
-    ? requestedDate
-    : londonDateInput();
+  const selectedDate = validDate(requestedDate) ? requestedDate : londonDateInput();
 
   const dayStart = new Date(`${selectedDate}T00:00:00.000Z`);
   const dayEnd = new Date(`${shiftDate(selectedDate, 1)}T00:00:00.000Z`);
@@ -249,12 +247,26 @@ export default async function DailyWorksheetPage({
       .orderBy(asc(vehicles.registrationNumber)),
   ]);
 
-  const loads = dayJobs.flatMap((job) => job.loads);
-  const incomingLoads = loads.filter((load) => load.direction === "incoming");
-  const outgoingLoads = loads.filter((load) => load.direction === "outgoing");
-  const completedLoads = loads.filter((load) => load.status === "completed");
-  const problemLoads = loads.filter(
-    (load) => load.status === "rejected" || load.status === "cancelled",
+  const rows = dayJobs.flatMap((job) =>
+    job.loads.map((load) => ({
+      job,
+      load,
+    })),
+  );
+
+  const incomingLoads = rows.filter(({ load }) => load.direction === "incoming");
+  const outgoingLoads = rows.filter(({ load }) => load.direction === "outgoing");
+  const completedLoads = rows.filter(({ load }) => load.status === "completed");
+
+  const liveLoads = rows.filter(
+    ({ load }) =>
+      load.status !== "completed" &&
+      load.status !== "rejected" &&
+      load.status !== "cancelled",
+  );
+
+  const problemLoads = rows.filter(
+    ({ load }) => load.status === "rejected" || load.status === "cancelled",
   );
 
   const success = firstParam(searchParams?.success);
@@ -263,37 +275,38 @@ export default async function DailyWorksheetPage({
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] px-8 pb-20 pt-[15vh] pl-[24vw]">
-      <div className="mx-auto max-w-[1600px] space-y-6">
-        <section className="relative overflow-hidden rounded-[32px] bg-black p-8 text-white shadow-sm">
-          <div className="absolute -right-24 -top-24 size-80 rounded-full bg-orange-500/20 blur-3xl" />
+      <div className="mx-auto max-w-[1750px] space-y-5">
+        <section className="relative overflow-hidden rounded-[28px] bg-black px-7 py-6 text-white shadow-sm">
+          <div className="absolute -right-20 -top-24 size-72 rounded-full bg-orange-500/20 blur-3xl" />
 
-          <div className="relative z-10 flex flex-col justify-between gap-7 xl:flex-row xl:items-end">
+          <div className="relative z-10 flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-orange-400">
-                Operations // Daily Worksheet
+              <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-orange-400">
+                Operations // Daily Operations
               </p>
-              <h1 className="mt-3 text-4xl font-semibold tracking-tight">
+
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight">
                 {formatDay(selectedDate)}
               </h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Today's booked Jobs are already here. Operate the existing Load records —
-                arrival, actual transport, weights, acceptance or rejection and completion —
-                without entering the job again.
+
+              <p className="mt-2 max-w-3xl text-sm text-white/45">
+                One row per load. Mark arrival, capture weight, accept and complete
+                without reopening the job.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <Link
                 href={`/home/worksheet?date=${shiftDate(selectedDate, -1)}`}
-                className="rounded-2xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/70 transition hover:border-orange-400 hover:text-orange-400"
+                className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/65 transition hover:border-orange-400 hover:text-orange-400"
               >
-                ← Previous day
+                ← Previous
               </Link>
 
               {!isToday && (
                 <Link
                   href="/home/worksheet"
-                  className="rounded-2xl border border-orange-400/30 bg-orange-400/10 px-4 py-3 text-sm font-semibold text-orange-400"
+                  className="rounded-xl border border-orange-400/30 bg-orange-400/10 px-4 py-2.5 text-xs font-semibold text-orange-400"
                 >
                   Today
                 </Link>
@@ -301,9 +314,16 @@ export default async function DailyWorksheetPage({
 
               <Link
                 href={`/home/worksheet?date=${shiftDate(selectedDate, 1)}`}
-                className="rounded-2xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/70 transition hover:border-orange-400 hover:text-orange-400"
+                className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/65 transition hover:border-orange-400 hover:text-orange-400"
               >
-                Next day →
+                Next →
+              </Link>
+
+              <Link
+                href="/home/jobs/new"
+                className="rounded-xl bg-orange-500 px-4 py-2.5 text-xs font-bold text-black"
+              >
+                + Job
               </Link>
             </div>
           </div>
@@ -311,7 +331,7 @@ export default async function DailyWorksheetPage({
 
         {(success || error) && (
           <div
-            className={`rounded-2xl border px-5 py-4 text-sm font-medium ${
+            className={`rounded-xl border px-4 py-3 text-sm font-medium ${
               error
                 ? "border-red-200 bg-red-50 text-red-700"
                 : "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -319,115 +339,83 @@ export default async function DailyWorksheetPage({
           >
             {error
               ? errorMessages[error] ?? `Operation failed: ${error}`
-              : successMessages[success] ?? "Worksheet updated."}
+              : successMessages[success] ?? "Daily Operations updated."}
           </div>
         )}
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <MetricCard label="Jobs" value={dayJobs.length} detail="Booked for this date" />
-          <MetricCard label="Incoming" value={incomingLoads.length} detail="Loads into your site" />
-          <MetricCard label="Outgoing" value={outgoingLoads.length} detail="Loads leaving your site" />
-          <MetricCard label="Completed" value={completedLoads.length} detail={`of ${loads.length} loads`} highlighted />
-          <MetricCard label="Exceptions" value={problemLoads.length} detail="Rejected / cancelled" />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <MetricCard label="Loads" value={rows.length} />
+          <MetricCard label="Live" value={liveLoads.length} highlight />
+          <MetricCard label="Incoming" value={incomingLoads.length} />
+          <MetricCard label="Outgoing" value={outgoingLoads.length} />
+          <MetricCard
+            label="Done / exceptions"
+            value={`${completedLoads.length} / ${problemLoads.length}`}
+          />
         </section>
 
-        {dayJobs.length === 0 ? (
-          <section className="rounded-[30px] border border-dashed border-black/15 bg-white p-12 text-center shadow-sm">
-            <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-orange-50 text-2xl">
-              📋
-            </div>
-            <h2 className="mt-5 text-2xl font-semibold text-black">
+        {rows.length === 0 ? (
+          <section className="rounded-[26px] border border-dashed border-black/15 bg-white p-12 text-center shadow-sm">
+            <h2 className="text-xl font-semibold text-black">
               Nothing booked for this date
             </h2>
-            <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-black/45">
-              Incoming jobs booked for this date will appear automatically. Outgoing work can
-              be booked from the Outgoing register and will use the same worksheet.
+
+            <p className="mx-auto mt-2 max-w-xl text-sm text-black/45">
+              Book work once. Its loads will appear here automatically for the
+              operational team.
             </p>
-            <div className="mt-6 flex flex-wrap justify-center gap-3">
+
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
               <Link
                 href="/home/jobs/new"
-                className="rounded-2xl bg-orange-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-orange-400"
+                className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-black"
               >
                 + Book incoming job
               </Link>
+
               <Link
                 href="/home/movements/outgoing/new"
-                className="rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:text-orange-400"
+                className="rounded-xl bg-black px-5 py-2.5 text-sm font-semibold text-white"
               >
-                + Book outgoing movement
+                + Book outgoing
               </Link>
             </div>
           </section>
         ) : (
-          <section className="space-y-5">
-            {dayJobs.map((job) => (
-              <article
-                key={job.id}
-                className="overflow-hidden rounded-[30px] border border-black/10 bg-white shadow-sm"
-              >
-                <div className="flex flex-col gap-5 border-b border-black/5 p-6 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                          job.direction === "incoming"
-                            ? "border-orange-200 bg-orange-50 text-orange-700"
-                            : "border-blue-200 bg-blue-50 text-blue-700"
-                        }`}
-                      >
-                        {job.direction}
-                      </span>
-                      <span className="rounded-full border border-black/10 bg-black/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-black/50">
-                        {formatStatus(job.status)}
-                      </span>
-                    </div>
+          <section className="overflow-hidden rounded-[26px] border border-black/10 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-black/5 px-5 py-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-600">
+                  Live load board
+                </p>
 
-                    <div className="mt-3 flex flex-wrap items-baseline gap-3">
-                      <Link
-                        href={`/home/jobs/${job.id}`}
-                        className="text-xl font-semibold text-black transition hover:text-orange-700"
-                      >
-                        {job.jobNumber}
-                      </Link>
-                      <span className="text-sm font-medium text-black/55">
-                        {job.direction === "incoming"
-                          ? job.client?.name ?? "Client not assigned"
-                          : job.thirdPartyDestinationSite?.name ?? "External destination"}
-                      </span>
-                    </div>
+                <h2 className="mt-1 text-lg font-semibold text-black">
+                  {rows.length} load{rows.length === 1 ? "" : "s"}
+                </h2>
+              </div>
 
-                    <p className="mt-2 text-xs text-black/40">
-                      {job.direction === "incoming"
-                        ? `${job.clientSite?.name ?? "Origin not assigned"} → ${job.ownSite?.name ?? "Receiving site"}`
-                        : `${job.ownSite?.name ?? "Your site"} → ${job.thirdPartyDestinationSite?.name ?? "Third-party facility"}`}
-                    </p>
-                  </div>
+              <p className="hidden text-xs text-black/35 xl:block">
+                Normal path: Arrived → Weight → Accept → Complete
+              </p>
+            </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="rounded-2xl border border-black/10 bg-[#fbfaf7] px-4 py-3 text-right">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/30">
-                        Loads
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-black">
-                        {job.loads.length}
-                      </p>
-                    </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1500px] border-collapse text-left">
+                <thead className="bg-[#fbfaf7]">
+                  <tr className="border-b border-black/5">
+                    <Th>Job / load</Th>
+                    <Th>Customer / route</Th>
+                    <Th>Waste</Th>
+                    <Th>Transport</Th>
+                    <Th>Time</Th>
+                    <Th>Quick weight</Th>
+                    <Th>Status</Th>
+                    <Th alignRight>Action</Th>
+                  </tr>
+                </thead>
 
-                    <form action={addExtraLoadAction}>
-                      <input type="hidden" name="jobId" value={job.id} />
-                      <input type="hidden" name="returnDate" value={selectedDate} />
-                      <button
-                        type="submit"
-                        className="rounded-2xl border border-black/10 bg-white px-4 py-3 text-xs font-semibold text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
-                      >
-                        + Extra load
-                      </button>
-                    </form>
-                  </div>
-                </div>
-
-                <div className="divide-y divide-black/5">
-                  {job.loads.map((load) => {
+                <tbody>
+                  {rows.map(({ job, load }) => {
                     const availableDrivers = activeDrivers.filter(
                       (driver) =>
                         driver.haulierCounterpartyId === load.haulierCounterpartyId,
@@ -443,308 +431,386 @@ export default async function DailyWorksheetPage({
                       load.status === "rejected" ||
                       load.status === "cancelled";
 
+                    const firstLoad = job.loads[0]?.id === load.id;
+
+                    const route =
+                      load.direction === "incoming"
+                        ? `${job.clientSite?.name ?? "Origin"} → ${
+                            load.ownSite?.name ??
+                            job.ownSite?.name ??
+                            "Receiving site"
+                          }`
+                        : `${
+                            load.ownSite?.name ??
+                            job.ownSite?.name ??
+                            "Your site"
+                          } → ${
+                            load.thirdPartyDestinationSite?.name ??
+                            job.thirdPartyDestinationSite?.name ??
+                            "External facility"
+                          }`;
+
                     return (
-                      <div key={load.id} className="p-5">
-                        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                          <div className="flex min-w-0 flex-1 items-center gap-4">
-                            <div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-black text-sm font-bold text-orange-400">
+                      <tr
+                        key={load.id}
+                        className="border-b border-black/5 align-top last:border-b-0 hover:bg-orange-50/25"
+                      >
+                        <Td>
+                          <div className="flex items-center gap-2">
+                            <Link
+                              href={`/home/jobs/${job.id}`}
+                              className="max-w-[180px] truncate text-sm font-semibold text-black hover:text-orange-700"
+                            >
+                              {job.jobNumber}
+                            </Link>
+
+                            <span className="rounded-md bg-black px-1.5 py-0.5 text-[10px] font-bold text-orange-400">
                               {load.loadNumber}
-                            </div>
-
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span
-                                  className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusClasses(load.status)}`}
-                                >
-                                  {formatStatus(load.status)}
-                                </span>
-                                <span className="text-xs font-medium text-black/55">
-                                  {load.ewcCodeSnapshot ?? "No EWC"}
-                                </span>
-                                {load.ticketNumber && (
-                                  <span className="text-xs text-black/35">
-                                    Ticket {load.ticketNumber}
-                                  </span>
-                                )}
-                              </div>
-
-                              <p className="mt-2 truncate text-sm font-semibold text-black">
-                                {load.wasteDescriptionSnapshot ?? "Waste description not confirmed"}
-                              </p>
-                              <p className="mt-1 text-xs text-black/40">
-                                {load.haulier?.name ?? "Own transport"}
-                                {load.driver?.name ? ` · ${load.driver.name}` : " · Driver not assigned"}
-                                {load.vehicle?.registrationNumber
-                                  ? ` · ${load.vehicle.registrationNumber}`
-                                  : " · Vehicle not assigned"}
-                              </p>
-                            </div>
+                            </span>
                           </div>
 
-                          <div className="grid min-w-0 gap-3 sm:grid-cols-3 xl:min-w-[500px]">
-                            <SmallStat
-                              label={load.direction === "incoming" ? "Arrived" : "Moved"}
-                              value={formatTime(
-                                load.direction === "incoming" ? load.receivedAt : load.movementAt,
-                              )}
-                            />
-                            <SmallStat
-                              label="Net weight"
-                              value={
-                                load.netWeight
-                                  ? `${load.netWeight} ${load.weightMetric}`
-                                  : "Not recorded"
-                              }
-                            />
-                            <SmallStat
-                              label="Destination"
-                              value={
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span
+                              className={`text-[10px] font-semibold uppercase tracking-[0.12em] ${
                                 load.direction === "incoming"
-                                  ? load.ownSite?.name ?? job.ownSite?.name ?? "Your site"
-                                  : load.thirdPartyDestinationSite?.name ??
-                                    job.thirdPartyDestinationSite?.name ??
-                                    "External facility"
-                              }
-                            />
+                                  ? "text-orange-700"
+                                  : "text-blue-700"
+                              }`}
+                            >
+                              {load.direction}
+                            </span>
+
+                            {firstLoad && !terminal && (
+                              <form action={addExtraLoadAction}>
+                                <input type="hidden" name="jobId" value={job.id} />
+                                <input
+                                  type="hidden"
+                                  name="returnDate"
+                                  value={selectedDate}
+                                />
+
+                                <button
+                                  type="submit"
+                                  className="text-[10px] font-semibold text-black/35 underline decoration-black/15 underline-offset-2 hover:text-orange-700"
+                                >
+                                  + load
+                                </button>
+                              </form>
+                            )}
                           </div>
-                        </div>
+                        </Td>
 
-                        <div className="mt-4 flex flex-wrap items-center gap-2">
-                          {load.direction === "incoming" && load.status === "planned" && (
-                            <form action={markLoadArrivedAction}>
-                              <input type="hidden" name="loadId" value={load.id} />
-                              <input type="hidden" name="returnDate" value={selectedDate} />
-                              <button
-                                type="submit"
-                                className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-500"
-                              >
-                                Mark arrived
-                              </button>
-                            </form>
+                        <Td>
+                          <p className="max-w-[220px] truncate text-sm font-semibold text-black/70">
+                            {load.direction === "incoming"
+                              ? job.client?.name ?? "No client"
+                              : load.thirdPartyDestinationSite?.counterparty?.name ??
+                                job.thirdPartyDestinationSite?.counterparty?.name ??
+                                "External operator"}
+                          </p>
+
+                          <p
+                            title={route}
+                            className="mt-1 max-w-[260px] truncate text-xs text-black/35"
+                          >
+                            {route}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <p className="text-xs font-semibold text-black/55">
+                            {load.ewcCodeSnapshot ?? "No EWC"}
+                          </p>
+
+                          <p
+                            title={
+                              load.wasteDescriptionSnapshot ??
+                              "Waste description not confirmed"
+                            }
+                            className="mt-1 max-w-[260px] truncate text-xs text-black/40"
+                          >
+                            {load.wasteDescriptionSnapshot ??
+                              "Waste description not confirmed"}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <p className="max-w-[180px] truncate text-sm font-semibold text-black/70">
+                            {load.haulier?.name ?? "Own transport"}
+                          </p>
+
+                          <p className="mt-1 max-w-[180px] truncate text-xs text-black/35">
+                            {load.driver?.name ?? "No driver"}
+                            {" · "}
+                            {load.vehicle?.registrationNumber ?? "No vehicle"}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          <p className="text-sm font-semibold text-black/65">
+                            {formatTime(
+                              load.direction === "incoming"
+                                ? load.receivedAt
+                                : load.movementAt,
+                            )}
+                          </p>
+
+                          <p className="mt-1 text-xs text-black/35">
+                            {load.direction === "incoming" ? "Arrived" : "Moved"}
+                          </p>
+                        </Td>
+
+                        <Td>
+                          {terminal ? (
+                            <div>
+                              <p className="text-sm font-semibold text-black/70">
+                                {load.netWeight
+                                  ? `${load.netWeight} ${load.weightMetric}`
+                                  : "—"}
+                              </p>
+
+                              <p className="mt-1 text-xs text-black/35">Final</p>
+                            </div>
+                          ) : (
+                            <QuickWeightForm
+                              load={load}
+                              returnDate={selectedDate}
+                            />
                           )}
+                        </Td>
 
-                          {load.direction === "incoming" && load.status === "arrived" && (
-                            <form action={acceptLoadAction}>
-                              <input type="hidden" name="loadId" value={load.id} />
-                              <input type="hidden" name="returnDate" value={selectedDate} />
-                              <button
-                                type="submit"
-                                className="rounded-xl bg-orange-500 px-4 py-2 text-xs font-semibold text-black transition hover:bg-orange-400"
-                              >
-                                Accept waste
-                              </button>
-                            </form>
+                        <Td>
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusClasses(
+                              load.status,
+                            )}`}
+                          >
+                            {formatStatus(load.status)}
+                          </span>
+
+                          {load.netWeight && (
+                            <p className="mt-2 text-xs font-medium text-black/40">
+                              Net {load.netWeight} {load.weightMetric}
+                            </p>
                           )}
+                        </Td>
 
-                          {load.direction === "incoming" && load.status === "accepted" && (
-                            <form action={completeIncomingLoadAction}>
-                              <input type="hidden" name="loadId" value={load.id} />
-                              <input type="hidden" name="returnDate" value={selectedDate} />
-                              <button
-                                type="submit"
-                                className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500"
-                              >
-                                Complete load
-                              </button>
-                            </form>
-                          )}
+                        <Td>
+                          <div className="flex min-w-[150px] flex-col items-end gap-2">
+                            <PrimaryAction load={load} returnDate={selectedDate} />
 
-                          {load.direction === "outgoing" && !terminal && (
-                            <form action={completeOutgoingLoadAction}>
-                              <input type="hidden" name="loadId" value={load.id} />
-                              <input type="hidden" name="returnDate" value={selectedDate} />
-                              <button
-                                type="submit"
-                                className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-500"
-                              >
-                                Complete outgoing movement
-                              </button>
-                            </form>
-                          )}
+                            {!terminal && (
+                              <details className="w-full">
+                                <summary className="cursor-pointer list-none text-right text-[11px] font-semibold text-black/40 hover:text-orange-700">
+                                  More / edit
+                                </summary>
 
-                          {!terminal && (
-                            <details className="group">
-                              <summary className="cursor-pointer list-none rounded-xl border border-black/10 px-4 py-2 text-xs font-semibold text-black/55 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700">
-                                Update actual details
-                              </summary>
-
-                              <div className="mt-3 w-full rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 xl:min-w-[900px]">
-                                <form action={saveLoadDetailsAction} className="grid gap-4 xl:grid-cols-4">
-                                  <input type="hidden" name="loadId" value={load.id} />
-                                  <input type="hidden" name="returnDate" value={selectedDate} />
-
-                                  <label className="xl:col-span-2">
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-                                      Actual waste description
-                                    </span>
+                                <div className="mt-2 rounded-xl border border-black/10 bg-[#fbfaf7] p-3">
+                                  <form
+                                    action={saveLoadDetailsAction}
+                                    className="grid gap-2"
+                                  >
                                     <input
-                                      name="wasteDescription"
-                                      defaultValue={load.wasteDescriptionSnapshot ?? ""}
-                                      required
-                                      className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
+                                      type="hidden"
+                                      name="loadId"
+                                      value={load.id}
                                     />
-                                  </label>
-
-                                  <label>
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-                                      Driver
-                                    </span>
-                                    <select
-                                      name="driverId"
-                                      defaultValue={load.driverId ?? ""}
-                                      className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
-                                    >
-                                      <option value="">Assign later / none</option>
-                                      {availableDrivers.map((driver) => (
-                                        <option key={driver.id} value={driver.id}>
-                                          {driver.name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-
-                                  <label>
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-                                      Vehicle
-                                    </span>
-                                    <select
-                                      name="vehicleId"
-                                      defaultValue={load.vehicleId ?? ""}
-                                      className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
-                                    >
-                                      <option value="">Assign later / none</option>
-                                      {availableVehicles.map((vehicle) => (
-                                        <option key={vehicle.id} value={vehicle.id}>
-                                          {vehicle.registrationNumber}
-                                          {vehicle.vehicleType ? ` · ${vehicle.vehicleType}` : ""}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-
-                                  <WeightInput label="Gross" name="grossWeight" value={load.grossWeight} />
-                                  <WeightInput label="Tare" name="tareWeight" value={load.tareWeight} />
-                                  <WeightInput label="Net" name="netWeight" value={load.netWeight} />
-
-                                  <label>
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-                                      Weight unit
-                                    </span>
-                                    <select
-                                      name="weightMetric"
-                                      defaultValue={load.weightMetric}
-                                      className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
-                                    >
-                                      <option value="Tonnes">Tonnes</option>
-                                      <option value="Kilograms">Kilograms</option>
-                                      <option value="Grams">Grams</option>
-                                    </select>
-                                  </label>
-
-                                  <label>
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-                                      Ticket number
-                                    </span>
                                     <input
-                                      name="ticketNumber"
-                                      defaultValue={load.ticketNumber ?? ""}
-                                      className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
+                                      type="hidden"
+                                      name="returnDate"
+                                      value={selectedDate}
                                     />
-                                  </label>
 
-                                  <label className="flex items-end pb-2">
-                                    <span className="flex items-center gap-2 text-xs font-medium text-black/55">
+                                    <label>
+                                      <FieldLabel>Waste description</FieldLabel>
+                                      <input
+                                        name="wasteDescription"
+                                        defaultValue={
+                                          load.wasteDescriptionSnapshot ?? ""
+                                        }
+                                        required
+                                        className="mt-1 h-9 w-full min-w-[270px] rounded-lg border border-black/10 bg-white px-2.5 text-xs outline-none focus:border-orange-400"
+                                      />
+                                    </label>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <label>
+                                        <FieldLabel>Driver</FieldLabel>
+                                        <select
+                                          name="driverId"
+                                          defaultValue={load.driverId ?? ""}
+                                          className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none"
+                                        >
+                                          <option value="">None</option>
+                                          {availableDrivers.map((driver) => (
+                                            <option key={driver.id} value={driver.id}>
+                                              {driver.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+
+                                      <label>
+                                        <FieldLabel>Vehicle</FieldLabel>
+                                        <select
+                                          name="vehicleId"
+                                          defaultValue={load.vehicleId ?? ""}
+                                          className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none"
+                                        >
+                                          <option value="">None</option>
+                                          {availableVehicles.map((vehicle) => (
+                                            <option key={vehicle.id} value={vehicle.id}>
+                                              {vehicle.registrationNumber}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                    </div>
+
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <WeightInput
+                                        label="Gross"
+                                        name="grossWeight"
+                                        value={load.grossWeight}
+                                      />
+                                      <WeightInput
+                                        label="Tare"
+                                        name="tareWeight"
+                                        value={load.tareWeight}
+                                      />
+                                      <WeightInput
+                                        label="Net"
+                                        name="netWeight"
+                                        value={load.netWeight}
+                                      />
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <label>
+                                        <FieldLabel>Unit</FieldLabel>
+                                        <select
+                                          name="weightMetric"
+                                          defaultValue={load.weightMetric}
+                                          className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs"
+                                        >
+                                          <option value="Tonnes">Tonnes</option>
+                                          <option value="Kilograms">Kilograms</option>
+                                          <option value="Grams">Grams</option>
+                                        </select>
+                                      </label>
+
+                                      <label>
+                                        <FieldLabel>Ticket</FieldLabel>
+                                        <input
+                                          name="ticketNumber"
+                                          defaultValue={load.ticketNumber ?? ""}
+                                          className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2.5 text-xs"
+                                        />
+                                      </label>
+                                    </div>
+
+                                    <label>
+                                      <FieldLabel>Notes</FieldLabel>
+                                      <input
+                                        name="notes"
+                                        defaultValue={load.notes ?? ""}
+                                        className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2.5 text-xs"
+                                      />
+                                    </label>
+
+                                    <label className="flex items-center gap-2 text-[11px] font-medium text-black/50">
                                       <input
                                         type="checkbox"
                                         name="weightIsEstimate"
                                         defaultChecked={load.weightIsEstimate}
-                                        className="size-4 accent-orange-500"
+                                        className="size-3.5 accent-orange-500"
                                       />
-                                      Weight is estimated
-                                    </span>
-                                  </label>
+                                      Estimated weight
+                                    </label>
 
-                                  <label className="xl:col-span-2">
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-                                      Operational notes
-                                    </span>
-                                    <input
-                                      name="notes"
-                                      defaultValue={load.notes ?? ""}
-                                      className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
-                                    />
-                                  </label>
-
-                                  <div className="flex items-end">
                                     <button
                                       type="submit"
-                                      className="h-11 w-full rounded-xl bg-black px-4 text-xs font-semibold text-white transition hover:bg-orange-500 hover:text-black"
+                                      className="h-9 rounded-lg bg-black px-3 text-xs font-semibold text-white hover:bg-orange-500 hover:text-black"
                                     >
-                                      Save actual details
+                                      Save details
                                     </button>
-                                  </div>
-                                </form>
-                              </div>
-                            </details>
-                          )}
+                                  </form>
 
-                          {load.direction === "incoming" && load.status === "arrived" && (
-                            <details>
-                              <summary className="cursor-pointer list-none rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700">
-                                Reject load
-                              </summary>
-                              <form
-                                action={rejectLoadAction}
-                                className="mt-3 flex max-w-2xl gap-2 rounded-2xl border border-red-100 bg-red-50 p-3"
-                              >
-                                <input type="hidden" name="loadId" value={load.id} />
-                                <input type="hidden" name="returnDate" value={selectedDate} />
-                                <input
-                                  name="reason"
-                                  required
-                                  minLength={3}
-                                  placeholder="Reason for rejection"
-                                  className="h-10 flex-1 rounded-xl border border-red-200 bg-white px-3 text-sm outline-none"
-                                />
-                                <button
-                                  type="submit"
-                                  className="rounded-xl bg-red-600 px-4 text-xs font-semibold text-white"
-                                >
-                                  Confirm reject
-                                </button>
-                              </form>
-                            </details>
-                          )}
+                                  {load.direction === "incoming" &&
+                                    load.status === "arrived" && (
+                                      <form
+                                        action={rejectLoadAction}
+                                        className="mt-2 border-t border-black/5 pt-2"
+                                      >
+                                        <input
+                                          type="hidden"
+                                          name="loadId"
+                                          value={load.id}
+                                        />
+                                        <input
+                                          type="hidden"
+                                          name="returnDate"
+                                          value={selectedDate}
+                                        />
 
-                          {load.status === "planned" && (
-                            <details>
-                              <summary className="cursor-pointer list-none rounded-xl border border-black/10 px-4 py-2 text-xs font-semibold text-black/40">
-                                Cancel load
-                              </summary>
-                              <form action={cancelPlannedLoadAction} className="mt-3 flex max-w-xl gap-2">
-                                <input type="hidden" name="loadId" value={load.id} />
-                                <input type="hidden" name="returnDate" value={selectedDate} />
-                                <input
-                                  name="reason"
-                                  placeholder="Optional reason"
-                                  className="h-10 flex-1 rounded-xl border border-black/10 bg-white px-3 text-sm outline-none"
-                                />
-                                <button
-                                  type="submit"
-                                  className="rounded-xl bg-black px-4 text-xs font-semibold text-white"
-                                >
-                                  Cancel
-                                </button>
-                              </form>
-                            </details>
-                          )}
-                        </div>
-                      </div>
+                                        <input
+                                          name="reason"
+                                          required
+                                          minLength={3}
+                                          placeholder="Rejection reason"
+                                          className="h-9 w-full rounded-lg border border-red-200 bg-white px-2.5 text-xs outline-none"
+                                        />
+
+                                        <button
+                                          type="submit"
+                                          className="mt-1.5 h-9 w-full rounded-lg bg-red-600 px-3 text-xs font-semibold text-white"
+                                        >
+                                          Reject load
+                                        </button>
+                                      </form>
+                                    )}
+
+                                  {load.status === "planned" && (
+                                    <form
+                                      action={cancelPlannedLoadAction}
+                                      className="mt-2 border-t border-black/5 pt-2"
+                                    >
+                                      <input
+                                        type="hidden"
+                                        name="loadId"
+                                        value={load.id}
+                                      />
+                                      <input
+                                        type="hidden"
+                                        name="returnDate"
+                                        value={selectedDate}
+                                      />
+
+                                      <input
+                                        name="reason"
+                                        placeholder="Optional cancellation reason"
+                                        className="h-9 w-full rounded-lg border border-black/10 bg-white px-2.5 text-xs outline-none"
+                                      />
+
+                                      <button
+                                        type="submit"
+                                        className="mt-1.5 h-9 w-full rounded-lg border border-black/10 px-3 text-xs font-semibold text-black/50"
+                                      >
+                                        Cancel load
+                                      </button>
+                                    </form>
+                                  )}
+                                </div>
+                              </details>
+                            )}
+                          </div>
+                        </Td>
+                      </tr>
                     );
                   })}
-                </div>
-              </article>
-            ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
       </div>
@@ -752,44 +818,226 @@ export default async function DailyWorksheetPage({
   );
 }
 
+function PrimaryAction({
+  load,
+  returnDate,
+}: {
+  load: {
+    id: string;
+    direction: string;
+    status: string;
+  };
+  returnDate: string;
+}) {
+  if (load.direction === "incoming" && load.status === "planned") {
+    return (
+      <form action={markLoadArrivedAction}>
+        <input type="hidden" name="loadId" value={load.id} />
+        <input type="hidden" name="returnDate" value={returnDate} />
+        <button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-500">
+          Mark arrived
+        </button>
+      </form>
+    );
+  }
+
+  if (load.direction === "incoming" && load.status === "arrived") {
+    return (
+      <form action={acceptLoadAction}>
+        <input type="hidden" name="loadId" value={load.id} />
+        <input type="hidden" name="returnDate" value={returnDate} />
+        <button className="w-full rounded-lg bg-orange-500 px-3.5 py-2 text-xs font-bold text-black hover:bg-orange-400">
+          Accept
+        </button>
+      </form>
+    );
+  }
+
+  if (load.direction === "incoming" && load.status === "accepted") {
+    return (
+      <form action={completeIncomingLoadAction}>
+        <input type="hidden" name="loadId" value={load.id} />
+        <input type="hidden" name="returnDate" value={returnDate} />
+        <button className="w-full rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-500">
+          Complete
+        </button>
+      </form>
+    );
+  }
+
+  if (
+    load.direction === "outgoing" &&
+    load.status !== "completed" &&
+    load.status !== "rejected" &&
+    load.status !== "cancelled"
+  ) {
+    return (
+      <form action={completeOutgoingLoadAction}>
+        <input type="hidden" name="loadId" value={load.id} />
+        <input type="hidden" name="returnDate" value={returnDate} />
+        <button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-500">
+          Complete
+        </button>
+      </form>
+    );
+  }
+
+  if (load.status === "completed") {
+    return (
+      <span className="inline-flex w-full justify-center rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+        ✓ Done
+      </span>
+    );
+  }
+
+  if (load.status === "rejected") {
+    return (
+      <span className="inline-flex w-full justify-center rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+        Rejected
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex w-full justify-center rounded-lg bg-black/5 px-3 py-2 text-xs font-semibold text-black/40">
+      {formatStatus(load.status)}
+    </span>
+  );
+}
+
+function QuickWeightForm({
+  load,
+  returnDate,
+}: {
+  load: {
+    id: string;
+    driverId: string | null;
+    vehicleId: string | null;
+    wasteDescriptionSnapshot: string | null;
+    grossWeight: string | null;
+    tareWeight: string | null;
+    netWeight: string | null;
+    weightMetric: "Grams" | "Kilograms" | "Tonnes";
+    weightIsEstimate: boolean;
+    ticketNumber: string | null;
+    notes: string | null;
+  };
+  returnDate: string;
+}) {
+  return (
+    <form action={saveLoadDetailsAction} className="min-w-[220px]">
+      <input type="hidden" name="loadId" value={load.id} />
+      <input type="hidden" name="returnDate" value={returnDate} />
+      <input type="hidden" name="driverId" value={load.driverId ?? ""} />
+      <input type="hidden" name="vehicleId" value={load.vehicleId ?? ""} />
+      <input
+        type="hidden"
+        name="wasteDescription"
+        value={load.wasteDescriptionSnapshot ?? ""}
+      />
+      <input type="hidden" name="weightMetric" value={load.weightMetric} />
+      <input type="hidden" name="netWeight" value={load.netWeight ?? ""} />
+      <input type="hidden" name="ticketNumber" value={load.ticketNumber ?? ""} />
+      <input type="hidden" name="notes" value={load.notes ?? ""} />
+
+      {load.weightIsEstimate && (
+        <input type="hidden" name="weightIsEstimate" value="on" />
+      )}
+
+      <div className="grid grid-cols-[72px_72px_auto] items-end gap-1">
+        <label>
+          <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
+            Gross
+          </span>
+
+          <input
+            type="number"
+            min="0"
+            step="0.001"
+            name="grossWeight"
+            defaultValue={load.grossWeight ?? ""}
+            className="mt-1 h-8 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none focus:border-orange-400"
+          />
+        </label>
+
+        <label>
+          <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
+            Tare
+          </span>
+
+          <input
+            type="number"
+            min="0"
+            step="0.001"
+            name="tareWeight"
+            defaultValue={load.tareWeight ?? ""}
+            className="mt-1 h-8 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none focus:border-orange-400"
+          />
+        </label>
+
+        <button
+          type="submit"
+          className="h-8 rounded-lg border border-black/10 bg-black px-2.5 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black"
+        >
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function MetricCard({
   label,
   value,
-  detail,
-  highlighted = false,
+  highlight = false,
 }: {
   label: string;
-  value: number;
-  detail: string;
-  highlighted?: boolean;
+  value: number | string;
+  highlight?: boolean;
 }) {
   return (
     <div
-      className={`rounded-[24px] border p-5 shadow-sm ${
-        highlighted
+      className={`rounded-[20px] border px-4 py-3.5 shadow-sm ${
+        highlight
           ? "border-orange-200 bg-orange-50"
           : "border-black/10 bg-white"
       }`}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-black/35">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
         {label}
       </p>
-      <p className="mt-3 text-3xl font-semibold tracking-tight text-black">
-        {value}
-      </p>
-      <p className="mt-1 text-xs text-black/40">{detail}</p>
+      <p className="mt-1.5 text-2xl font-semibold text-black">{value}</p>
     </div>
   );
 }
 
-function SmallStat({ label, value }: { label: string; value: string }) {
+function Th({
+  children,
+  alignRight = false,
+}: {
+  children: React.ReactNode;
+  alignRight?: boolean;
+}) {
   return (
-    <div className="rounded-2xl border border-black/5 bg-[#fbfaf7] px-3 py-2.5">
-      <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-black/30">
-        {label}
-      </p>
-      <p className="mt-1 truncate text-xs font-semibold text-black/65">{value}</p>
-    </div>
+    <th
+      className={`px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35 ${
+        alignRight ? "text-right" : ""
+      }`}
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({ children }: { children: React.ReactNode }) {
+  return <td className="px-4 py-3.5">{children}</td>;
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-black/35">
+      {children}
+    </span>
   );
 }
 
@@ -804,16 +1052,14 @@ function WeightInput({
 }) {
   return (
     <label>
-      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">
-        {label} weight
-      </span>
+      <FieldLabel>{label}</FieldLabel>
       <input
         type="number"
         min="0"
         step="0.001"
         name={name}
         defaultValue={value ?? ""}
-        className="mt-2 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm outline-none focus:border-orange-400"
+        className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none focus:border-orange-400"
       />
     </label>
   );

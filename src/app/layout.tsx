@@ -76,10 +76,13 @@ export default function RootLayout({
 }: {
   children: ReactNode;
 }) {
+  const isDemoEnvironment =
+    process.env.NEXT_PUBLIC_APP_ENV === "demo";
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={cn("font-sans antialiased", fontSans.variable)}>
-        <DemoEnvironmentBanner />
+        {isDemoEnvironment && <DemoEnvironmentBanner />}
 
         <Providers>
           <ErrorProvider>

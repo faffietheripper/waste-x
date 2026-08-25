@@ -1,3 +1,6 @@
+
+
+
 // src/components/app/Navigation/SystemNav.tsx
 
 import { and, eq } from "drizzle-orm";
@@ -54,7 +57,6 @@ type NavItem = {
   label: string;
   href: string;
   show?: boolean;
-  variant?: "default" | "primary";
 };
 
 type NavSection = {
@@ -78,9 +80,6 @@ type OrganisationNavigationContext = {
 
 const navItem =
   "group flex items-center justify-between rounded-2xl border border-transparent px-4 py-3 text-sm font-medium text-black/55 transition hover:border-orange-200 hover:bg-white hover:text-black hover:shadow-sm";
-
-const primaryNavItem =
-  "group flex items-center justify-between rounded-2xl border border-orange-300 bg-orange-500 px-4 py-3 text-sm font-semibold text-black shadow-sm transition hover:border-orange-400 hover:bg-orange-400 hover:shadow-md";
 
 const navSectionLabel =
   "px-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/30";
@@ -407,31 +406,21 @@ function NavigationSections({
             </p>
 
             <div className="space-y-1">
-              {visibleItems.map((item) => {
-                const isPrimary = item.variant === "primary";
+              {visibleItems.map((item) => (
+                <Link
+                  key={`${section.label}-${item.href}-${item.label}`}
+                  href={item.href}
+                  className={navItem}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {item.label}
+                  </span>
 
-                return (
-                  <Link
-                    key={`${section.label}-${item.href}-${item.label}`}
-                    href={item.href}
-                    className={isPrimary ? primaryNavItem : navItem}
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {item.label}
-                    </span>
-
-                    <span
-                      className={
-                        isPrimary
-                          ? "text-black/50 transition group-hover:translate-x-0.5 group-hover:text-black"
-                          : "text-black/15 transition group-hover:translate-x-0.5 group-hover:text-orange-500"
-                      }
-                    >
-                      <ArrowIcon />
-                    </span>
-                  </Link>
-                );
-              })}
+                  <span className="text-black/15 transition group-hover:translate-x-0.5 group-hover:text-orange-500">
+                    <ArrowIcon />
+                  </span>
+                </Link>
+              ))}
             </div>
           </section>
         );
@@ -439,10 +428,6 @@ function NavigationSections({
     </nav>
   );
 }
-
-/* =========================================================
-   SOLO MVP NAVIGATION
-========================================================= */
 
 /* =========================================================
    SOLO MVP NAVIGATION
@@ -480,29 +465,18 @@ function SoloOperationalNav({
       label: "Operations",
       items: [
         {
-          label: "+ Book a Job",
-          href: "/home/jobs/new",
-          show: can("jobs:create"),
-          variant: "primary",
-        },
-        {
           label: "Jobs",
           href: "/home/jobs",
-          show: can("jobs:view"),
+          show: canAny(["jobs:view", "jobs:create"]),
         },
         {
-          label: "Daily Worksheet",
+          label: "Daily Operations",
           href: "/home/worksheet",
           show: can("worksheet:view"),
         },
         {
-          label: "Incoming",
-          href: "/home/movements/incoming",
-          show: can("worksheet:view"),
-        },
-        {
-          label: "Outgoing",
-          href: "/home/movements/outgoing",
+          label: "Movements",
+          href: "/home/movements",
           show: can("worksheet:view"),
         },
       ],
