@@ -83,6 +83,52 @@ function formatTime(value: Date | null | undefined) {
   }).format(value);
 }
 
+type WeightMetric = "Grams" | "Kilograms" | "Tonnes";
+
+function vehicleTareForMetric(
+  tareWeightKg: string | null | undefined,
+  metric: WeightMetric,
+) {
+  if (tareWeightKg === null || tareWeightKg === undefined) {
+    return null;
+  }
+
+  const kilograms = Number(tareWeightKg);
+
+  if (!Number.isFinite(kilograms) || kilograms < 0) {
+    return null;
+  }
+
+  if (metric === "Grams") {
+    return Number((kilograms * 1000).toFixed(3)).toString();
+  }
+
+  if (metric === "Tonnes") {
+    return Number((kilograms / 1000).toFixed(3)).toString();
+  }
+
+  return Number(kilograms.toFixed(3)).toString();
+}
+
+function weightUnit(metric: WeightMetric) {
+  if (metric === "Grams") return "g";
+  if (metric === "Tonnes") return "t";
+  return "kg";
+}
+
+function formatWeight(value: string | number) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return String(value);
+  }
+
+  return new Intl.NumberFormat("en-GB", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  }).format(numeric);
+}
+
 function formatStatus(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -852,11 +898,46 @@ export default async function DailyOperationsPage({
                                         name="grossWeight"
                                         value={load.grossWeight}
                                       />
-                                      <WeightInput
-                                        label="Tare"
-                                        name="tareWeight"
-                                        value={load.tareWeight}
-                                      />
+
+                                      {load.vehicle?.tareWeightKg !== null &&
+                                      load.vehicle?.tareWeightKg !== undefined ? (
+                                        <label>
+                                          <FieldLabel>Tare</FieldLabel>
+                                          <input
+                                            type="hidden"
+                                            name="tareWeight"
+                                            value={
+                                              load.tareWeight ??
+                                              vehicleTareForMetric(
+                                                load.vehicle.tareWeightKg,
+                                                load.weightMetric,
+                                              ) ??
+                                              ""
+                                            }
+                                          />
+                                          <div className="mt-1 flex h-9 w-full items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2 text-xs font-semibold text-emerald-800">
+                                            {formatWeight(
+                                              load.tareWeight ??
+                                                vehicleTareForMetric(
+                                                  load.vehicle.tareWeightKg,
+                                                  load.weightMetric,
+                                                ) ??
+                                                "0",
+                                            )}{" "}
+                                            {weightUnit(load.weightMetric)}
+                                          </div>
+                                          <p className="mt-1 text-[8px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                                            Stored vehicle tare
+                                          </p>
+                                        </label>
+                                      ) : (
+                                        <WeightInput
+                                          label="Tare"
+                                          name="tareWeight"
+                                          value={load.tareWeight}
+                                        />
+                                      )}
+
                                       <WeightInput
                                         label="Net"
                                         name="netWeight"
@@ -1127,15 +1208,38 @@ function QuickWeightForm({
     grossWeight: string | null;
     tareWeight: string | null;
     netWeight: string | null;
-    weightMetric: "Grams" | "Kilograms" | "Tonnes";
+    weightMetric: WeightMetric;
     weightIsEstimate: boolean;
     ticketNumber: string | null;
     notes: string | null;
+    vehicle: {
+      tareWeightKg: string | null;
+    } | null;
   };
   returnDate: string;
 }) {
+  /*
+    Vehicle master tare is stored in kilograms.
+
+    If this load already has a tare snapshot, keep using that historical value.
+    Otherwise use the vehicle's stored tare automatically.
+
+    When the vehicle has no stored tare, the operator can enter tare manually
+    for this load.
+  */
+  const storedVehicleTare = vehicleTareForMetric(
+    load.vehicle?.tareWeightKg,
+    load.weightMetric,
+  );
+
+  const effectiveTare = load.tareWeight ?? storedVehicleTare;
+  const hasStoredVehicleTare =
+    load.vehicle?.tareWeightKg !== null &&
+    load.vehicle?.tareWeightKg !== undefined &&
+    storedVehicleTare !== null;
+
   return (
-    <form action={saveLoadDetailsAction} className="min-w-[220px]">
+    <form action={saveLoadDetailsAction} className="min-w-[250px]">
       <input type="hidden" name="loadId" value={load.id} />
       <input type="hidden" name="returnDate" value={returnDate} />
       <input type="hidden" name="driverId" value={load.driverId ?? ""} />
@@ -1154,44 +1258,97 @@ function QuickWeightForm({
         <input type="hidden" name="weightIsEstimate" value="on" />
       )}
 
-      <div className="grid grid-cols-[72px_72px_auto] items-end gap-1">
-        <label>
-          <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
-            Gross
-          </span>
+      {hasStoredVehicleTare && effectiveTare !== null ? (
+        <>
+          <input type="hidden" name="tareWeight" value={effectiveTare} />
 
-          <input
-            type="number"
-            min="0"
-            step="0.001"
-            name="grossWeight"
-            defaultValue={load.grossWeight ?? ""}
-            className="mt-1 h-8 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none focus:border-orange-400"
-          />
-        </label>
+          <div className="grid grid-cols-[82px_108px_auto] items-end gap-1.5">
+            <label>
+              <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
+                Gross
+              </span>
 
-        <label>
-          <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
-            Tare
-          </span>
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                name="grossWeight"
+                defaultValue={load.grossWeight ?? ""}
+                placeholder="0"
+                className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs font-semibold outline-none focus:border-orange-400"
+              />
+            </label>
 
-          <input
-            type="number"
-            min="0"
-            step="0.001"
-            name="tareWeight"
-            defaultValue={load.tareWeight ?? ""}
-            className="mt-1 h-8 w-full rounded-lg border border-black/10 bg-white px-2 text-xs outline-none focus:border-orange-400"
-          />
-        </label>
+            <div>
+              <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
+                Tare
+              </span>
 
-        <button
-          type="submit"
-          className="h-8 rounded-lg border border-black/10 bg-black px-2.5 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black"
-        >
-          Save
-        </button>
-      </div>
+              <div className="mt-1 flex h-9 items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2">
+                <span className="truncate text-xs font-semibold text-emerald-800">
+                  {formatWeight(effectiveTare)} {weightUnit(load.weightMetric)}
+                </span>
+              </div>
+
+              <p className="mt-1 text-[8px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                Vehicle tare
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              className="h-9 rounded-lg border border-black/10 bg-black px-3 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black"
+            >
+              Save
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="grid grid-cols-[82px_82px_auto] items-end gap-1.5">
+          <label>
+            <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
+              Gross
+            </span>
+
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              name="grossWeight"
+              defaultValue={load.grossWeight ?? ""}
+              placeholder="0"
+              className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs font-semibold outline-none focus:border-orange-400"
+            />
+          </label>
+
+          <label>
+            <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/30">
+              Tare
+            </span>
+
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              name="tareWeight"
+              defaultValue={load.tareWeight ?? ""}
+              placeholder="0"
+              className="mt-1 h-9 w-full rounded-lg border border-orange-200 bg-orange-50 px-2 text-xs font-semibold outline-none focus:border-orange-400"
+            />
+
+            <p className="mt-1 text-[8px] font-medium text-orange-700">
+              Enter tare
+            </p>
+          </label>
+
+          <button
+            type="submit"
+            className="h-9 rounded-lg border border-black/10 bg-black px-3 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black"
+          >
+            Save
+          </button>
+        </div>
+      )}
     </form>
   );
 }
