@@ -1,4 +1,5 @@
 "use client";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -155,7 +156,22 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
   const [driverId, setDriverId] = useState(initialDriver?.id ?? "");
   const [vehicleId, setVehicleId] = useState(initialVehicle?.id ?? "");
   const [materialProfileId, setMaterialProfileId] = useState(initialMaterialProfileId);
-  const [rateMode, setRateMode] = useState<"auto" | "none">("auto");
+  const [customerChargeDescription, setCustomerChargeDescription] =
+    useState("Waste acceptance / disposal");
+  const [customerChargeAmount, setCustomerChargeAmount] = useState("");
+  const [customerChargeUnit, setCustomerChargeUnit] =
+    useState<"tonne" | "load" | "job">("tonne");
+  const [customerVatRate, setCustomerVatRate] = useState("20.00");
+
+  const [haulageCostAmount, setHaulageCostAmount] = useState("");
+  const [haulageCostUnit, setHaulageCostUnit] =
+    useState<"tonne" | "load" | "job">("load");
+
+  const [tippingCostAmount, setTippingCostAmount] = useState("");
+  const [tippingCostUnit, setTippingCostUnit] =
+    useState<"tonne" | "load" | "job">("tonne");
+
+  const [pricingSourceRateId, setPricingSourceRateId] = useState("");
 
   const clientSites = clientSiteOptions.filter(
     (site) => site.counterpartyId === clientId,
@@ -198,20 +214,17 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
     ? new Date(`${jobDate}T12:00:00.000Z`)
     : new Date();
 
-  const customerRate =
-    rateMode === "auto"
-      ? matchCommercialRate(data.rates, {
-          rateType: "customer_charge",
-          counterpartyId: clientId || null,
-          counterpartySiteId: clientSiteId || null,
-          ownSiteId: data.receivingSite.id,
-          materialProfileId: materialProfileId || null,
-          at: rateDate,
-        })
-      : null;
+  const customerRate = matchCommercialRate(data.rates, {
+    rateType: "customer_charge",
+    counterpartyId: clientId || null,
+    counterpartySiteId: clientSiteId || null,
+    ownSiteId: data.receivingSite.id,
+    materialProfileId: materialProfileId || null,
+    at: rateDate,
+  });
 
   const haulageRate =
-    rateMode === "auto" && transportMode === "external" && haulierId
+    transportMode === "external" && haulierId
       ? matchCommercialRate(data.rates, {
           rateType: "haulage_cost",
           counterpartyId: haulierId,
@@ -221,6 +234,26 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
           at: rateDate,
         })
       : null;
+
+  function useStoredPricingSuggestions() {
+    if (customerRate) {
+      setCustomerChargeAmount(customerRate.amount);
+      setCustomerChargeUnit(customerRate.unit);
+      setPricingSourceRateId(customerRate.id);
+    }
+
+    if (haulageRate) {
+      setHaulageCostAmount(haulageRate.amount);
+      setHaulageCostUnit(haulageRate.unit);
+    }
+  }
+
+  function clearJobPricing() {
+    setCustomerChargeAmount("");
+    setHaulageCostAmount("");
+    setTippingCostAmount("");
+    setPricingSourceRateId("");
+  }
 
   function changeClient(nextClientId: string) {
     setClientId(nextClientId);
@@ -748,43 +781,212 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
             </div>
           </Card>
 
-          <Card title="Commercial" eyebrow="5 · Pricing">
-            <Field label="Stored rates">
-              <select
-                name="rateMode"
-                value={rateMode}
-                onChange={(event) =>
-                  setRateMode(event.target.value === "none" ? "none" : "auto")
-                }
-                className={inputClass}
-              >
-                <option value="auto">Automatically match the best stored rates</option>
-                <option value="none">Book without stored rates</option>
-              </select>
-            </Field>
+          <Card title="Job-specific pricing" eyebrow="5 · Commercial">
+            <input
+              type="hidden"
+              name="pricingSourceRateId"
+              value={pricingSourceRateId}
+            />
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <RatePreview
-                label="Customer charge"
-                rate={customerRate}
-                empty="No matching customer rate"
-              />
-              <RatePreview
-                label="Haulage cost"
-                rate={haulageRate}
-                empty={
-                  !transportMode
-                    ? "Choose transport first"
-                    : transportMode === "own"
-                      ? "Own transport · no external haulage cost"
-                      : "No matching haulage rate"
-                }
-              />
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-700">
+                This Job is the pricing authority
+              </p>
+              <p className="mt-2 text-sm leading-6 text-orange-950/70">
+                Enter what was agreed for this Job. The next Job can have a completely
+                different price. The Rate Library is optional and only supplies suggestions.
+              </p>
             </div>
 
-            <p className="mt-3 text-xs leading-5 text-black/45">
-              Rates are optional. Waste X snapshots the matched commercial values onto
-              each planned load so later price-book changes do not rewrite old work.
+            <div className="mt-5 grid gap-4 md:grid-cols-[1.35fr_0.55fr_0.55fr_0.45fr]">
+              <Field label="Customer charge description">
+                <input
+                  name="customerChargeDescription"
+                  value={customerChargeDescription}
+                  onChange={(event) =>
+                    setCustomerChargeDescription(event.target.value)
+                  }
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field label="Customer price £">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  name="customerChargeAmount"
+                  value={customerChargeAmount}
+                  onChange={(event) => {
+                    setCustomerChargeAmount(event.target.value);
+                    setPricingSourceRateId("");
+                  }}
+                  placeholder="e.g. 52.00"
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field label="Unit">
+                <select
+                  name="customerChargeUnit"
+                  value={customerChargeUnit}
+                  onChange={(event) =>
+                    setCustomerChargeUnit(
+                      event.target.value as "tonne" | "load" | "job",
+                    )
+                  }
+                  className={inputClass}
+                >
+                  <option value="tonne">Per tonne</option>
+                  <option value="load">Per load</option>
+                  <option value="job">Per Job</option>
+                </select>
+              </Field>
+
+              <Field label="VAT %">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  name="customerVatRate"
+                  value={customerVatRate}
+                  onChange={(event) => setCustomerVatRate(event.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="grid grid-cols-[1fr_135px] gap-3 rounded-2xl border border-black/10 bg-[#faf8f4] p-4">
+                <Field label="Haulage cost £">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    name="haulageCostAmount"
+                    value={haulageCostAmount}
+                    onChange={(event) => setHaulageCostAmount(event.target.value)}
+                    placeholder={
+                      transportMode === "own"
+                        ? "Optional internal/direct cost"
+                        : "Optional"
+                    }
+                    className={inputClass}
+                  />
+                </Field>
+
+                <Field label="Unit">
+                  <select
+                    name="haulageCostUnit"
+                    value={haulageCostUnit}
+                    onChange={(event) =>
+                      setHaulageCostUnit(
+                        event.target.value as "tonne" | "load" | "job",
+                      )
+                    }
+                    className={inputClass}
+                  >
+                    <option value="tonne">/ tonne</option>
+                    <option value="load">/ load</option>
+                    <option value="job">/ Job</option>
+                  </select>
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-[1fr_135px] gap-3 rounded-2xl border border-black/10 bg-[#faf8f4] p-4">
+                <Field label="Other / tipping cost £">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    name="tippingCostAmount"
+                    value={tippingCostAmount}
+                    onChange={(event) => setTippingCostAmount(event.target.value)}
+                    placeholder="Optional direct cost"
+                    className={inputClass}
+                  />
+                </Field>
+
+                <Field label="Unit">
+                  <select
+                    name="tippingCostUnit"
+                    value={tippingCostUnit}
+                    onChange={(event) =>
+                      setTippingCostUnit(
+                        event.target.value as "tonne" | "load" | "job",
+                      )
+                    }
+                    className={inputClass}
+                  >
+                    <option value="tonne">/ tonne</option>
+                    <option value="load">/ load</option>
+                    <option value="job">/ Job</option>
+                  </select>
+                </Field>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-black/10 bg-white p-4">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-black/35">
+                    Optional Rate Library suggestions
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-black/45">
+                    Nothing is applied automatically. Use a suggestion, then edit it if
+                    this Job was agreed differently.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={useStoredPricingSuggestions}
+                    disabled={!customerRate && !haulageRate}
+                    className="rounded-xl bg-black px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-orange-500 hover:text-black disabled:cursor-not-allowed disabled:bg-black/10 disabled:text-black/30"
+                  >
+                    Use available suggestions
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={clearJobPricing}
+                    className="rounded-xl border border-black/10 px-4 py-2.5 text-xs font-semibold text-black/55"
+                  >
+                    Clear pricing
+                  </button>
+
+                  <QuickLink href="/home/rates">
+                    Rate Library / history
+                  </QuickLink>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <RatePreview
+                  label="Suggested customer charge"
+                  rate={customerRate}
+                  empty="No matching stored suggestion"
+                />
+                <RatePreview
+                  label="Suggested haulage cost"
+                  rate={haulageRate}
+                  empty={
+                    !transportMode
+                      ? "Choose transport first"
+                      : transportMode === "own"
+                        ? "No external-haulier suggestion needed"
+                        : "No matching stored suggestion"
+                  }
+                />
+              </div>
+            </div>
+
+            <p className="mt-4 text-xs leading-5 text-black/45">
+              Pricing is optional at booking, but when entered it is saved as
+              Job-specific commercial terms. Waste X also mirrors the core values onto
+              planned Loads for compatibility with existing operational exports.
             </p>
           </Card>
 
@@ -858,7 +1060,7 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
             <div className="mt-4 space-y-3 text-sm text-black/65">
               <p>1. Creates the booked Job.</p>
               <p>2. Creates the planned Load records.</p>
-              <p>3. Snapshots material + commercial defaults onto each load.</p>
+              <p>3. Saves this Job's commercial terms and mirrors core values onto each planned Load.</p>
               <p>4. Keeps DWT creation for the actual receipt stage.</p>
             </div>
           </section>
@@ -906,8 +1108,8 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
             </div>
 
             <div className="mt-4 border-t border-black/5 pt-4 text-xs leading-5 text-black/45">
-              Driver, vehicle and stored pricing remain optional at booking time. They do
-              not block the job from being planned.
+              Driver, vehicle and Job pricing remain optional at booking time. Stored
+              Rate Library values are suggestions only and are never applied silently.
             </div>
           </section>
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 import { redirect } from "next/navigation";
 import { and, asc, eq } from "drizzle-orm";
 
@@ -118,6 +119,7 @@ export default async function NewOutgoingMovementPage({
         ),
         columns: {
           id: true,
+          counterpartyId: true,
           name: true,
           postcode: true,
         },
@@ -261,6 +263,7 @@ export default async function NewOutgoingMovementPage({
 
       return {
         id: site.id,
+        counterpartyId: site.counterpartyId,
         name: site.name,
         operatorName: site.counterparty?.name ?? "External operator",
         postcode: site.postcode,
@@ -284,6 +287,27 @@ export default async function NewOutgoingMovementPage({
       ewcCode: material.ewcCode?.code ?? "—",
       description: material.wasteDescription,
     }));
+
+  const rateRows = await database.query.rates.findMany({
+    where: (rate, { and: rateAnd, eq: rateEq }) =>
+      rateAnd(
+        rateEq(rate.organisationId, organisationId),
+        rateEq(rate.isActive, true),
+      ),
+    columns: {
+      id: true,
+      rateType: true,
+      unit: true,
+      amount: true,
+      currency: true,
+      counterpartyId: true,
+      counterpartySiteId: true,
+      ownSiteId: true,
+      materialProfileId: true,
+      effectiveFrom: true,
+      effectiveTo: true,
+    },
+  });
 
   const error = firstParam(searchParams?.error);
 
@@ -328,6 +352,7 @@ export default async function NewOutgoingMovementPage({
           </section>
         ) : (
           <OutgoingBookingForm
+            ownSiteId={ownSite.id}
             ownSiteName={ownSite.name}
             today={todayInLondon()}
             facilities={facilities}
@@ -335,6 +360,11 @@ export default async function NewOutgoingMovementPage({
             hauliers={haulierRows}
             drivers={driverRows}
             vehicles={vehicleRows}
+            rates={rateRows.map((rate) => ({
+              ...rate,
+              effectiveFrom: rate.effectiveFrom?.toISOString() ?? null,
+              effectiveTo: rate.effectiveTo?.toISOString() ?? null,
+            }))}
           />
         )}
       </div>

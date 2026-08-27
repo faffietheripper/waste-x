@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -126,7 +127,12 @@ export async function createTemplateFromJobAction(formData: FormData) {
     driverId: sourceJob.driverId,
     vehicleId: sourceJob.vehicleId,
     materialProfileId: sourceJob.materialProfileId,
-    rateId: sourceJob.rateId,
+    /*
+      Templates reuse operational setup, not commercial authority. The next
+      Job opens with its own pricing fields and may optionally use the Rate
+      Library as a suggestion.
+    */
+    rateId: null,
     plannedLoads: sourceJob.plannedLoads,
     defaultCustomerReference: sourceJob.customerReference,
     notes: sourceJob.notes,

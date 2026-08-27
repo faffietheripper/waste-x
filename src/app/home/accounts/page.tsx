@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import {
   commercialDateRangeToQuery,
@@ -120,12 +121,19 @@ export default async function AccountsPage({
                 Billing & Exports
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Turn completed operational work into invoice-ready information
-                without trying to turn Waste X into an accounting package.
+                Review completed operational value using each Job's commercial
+                terms. Native Waste X customer invoices live in Commercial & Invoicing;
+                this page remains useful for exports and legacy billing-reference workflows.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-3">
+              <Link
+                href="/home/commercial"
+                className="rounded-2xl border border-orange-400/50 bg-orange-500/10 px-5 py-3 text-sm font-semibold text-orange-300 transition hover:bg-orange-500 hover:text-black"
+              >
+                Commercial & Invoicing
+              </Link>
               <Link
                 href={`/home/accounts/export/csv?from=${query.from}&to=${query.to}`}
                 className="rounded-2xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white hover:text-black"
@@ -280,7 +288,9 @@ export default async function AccountsPage({
               </p>
               <h3 className="mt-2 text-lg font-semibold">Operational commercial view</h3>
               <p className="mt-3 text-sm leading-6 text-orange-900/70">
-                Revenue is calculated from customer-charge snapshots on completed loads. Direct cost currently means recorded haulage and tipping cost only.
+                Revenue and direct cost now come from Job-specific commercial
+                lines first. Legacy Load snapshots are used only as a compatibility
+                fallback for older Jobs that have not yet been confirmed at Job level.
               </p>
               <p className="mt-3 text-sm leading-6 text-orange-900/70">
                 It is deliberately not a statutory profit-and-loss account: VAT, tax, payroll, overheads, depreciation and unrecorded internal fleet costs are outside this MVP.

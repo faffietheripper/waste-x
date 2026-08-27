@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -19,11 +20,17 @@ import {
   jobs,
   materialProfiles,
   permitEwcCodes,
+  rates,
   sitePermits,
   sites,
   users,
   vehicles,
 } from "@/db/schema";
+import { jobCommercialLines } from "@/db/commercial-schema";
+import {
+  bookingCommercialLines,
+  parseOutgoingBookingPricing,
+} from "@/modules/commercial/bookingPricing";
 
 async function requireOperationsAccess() {
   const session = await auth();
@@ -121,6 +128,10 @@ export async function createOutgoingJobAction(formData: FormData) {
   const purchaseOrder = optionalString(formData.get("purchaseOrder"));
   const customerReference = optionalString(formData.get("customerReference"));
   const notes = optionalString(formData.get("notes"));
+
+  const pricingResult = parseOutgoingBookingPricing(formData);
+  if (!pricingResult.ok) fail(pricingResult.error);
+  const pricing = pricingResult.data;
 
   if (!jobDate) fail("invalid_job_date");
   if (!destinationSiteId) fail("destination_required");
@@ -314,6 +325,20 @@ export async function createOutgoingJobAction(formData: FormData) {
 
   if (!facilityPermitMatch) fail("destination_not_permitted_for_material");
 
+  const sourceRate =
+    pricing.sourceRateId
+      ? await database.query.rates.findFirst({
+          where: and(
+            eq(rates.id, pricing.sourceRateId),
+            eq(rates.organisationId, organisationId),
+            eq(rates.isActive, true),
+          ),
+          columns: {
+            id: true,
+          },
+        })
+      : null;
+
   const jobId = crypto.randomUUID();
   const jobNumber = await generateJobNumber(organisationId, jobDate);
   const now = new Date();
@@ -339,7 +364,11 @@ export async function createOutgoingJobAction(formData: FormData) {
       plannedLoads,
       purchaseOrder,
       customerReference,
-      rateId: null,
+      /*
+        Optional legacy/reference pointer only. Job commercial lines below are
+        the actual agreed terms.
+      */
+      rateId: sourceRate?.id ?? null,
       notes,
       createdByUserId: userId,
       createdAt: now,
@@ -383,17 +412,54 @@ export async function createOutgoingJobAction(formData: FormData) {
         weightSource: "manual" as const,
         purchaseOrder,
         customerReference,
+        /*
+          Compatibility snapshots. The authoritative pricing is the Job-level
+          commercial lines inserted below.
+        */
+        customerChargeAmount: pricing.primaryRevenue?.amount ?? null,
+        customerChargeUnit: pricing.primaryRevenue?.unit ?? null,
+        haulageCostAmount: pricing.haulageCost?.amount ?? null,
+        haulageCostUnit: pricing.haulageCost?.unit ?? null,
+        tippingCostAmount: pricing.tippingCost?.amount ?? null,
+        tippingCostUnit: pricing.tippingCost?.unit ?? null,
         currency: "GBP",
         createdByUserId: userId,
         createdAt: now,
         updatedAt: now,
       })),
     );
+
+    const commercialLines = bookingCommercialLines(pricing);
+
+    if (commercialLines.length > 0) {
+      await tx.insert(jobCommercialLines).values(
+        commercialLines.map((line) => ({
+          organisationId,
+          jobId,
+          kind: line.kind,
+          category: line.category,
+          description: line.description,
+          amount: line.amount,
+          unit: line.unit,
+          currency: "GBP",
+          vatRate: line.vatRate,
+          sortOrder: line.sortOrder,
+          isActive: true,
+          createdByUserId: userId,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      );
+    }
   });
 
   revalidatePath("/home/jobs");
   revalidatePath("/home/worksheet");
   revalidatePath("/home/movements/outgoing");
+
+  revalidatePath("/home/commercial");
+  revalidatePath("/home/accounts");
+  revalidatePath("/home/reports");
 
   const date = jobDate.toISOString().slice(0, 10);
   redirect(`/home/worksheet?date=${date}&success=outgoing_job_booked`);

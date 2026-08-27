@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -24,9 +25,11 @@ import {
   users,
   vehicles,
 } from "@/db/schema";
-
-import { matchCommercialRate } from "./lib/matchCommercialRate";
-import type { BookJobRate } from "./lib/types";
+import { jobCommercialLines } from "@/db/commercial-schema";
+import {
+  bookingCommercialLines,
+  parseIncomingBookingPricing,
+} from "@/modules/commercial/bookingPricing";
 
 type BookingContext = {
   userId: string;
@@ -151,36 +154,6 @@ async function generateJobNumber(organisationId: string, jobDate: Date) {
   throw new Error("Unable to generate a unique job number.");
 }
 
-async function getCurrentRates(organisationId: string): Promise<BookJobRate[]> {
-  const rows = await database
-    .select({
-      id: rates.id,
-      rateType: rates.rateType,
-      unit: rates.unit,
-      amount: rates.amount,
-      currency: rates.currency,
-      counterpartyId: rates.counterpartyId,
-      counterpartySiteId: rates.counterpartySiteId,
-      ownSiteId: rates.ownSiteId,
-      materialProfileId: rates.materialProfileId,
-      effectiveFrom: rates.effectiveFrom,
-      effectiveTo: rates.effectiveTo,
-    })
-    .from(rates)
-    .where(
-      and(
-        eq(rates.organisationId, organisationId),
-        eq(rates.isActive, true),
-      ),
-    );
-
-  return rows.map((rate) => ({
-    ...rate,
-    effectiveFrom: rate.effectiveFrom?.toISOString() ?? null,
-    effectiveTo: rate.effectiveTo?.toISOString() ?? null,
-  }));
-}
-
 export async function createJobAction(formData: FormData) {
   const { userId, organisationId } = await requireBookJobAccess();
 
@@ -196,7 +169,10 @@ export async function createJobAction(formData: FormData) {
   const purchaseOrder = optionalString(formData.get("purchaseOrder"));
   const customerReference = optionalString(formData.get("customerReference"));
   const notes = optionalString(formData.get("notes"));
-  const useStoredRate = cleanString(formData.get("rateMode")) !== "none";
+
+  const pricingResult = parseIncomingBookingPricing(formData);
+  if (!pricingResult.ok) bookingError(pricingResult.error);
+  const pricing = pricingResult.data;
 
   const requestedSource = cleanString(formData.get("source"));
   const source =
@@ -458,30 +434,17 @@ export async function createJobAction(formData: FormData) {
 
   if (!permitMatch) bookingError("material_not_permitted_at_receiving_site");
 
-  const activeRates = useStoredRate
-    ? await getCurrentRates(organisationId)
-    : [];
-
-  const customerRate = useStoredRate
-    ? matchCommercialRate(activeRates, {
-        rateType: "customer_charge",
-        counterpartyId: clientId,
-        counterpartySiteId: clientSiteId,
-        ownSiteId: receivingSite.id,
-        materialProfileId,
-        at: jobDate,
-      })
-    : null;
-
-  const haulageRate =
-    useStoredRate && transportMode === "external" && resolvedHaulierId
-      ? matchCommercialRate(activeRates, {
-          rateType: "haulage_cost",
-          counterpartyId: resolvedHaulierId,
-          counterpartySiteId: null,
-          ownSiteId: receivingSite.id,
-          materialProfileId,
-          at: jobDate,
+  const sourceRate =
+    pricing.sourceRateId
+      ? await database.query.rates.findFirst({
+          where: and(
+            eq(rates.id, pricing.sourceRateId),
+            eq(rates.organisationId, organisationId),
+            eq(rates.isActive, true),
+          ),
+          columns: {
+            id: true,
+          },
         })
       : null;
 
@@ -509,7 +472,11 @@ export async function createJobAction(formData: FormData) {
       plannedLoads,
       purchaseOrder,
       customerReference,
-      rateId: customerRate?.id ?? null,
+      /*
+        Legacy/reference pointer only. The actual commercial truth is stored in
+        bb_job_commercial_line below.
+      */
+      rateId: sourceRate?.id ?? null,
       notes,
       sourceTemplateId,
       createdByUserId: userId,
@@ -552,18 +519,41 @@ export async function createJobAction(formData: FormData) {
       weightSource: "manual" as const,
       purchaseOrder,
       customerReference,
-      customerChargeAmount: customerRate?.amount ?? null,
-      customerChargeUnit: customerRate?.unit ?? null,
-      haulageCostAmount: haulageRate?.amount ?? null,
-      haulageCostUnit: haulageRate?.unit ?? null,
-      tippingCostAmount: null,
-      tippingCostUnit: null,
-      currency: customerRate?.currency ?? haulageRate?.currency ?? "GBP",
+      customerChargeAmount: pricing.primaryRevenue?.amount ?? null,
+      customerChargeUnit: pricing.primaryRevenue?.unit ?? null,
+      haulageCostAmount: pricing.haulageCost?.amount ?? null,
+      haulageCostUnit: pricing.haulageCost?.unit ?? null,
+      tippingCostAmount: pricing.tippingCost?.amount ?? null,
+      tippingCostUnit: pricing.tippingCost?.unit ?? null,
+      currency: "GBP",
       createdByUserId: userId,
       updatedAt: new Date(),
     }));
 
     await tx.insert(jobLoads).values(loadRows);
+
+    const commercialLines = bookingCommercialLines(pricing);
+
+    if (commercialLines.length > 0) {
+      await tx.insert(jobCommercialLines).values(
+        commercialLines.map((line) => ({
+          organisationId,
+          jobId,
+          kind: line.kind,
+          category: line.category,
+          description: line.description,
+          amount: line.amount,
+          unit: line.unit,
+          currency: "GBP",
+          vatRate: line.vatRate,
+          sortOrder: line.sortOrder,
+          isActive: true,
+          createdByUserId: userId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })),
+      );
+    }
 
     if (sourceTemplateId) {
       await tx
@@ -584,6 +574,10 @@ export async function createJobAction(formData: FormData) {
   revalidatePath("/home/jobs");
   revalidatePath("/home/worksheet");
   revalidatePath("/home/settings/data-readiness");
+
+  revalidatePath("/home/commercial");
+  revalidatePath("/home/accounts");
+  revalidatePath("/home/reports");
 
   redirect(`/home/jobs/${jobId}?success=booked`);
 }

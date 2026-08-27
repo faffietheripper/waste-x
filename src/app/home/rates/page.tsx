@@ -1,4 +1,5 @@
 // src/app/home/rates/page.tsx
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -200,11 +201,11 @@ export default async function RatesPage({
               <p className="text-xs font-semibold uppercase tracking-[0.28em] text-orange-400">
                 Business Data
               </p>
-              <h1 className="mt-3 text-4xl font-semibold tracking-tight">Rates</h1>
+              <h1 className="mt-3 text-4xl font-semibold tracking-tight">Rate Library</h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-white/55">
-                Store customer charges, haulage costs, external facility costs
-                and sale rates once. Jobs can reuse the right commercial rule
-                instead of staff typing prices from memory.
+                Keep useful customer, haulage, facility and material-sale prices
+                as history and booking suggestions. Every Job can still have its own
+                custom commercial terms, and the Job always wins.
               </p>
             </div>
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 import type { ReactNode } from "react";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 
@@ -235,7 +236,8 @@ export default async function CommercialPage({
   const invoiceReady = unbilledCompletedJobs
     .map(mapCommercialJob)
     .filter(
-      ({ summary, activeInvoice }) =>
+      ({ job, summary, activeInvoice }) =>
+        Boolean(job.clientCounterpartyId) &&
         summary.hasRevenue &&
         !summary.missingQuantity &&
         !activeInvoice,
@@ -388,7 +390,13 @@ export default async function CommercialPage({
 
           <div className="divide-y divide-black/5">
             {commercialJobs.map(({ job, lines, summary, activeInvoice }) => {
-              const customerLine = lines.find((line) => line.category === "customer_charge");
+              const revenueCategory =
+                job.direction === "outgoing"
+                  ? "material_sale"
+                  : "customer_charge";
+              const revenueLine = lines.find(
+                (line) => line.category === revenueCategory,
+              );
               const haulageCostLine = lines.find((line) => line.category === "haulage_cost");
               const tippingCostLine = lines.find((line) => line.category === "tipping_cost");
               const legacyLoad = job.loads.find(
@@ -464,25 +472,42 @@ export default async function CommercialPage({
                           <input type="hidden" name="jobId" value={job.id} />
 
                           <div className="grid gap-3 md:grid-cols-[1.2fr_0.55fr_0.55fr_0.45fr]">
-                            <Field label="Customer description">
+                            <Field
+                              label={
+                                job.direction === "outgoing"
+                                  ? "Revenue / material sale description"
+                                  : "Customer description"
+                              }
+                            >
                               <input
                                 name="customerChargeDescription"
-                                defaultValue={customerLine?.description ?? "Waste acceptance / disposal"}
+                                defaultValue={
+                                  revenueLine?.description ??
+                                  (job.direction === "outgoing"
+                                    ? "Material sale / outgoing service"
+                                    : "Waste acceptance / disposal")
+                                }
                                 className={inputClass}
                               />
                             </Field>
-                            <Field label="Customer price £">
+                            <Field
+                              label={
+                                job.direction === "outgoing"
+                                  ? "Revenue £"
+                                  : "Customer price £"
+                              }
+                            >
                               <input
                                 type="number"
                                 min="0"
                                 step="0.01"
                                 name="customerChargeAmount"
-                                defaultValue={customerLine?.amount ?? ""}
+                                defaultValue={revenueLine?.amount ?? ""}
                                 className={inputClass}
                               />
                             </Field>
                             <Field label="Unit">
-                              <RateUnitSelect name="customerChargeUnit" value={customerLine?.unit ?? "tonne"} />
+                              <RateUnitSelect name="customerChargeUnit" value={revenueLine?.unit ?? "tonne"} />
                             </Field>
                             <Field label="VAT %">
                               <input
@@ -491,7 +516,7 @@ export default async function CommercialPage({
                                 max="100"
                                 step="0.01"
                                 name="customerVatRate"
-                                defaultValue={customerLine?.vatRate ?? "20.00"}
+                                defaultValue={revenueLine?.vatRate ?? "20.00"}
                                 className={inputClass}
                               />
                             </Field>
@@ -561,10 +586,10 @@ export default async function CommercialPage({
                           </form>
                         </div>
 
-                        {lines.filter((line) => !["customer_charge", "haulage_cost", "tipping_cost"].includes(line.category)).length > 0 && (
+                        {lines.filter((line) => !["customer_charge", "material_sale", "haulage_cost", "tipping_cost"].includes(line.category)).length > 0 && (
                           <div className="mt-4 space-y-2">
                             {lines
-                              .filter((line) => !["customer_charge", "haulage_cost", "tipping_cost"].includes(line.category))
+                              .filter((line) => !["customer_charge", "material_sale", "haulage_cost", "tipping_cost"].includes(line.category))
                               .map((line) => (
                                 <div key={line.id} className="flex items-center justify-between rounded-lg border border-black/5 bg-white px-3 py-2 text-xs">
                                   <span>{line.description} · {money(line.amount)} / {unitLabel(line.unit)}</span>

@@ -1,8 +1,10 @@
 import Link from "next/link";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 import { and, asc, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 
 import { auth } from "@/auth";
+import { jobCommercialLines } from "@/db/commercial-schema";
 import { database } from "@/db/database";
 import {
   counterparties,
@@ -18,6 +20,7 @@ import {
 } from "@/db/schema";
 
 import { createTemplateFromJobAction } from "../templates/actions";
+import { calculateJobCommercials } from "@/modules/commercial/jobCommercials";
 
 function formatDate(value: Date) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -69,6 +72,7 @@ export default async function JobDetailPage({
       purchaseOrder: jobs.purchaseOrder,
       customerReference: jobs.customerReference,
       notes: jobs.notes,
+      thirdPartyDestinationSiteId: jobs.thirdPartyDestinationSiteId,
       clientName: counterparties.name,
       clientSiteName: counterpartySites.name,
       clientSitePostcode: counterpartySites.postcode,
@@ -133,6 +137,69 @@ export default async function JobDetailPage({
     )
     .orderBy(asc(jobLoads.loadNumber));
 
+  const commercialLines =
+    await database.query.jobCommercialLines.findMany({
+      where: and(
+        eq(jobCommercialLines.organisationId, currentUser.organisationId),
+        eq(jobCommercialLines.jobId, job.id),
+        eq(jobCommercialLines.isActive, true),
+      ),
+      orderBy: (line, { asc: lineAsc }) => [
+        lineAsc(line.sortOrder),
+        lineAsc(line.createdAt),
+      ],
+    });
+
+  const commercialSummary = calculateJobCommercials({
+    lines: commercialLines,
+    loads,
+  });
+
+  const outgoingDestination =
+    job.direction === "outgoing" &&
+    job.thirdPartyDestinationSiteId
+      ? await database.query.counterpartySites.findFirst({
+          where: and(
+            eq(
+              counterpartySites.id,
+              job.thirdPartyDestinationSiteId,
+            ),
+            eq(
+              counterpartySites.organisationId,
+              currentUser.organisationId,
+            ),
+          ),
+          columns: {
+            name: true,
+            postcode: true,
+          },
+          with: {
+            counterparty: {
+              columns: {
+                name: true,
+              },
+            },
+          },
+        })
+      : null;
+
+  const originLabel =
+    job.direction === "outgoing"
+      ? job.receivingSiteName ?? "Own site"
+      : [job.clientSiteName, job.clientSitePostcode]
+          .filter(Boolean)
+          .join(" · ") || "—";
+
+  const destinationLabel =
+    job.direction === "outgoing"
+      ? [
+          outgoingDestination?.name,
+          outgoingDestination?.postcode,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "—"
+      : job.receivingSiteName ?? "—";
+
   return (
     <main className="min-h-screen bg-[#f7f3ed] px-8 py-32 pl-[24vw]">
       <div className="mx-auto max-w-7xl space-y-7">
@@ -192,14 +259,95 @@ export default async function JobDetailPage({
         )}
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Info label="Origin" value={[job.clientSiteName, job.clientSitePostcode].filter(Boolean).join(" · ") || "—"} />
-          <Info label="Destination" value={job.receivingSiteName ?? "—"} />
+          <Info label="Origin" value={originLabel} />
+          <Info label="Destination" value={destinationLabel} />
           <Info label="Transport" value={haulier?.name ?? "Own transport"} />
           <Info label="Vehicle" value={job.vehicleRegistration ?? "Assign later"} />
           <Info label="Driver" value={job.driverName ?? "Assign later"} />
           <Info label="Material" value={job.materialName ?? "—"} />
           <Info label="Permit" value={job.permitNumber ?? "—"} />
           <Info label="Planned loads" value={String(job.plannedLoads)} />
+        </section>
+
+        <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-orange-600">
+                Job-specific commercial terms
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-black">
+                This Job's price
+              </h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-black/45">
+                These terms belong to {job.jobNumber} only. A Rate Library value
+                may have been used as a suggestion, but the Job lines below are
+                the commercial authority and can be changed before invoicing.
+              </p>
+            </div>
+
+            <Link
+              href={`/home/commercial#job-${job.id}`}
+              className="inline-flex shrink-0 rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-orange-500 hover:text-black"
+            >
+              Set / edit Job pricing
+            </Link>
+          </div>
+
+          {commercialLines.length === 0 ? (
+            <div className="mt-5 rounded-2xl border border-dashed border-black/15 bg-[#faf8f4] p-5 text-sm text-black/45">
+              No Job-specific commercial terms have been set yet. This does not
+              block operations; add them here or from Commercial & Invoicing.
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {commercialLines.map((line) => (
+                <div
+                  key={line.id}
+                  className="rounded-2xl border border-black/10 bg-[#faf8f4] p-4"
+                >
+                  <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-black/30">
+                    {line.kind === "revenue" ? "Revenue" : "Direct cost"} ·{" "}
+                    {line.category.replaceAll("_", " ")}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-black">
+                    {line.description}
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-black">
+                    {money(line.amount, line.currency)} / {line.unit}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-4">
+            <Info
+              label="Completed loads"
+              value={String(commercialSummary.completedLoads)}
+              compact
+            />
+            <Info
+              label="Actual tonnes"
+              value={String(commercialSummary.tonnes)}
+              compact
+            />
+            <Info
+              label="Revenue"
+              value={money(
+                commercialSummary.revenue.toFixed(2),
+                "GBP",
+              )}
+              compact
+            />
+            <Info
+              label="Margin"
+              value={money(
+                commercialSummary.margin.toFixed(2),
+                "GBP",
+              )}
+              compact
+            />
+          </div>
         </section>
 
         <section className="rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
@@ -222,7 +370,7 @@ export default async function JobDetailPage({
                   <th className="px-3 py-3 font-semibold">Load</th>
                   <th className="px-3 py-3 font-semibold">Status</th>
                   <th className="px-3 py-3 font-semibold">EWC</th>
-                  <th className="px-3 py-3 font-semibold">Customer rate</th>
+                  <th className="px-3 py-3 font-semibold">Revenue snapshot</th>
                   <th className="px-3 py-3 font-semibold">Haulage cost</th>
                   <th className="px-3 py-3 font-semibold">Actual weight</th>
                   <th className="px-3 py-3 font-semibold">Ticket</th>

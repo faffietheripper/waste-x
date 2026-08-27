@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -224,9 +225,16 @@ export async function saveCoreJobPricingAction(formData: FormData) {
 
   const customerAmount = parseMoney(formData.get("customerChargeAmount"));
   const customerUnit = parseUnit(formData.get("customerChargeUnit"));
+  const revenueCategory: JobCommercialCategory =
+    job.direction === "outgoing"
+      ? "material_sale"
+      : "customer_charge";
+
   const customerDescription =
     cleanString(formData.get("customerChargeDescription")) ||
-    "Waste acceptance / disposal";
+    (job.direction === "outgoing"
+      ? "Material sale / outgoing service"
+      : "Waste acceptance / disposal");
   const customerVatRate = parseVatRate(formData.get("customerVatRate"));
 
   const haulageCostAmount = parseMoney(formData.get("haulageCostAmount"));
@@ -254,6 +262,7 @@ export async function saveCoreJobPricingAction(formData: FormData) {
   const now = new Date();
   const coreCategories: JobCommercialCategory[] = [
     "customer_charge",
+    "material_sale",
     "haulage_cost",
     "tipping_cost",
   ];
@@ -285,7 +294,7 @@ export async function saveCoreJobPricingAction(formData: FormData) {
         organisationId: access.organisationId,
         jobId,
         kind: "revenue",
-        category: "customer_charge",
+        category: revenueCategory,
         description: customerDescription,
         amount: customerAmount,
         unit: customerUnit,
@@ -475,6 +484,10 @@ export async function useLegacyPriceSuggestionAction(formData: FormData) {
   }
 
   const now = new Date();
+  const legacyRevenueCategory: JobCommercialCategory =
+    job.direction === "outgoing"
+      ? "material_sale"
+      : "customer_charge";
 
   await database.transaction(async (tx) => {
     await tx
@@ -484,7 +497,7 @@ export async function useLegacyPriceSuggestionAction(formData: FormData) {
         and(
           eq(jobCommercialLines.organisationId, access.organisationId),
           eq(jobCommercialLines.jobId, jobId),
-          eq(jobCommercialLines.category, "customer_charge"),
+          inArray(jobCommercialLines.category, ["customer_charge", "material_sale"]),
           eq(jobCommercialLines.isActive, true),
         ),
       );
@@ -493,8 +506,11 @@ export async function useLegacyPriceSuggestionAction(formData: FormData) {
       organisationId: access.organisationId,
       jobId,
       kind: "revenue",
-      category: "customer_charge",
-      description: "Waste acceptance / disposal",
+      category: legacyRevenueCategory,
+      description:
+        job.direction === "outgoing"
+          ? "Material sale / outgoing service"
+          : "Waste acceptance / disposal",
       amount,
       unit,
       vatRate: "20.00",
