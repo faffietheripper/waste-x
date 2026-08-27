@@ -4,7 +4,14 @@ import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { drivers, jobs, users, vehicles } from "@/db/schema";
+import {
+  counterparties,
+  counterpartyRoles,
+  drivers,
+  jobs,
+  users,
+  vehicles,
+} from "@/db/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -18,9 +25,14 @@ import {
   rejectLoadAction,
   saveLoadDetailsAction,
 } from "./actions";
+import DailyOperationsScrollKeeper from "./DailyOperationsScrollKeeper";
+import TransportAssignmentPopover from "./TransportAssignmentPopover";
+import WorksheetSearch from "./WorksheetSearch";
+import WorksheetToast from "./WorksheetToast";
 
 type SearchParams = {
   date?: string | string[];
+  view?: string | string[];
   success?: string | string[];
   error?: string | string[];
 };
@@ -103,6 +115,7 @@ const successMessages: Record<string, string> = {
   outgoing_load_completed: "Outgoing movement completed.",
   load_cancelled: "Planned load cancelled.",
   extra_load_added: "Extra planned load added to the job.",
+  transport_assigned: "Transport details updated.",
 };
 
 const errorMessages: Record<string, string> = {
@@ -127,6 +140,11 @@ const errorMessages: Record<string, string> = {
   external_facility_permit_mismatch:
     "The selected third-party facility does not have an active authorisation for this EWC.",
   rejection_reason_required: "Enter a reason before rejecting the load.",
+  driver_required: "Choose a driver before accepting the load.",
+  vehicle_required: "Choose a vehicle before accepting the load.",
+  haulier_required: "Choose a haulier or switch the load to own transport.",
+  invalid_haulier: "The selected haulier is no longer available.",
+  invalid_transport_mode: "Choose own transport or an external haulier.",
   invalid_driver: "The selected driver is not available.",
   invalid_vehicle: "The selected vehicle is not available.",
   driver_not_for_haulier: "That driver belongs to a different haulier.",
@@ -175,7 +193,7 @@ export default async function DailyOperationsPage({
   const dayStart = new Date(`${selectedDate}T00:00:00.000Z`);
   const dayEnd = new Date(`${shiftDate(selectedDate, 1)}T00:00:00.000Z`);
 
-  const [dayJobs, activeDrivers, activeVehicles] = await Promise.all([
+  const [dayJobs, activeDrivers, activeVehicles, activeHauliers] = await Promise.all([
     database.query.jobs.findMany({
       where: and(
         eq(jobs.organisationId, currentUser.organisationId),
@@ -245,29 +263,83 @@ export default async function DailyOperationsPage({
         ),
       )
       .orderBy(asc(vehicles.registrationNumber)),
+    database
+      .select({
+        id: counterparties.id,
+        name: counterparties.name,
+        carrierRegistrationNumber: counterparties.carrierRegistrationNumber,
+      })
+      .from(counterparties)
+      .innerJoin(
+        counterpartyRoles,
+        and(
+          eq(counterpartyRoles.counterpartyId, counterparties.id),
+          eq(counterpartyRoles.organisationId, currentUser.organisationId),
+          eq(counterpartyRoles.role, "haulier"),
+        ),
+      )
+      .where(
+        and(
+          eq(counterparties.organisationId, currentUser.organisationId),
+          eq(counterparties.isActive, true),
+        ),
+      )
+      .orderBy(asc(counterparties.name)),
   ]);
 
-  const rows = dayJobs.flatMap((job) =>
-    job.loads.map((load) => ({
-      job,
-      load,
-    })),
+  /*
+    Keep the live board deterministic. Demo/imported jobs can share the exact same
+    createdAt timestamp, and ordering by createdAt alone lets PostgreSQL return
+    tied rows in a different order after each mutation/refetch.
+
+    These tie-breakers never change during the load workflow, so Arrived, Weight
+    and Accept cannot make a row jump. Loads remain grouped beneath their Job.
+  */
+  const stableDayJobs = [...dayJobs].sort((a, b) => {
+    const aCreated = a.createdAt ? a.createdAt.getTime() : 0;
+    const bCreated = b.createdAt ? b.createdAt.getTime() : 0;
+
+    if (aCreated !== bCreated) return aCreated - bCreated;
+
+    const jobNumberOrder = a.jobNumber.localeCompare(b.jobNumber);
+    if (jobNumberOrder !== 0) return jobNumberOrder;
+
+    return a.id.localeCompare(b.id);
+  });
+
+  const rows = stableDayJobs.flatMap((job) =>
+    [...job.loads]
+      .sort((a, b) => {
+        if (a.loadNumber !== b.loadNumber) return a.loadNumber - b.loadNumber;
+        return a.id.localeCompare(b.id);
+      })
+      .map((load) => ({
+        job,
+        load,
+      })),
   );
 
   const incomingLoads = rows.filter(({ load }) => load.direction === "incoming");
   const outgoingLoads = rows.filter(({ load }) => load.direction === "outgoing");
-  const completedLoads = rows.filter(({ load }) => load.status === "completed");
 
-  const liveLoads = rows.filter(
+  // Filtering preserves the original database order. Marking a load arrived or
+  // accepted therefore does not make it jump around the live board.
+  const completedRows = rows.filter(({ load }) => load.status === "completed");
+  const operationalRows = rows.filter(({ load }) => load.status !== "completed");
+
+  const liveLoads = operationalRows.filter(
     ({ load }) =>
-      load.status !== "completed" &&
       load.status !== "rejected" &&
       load.status !== "cancelled",
   );
 
-  const problemLoads = rows.filter(
+  const problemLoads = operationalRows.filter(
     ({ load }) => load.status === "rejected" || load.status === "cancelled",
   );
+
+  const requestedView = firstParam(searchParams?.view);
+  const view = requestedView === "completed" ? "completed" : "live";
+  const visibleRows = view === "completed" ? completedRows : operationalRows;
 
   const success = firstParam(searchParams?.success);
   const error = firstParam(searchParams?.error);
@@ -275,6 +347,7 @@ export default async function DailyOperationsPage({
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] px-8 pb-20 pt-[15vh] pl-[24vw]">
+      <DailyOperationsScrollKeeper />
       <div className="mx-auto max-w-[1750px] space-y-5">
         <section className="relative overflow-hidden rounded-[28px] bg-black px-7 py-6 text-white shadow-sm">
           <div className="absolute -right-20 -top-24 size-72 rounded-full bg-orange-500/20 blur-3xl" />
@@ -329,19 +402,16 @@ export default async function DailyOperationsPage({
           </div>
         </section>
 
-        {(success || error) && (
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm font-medium ${
-              error
-                ? "border-red-200 bg-red-50 text-red-700"
-                : "border-emerald-200 bg-emerald-50 text-emerald-700"
-            }`}
-          >
-            {error
+        <WorksheetToast
+          type={error ? "error" : success ? "success" : null}
+          message={
+            error
               ? errorMessages[error] ?? `Operation failed: ${error}`
-              : successMessages[success] ?? "Daily Operations updated."}
-          </div>
-        )}
+              : success
+                ? successMessages[success] ?? "Daily Operations updated."
+                : ""
+          }
+        />
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard label="Loads" value={rows.length} />
@@ -350,7 +420,45 @@ export default async function DailyOperationsPage({
           <MetricCard label="Outgoing" value={outgoingLoads.length} />
           <MetricCard
             label="Done / exceptions"
-            value={`${completedLoads.length} / ${problemLoads.length}`}
+            value={`${completedRows.length} / ${problemLoads.length}`}
+          />
+        </section>
+
+        <section className="flex flex-col gap-3 rounded-[20px] border border-black/10 bg-white p-2 shadow-sm xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/home/worksheet?date=${selectedDate}&view=live`}
+              className={`rounded-xl px-4 py-2.5 text-xs font-semibold transition ${
+                view === "live"
+                  ? "bg-black text-white"
+                  : "text-black/45 hover:bg-black/5 hover:text-black"
+              }`}
+            >
+              Live loads
+              <span className="ml-2 rounded-md bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-black">
+                {operationalRows.length}
+              </span>
+            </Link>
+
+            <Link
+              href={`/home/worksheet?date=${selectedDate}&view=completed`}
+              className={`rounded-xl px-4 py-2.5 text-xs font-semibold transition ${
+                view === "completed"
+                  ? "bg-black text-white"
+                  : "text-black/45 hover:bg-black/5 hover:text-black"
+              }`}
+            >
+              Completed
+              <span className="ml-2 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                {completedRows.length}
+              </span>
+            </Link>
+          </div>
+
+          <WorksheetSearch
+            date={selectedDate}
+            view={view}
+            totalRows={visibleRows.length}
           />
         </section>
 
@@ -381,21 +489,36 @@ export default async function DailyOperationsPage({
               </Link>
             </div>
           </section>
+        ) : visibleRows.length === 0 ? (
+          <section className="rounded-[26px] border border-dashed border-black/15 bg-white p-12 text-center shadow-sm">
+            <h2 className="text-xl font-semibold text-black">
+              {view === "completed"
+                ? "No completed loads for this date"
+                : "No live loads for this date"}
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-black/45">
+              {view === "completed"
+                ? "Completed loads will move here automatically, keeping them separate from the live board."
+                : "All loads for this date have been completed. Open Completed to view tickets and final weights."}
+            </p>
+          </section>
         ) : (
           <section className="overflow-hidden rounded-[26px] border border-black/10 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-black/5 px-5 py-4">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-600">
-                  Live load board
+                  {view === "completed" ? "Completed loads" : "Live load board"}
                 </p>
 
                 <h2 className="mt-1 text-lg font-semibold text-black">
-                  {rows.length} load{rows.length === 1 ? "" : "s"}
+                  {visibleRows.length} load{visibleRows.length === 1 ? "" : "s"}
                 </h2>
               </div>
 
               <p className="hidden text-xs text-black/35 xl:block">
-                Normal path: Arrived → Weight → Accept → Complete
+                {view === "completed"
+                  ? "Final weights and weighbridge/load tickets"
+                  : "Normal path: Arrived → Weight → Accept → Complete"}
               </p>
             </div>
 
@@ -415,7 +538,7 @@ export default async function DailyOperationsPage({
                 </thead>
 
                 <tbody>
-                  {rows.map(({ job, load }) => {
+                  {visibleRows.map(({ job, load }) => {
                     const availableDrivers = activeDrivers.filter(
                       (driver) =>
                         driver.haulierCounterpartyId === load.haulierCounterpartyId,
@@ -450,10 +573,52 @@ export default async function DailyOperationsPage({
                             "External facility"
                           }`;
 
+                    /*
+                      This search text deliberately contains both booking-level and
+                      factual load-level information. Searching a Job/customer/source
+                      therefore keeps all matching Loads together, while searching a
+                      specific driver or registration can narrow to that exact Load.
+                    */
+                    const rowSearchText = [
+                      job.jobNumber,
+                      job.purchaseOrder,
+                      job.customerReference,
+                      job.client?.name,
+                      job.client?.accountReference,
+                      job.clientSite?.name,
+                      job.clientSite?.fullAddress,
+                      job.clientSite?.postcode,
+                      route,
+                      load.direction,
+                      load.status,
+                      load.ewcCodeSnapshot,
+                      load.wasteDescriptionSnapshot,
+                      load.haulier?.name,
+                      load.haulier?.carrierRegistrationNumber,
+                      load.driver?.name,
+                      load.vehicle?.registrationNumber,
+                      load.vehicle?.vehicleType,
+                      load.ticketNumber,
+                      load.notes,
+                      load.ownSite?.name,
+                      load.ownSite?.fullAddress,
+                      load.ownSite?.postcode,
+                      load.thirdPartyDestinationSite?.name,
+                      load.thirdPartyDestinationSite?.fullAddress,
+                      load.thirdPartyDestinationSite?.postcode,
+                      load.thirdPartyDestinationSite?.counterparty?.name,
+                    ]
+                      .filter((value): value is string => Boolean(value))
+                      .join(" ")
+                      .toLowerCase();
+
                     return (
                       <tr
                         key={load.id}
-                        className="border-b border-black/5 align-top last:border-b-0 hover:bg-orange-50/25"
+                        id={`load-${load.id}`}
+                        data-worksheet-row="true"
+                        data-search={rowSearchText}
+                        className="scroll-mt-32 border-b border-black/5 align-top last:border-b-0 hover:bg-orange-50/25"
                       >
                         <Td>
                           <div className="flex items-center gap-2">
@@ -544,6 +709,16 @@ export default async function DailyOperationsPage({
                             {" · "}
                             {load.vehicle?.registrationNumber ?? "No vehicle"}
                           </p>
+
+                          {!terminal && (
+                            <TransportAssignmentPopover
+                              load={load}
+                              hauliers={activeHauliers}
+                              drivers={activeDrivers}
+                              vehicles={activeVehicles}
+                              returnDate={selectedDate}
+                            />
+                          )}
                         </Td>
 
                         <Td>
@@ -596,8 +771,12 @@ export default async function DailyOperationsPage({
                         </Td>
 
                         <Td>
-                          <div className="flex min-w-[150px] flex-col items-end gap-2">
-                            <PrimaryAction load={load} returnDate={selectedDate} />
+                          <div className="flex min-w-[160px] flex-col items-end gap-2">
+                            {load.status === "completed" ? (
+                              <TicketActions loadId={load.id} />
+                            ) : (
+                              <PrimaryAction load={load} returnDate={selectedDate} />
+                            )}
 
                             {!terminal && (
                               <details className="w-full">
@@ -826,6 +1005,8 @@ function PrimaryAction({
     id: string;
     direction: string;
     status: string;
+    driverId: string | null;
+    vehicleId: string | null;
   };
   returnDate: string;
 }) {
@@ -842,6 +1023,14 @@ function PrimaryAction({
   }
 
   if (load.direction === "incoming" && load.status === "arrived") {
+    if (!load.driverId || !load.vehicleId) {
+      return (
+        <span className="inline-flex w-full justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[10px] font-semibold text-amber-800">
+          Assign driver + vehicle first
+        </span>
+      );
+    }
+
     return (
       <form action={acceptLoadAction}>
         <input type="hidden" name="loadId" value={load.id} />
@@ -902,6 +1091,27 @@ function PrimaryAction({
     <span className="inline-flex w-full justify-center rounded-lg bg-black/5 px-3 py-2 text-xs font-semibold text-black/40">
       {formatStatus(load.status)}
     </span>
+  );
+}
+
+function TicketActions({ loadId }: { loadId: string }) {
+  return (
+    <div className="flex w-full flex-col gap-1.5">
+      <a
+        href={`/api/operations/weighbridge-tickets/${loadId}/print?auto=1`}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex w-full justify-center rounded-lg bg-black px-3 py-2 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black"
+      >
+        Print another ticket
+      </a>
+      <a
+        href={`/api/operations/weighbridge-tickets/${loadId}/pdf`}
+        className="inline-flex w-full justify-center rounded-lg border border-black/10 bg-white px-3 py-2 text-[10px] font-semibold text-black/55 hover:border-orange-300 hover:text-orange-700"
+      >
+        Download PDF
+      </a>
+    </div>
   );
 }
 

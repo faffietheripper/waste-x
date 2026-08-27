@@ -1,6 +1,3 @@
-
-
-
 // src/components/app/Navigation/SystemNav.tsx
 
 import { and, eq } from "drizzle-orm";
@@ -481,7 +478,31 @@ function SoloOperationalNav({
         },
       ],
     },
-
+{
+      label: "Compliance",
+      items: [
+       
+        {
+          label: "DWT Centre",
+          href: "/home/dwt",
+          show: can("dwt:view"),
+        },
+        {
+          label: "Quarterly Returns",
+          href: "/home/returns",
+          show: can("returns:view"),
+        },
+        {
+          label: "Activity",
+          href: "/home/activity",
+          show: can("activity:view"),
+        }, {
+          label: "Receiving Site & Permit",
+          href: "/home/sites",
+          show: can("site_permit:view"),
+        },
+      ],
+    },
     {
       label: "Business Data",
       items: [
@@ -514,45 +535,29 @@ function SoloOperationalNav({
           show: canAny(["transport:view", "site_permit:view"]),
         },
         {
-          label: "Rates",
+          label: "Rate Library",
           href: "/home/rates",
+          // Legacy/reference pricing remains available, but Jobs now own the
+          // commercial terms used by native customer invoicing.
           show: can("rates:view"),
         },
       ],
     },
 
-    {
-      label: "Compliance",
-      items: [
-        {
-          label: "Receiving Site & Permit",
-          href: "/home/sites",
-          show: can("site_permit:view"),
-        },
-        {
-          label: "DWT Centre",
-          href: "/home/dwt",
-          show: can("dwt:view"),
-        },
-        {
-          label: "Quarterly Returns",
-          href: "/home/returns",
-          show: can("returns:view"),
-        },
-        {
-          label: "Activity",
-          href: "/home/activity",
-          show: can("activity:view"),
-        },
-      ],
-    },
+    
 
     {
       label: "Accounts",
       items: [
         {
+          label: "Commercial & Invoicing",
+          href: "/home/commercial",
+          show: can("accounts:view"),
+        },
+        {
           label: "Billing & Exports",
           href: "/home/accounts",
+          // Retained for the existing export/external-accounting workflow.
           show: can("accounts:view"),
         },
         {

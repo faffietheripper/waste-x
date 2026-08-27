@@ -1,7 +1,24 @@
 import { env } from "@/env";
-import * as schema from "./schema";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+
+import * as carbonSchema from "./carbon-schema";
+import * as commercialSchema from "./commercial-schema";
+import * as coreSchema from "./schema";
+import * as returnsSchema from "./returns-schema";
+
+/*
+  Waste X still uses ONE PostgreSQL database.
+
+  The files are only split by domain so schema.ts does not become impossible to
+  maintain. Drizzle receives one merged schema object at runtime.
+*/
+const schema = {
+  ...coreSchema,
+  ...commercialSchema,
+  ...returnsSchema,
+  ...carbonSchema,
+};
 
 declare global {
   // eslint-disable-next-line no-var
