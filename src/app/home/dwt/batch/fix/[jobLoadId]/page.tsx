@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -210,10 +211,10 @@ export default async function DwtBatchQuickFixPage({ params }: PageProps) {
               <Field label="Reason for no registration">
                 <select name="carrierReasonForNoRegistrationNumber" defaultValue={input.carrier.reasonForNoRegistrationNumber ?? ""} className={inputClass}>
                   <option value="">Not applicable</option>
-                  <option value="ON_SITE">Moved on site</option>
-                  <option value="HOUSEHOLD">Household waste</option>
-                  <option value="ONE_OFF">One-off movement</option>
-                  <option value="MARINE">Marine movement</option>
+                  <option value="ON_SITE">Movement within the same premises</option>
+                  <option value="HOUSEHOLD">Householder transporting own waste</option>
+                  <option value="ONE_OFF">One-off / infrequent waste transport</option>
+                  <option value="MARINE">Marine licence / exempt movement</option>
                 </select>
               </Field>
               <Field label="Organisation name">

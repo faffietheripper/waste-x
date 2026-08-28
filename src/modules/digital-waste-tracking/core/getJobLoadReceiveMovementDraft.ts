@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 
 import { database } from "@/db/database";
 import {
@@ -14,6 +15,10 @@ import type {
   ReceiveMovementWeight,
   SourceOfComponents,
 } from "../types/receiveMovement.types";
+
+function cleanString(value: string | null | undefined) {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
@@ -189,6 +194,45 @@ export async function getJobLoadReceiveMovementDraft(params: {
     organisationId: params.organisationId,
   });
 
+  /*
+    Existing DWT drafts are snapshots and are deliberately not overwritten when
+    master data changes. The exception here is an OWN-CARRIER draft that has no
+    registration and no legitimate no-registration reason at all. In that case,
+    use the organisation's current own-carrier defaults so adding the carrier
+    registration later fixes both new drafts and already-prepared drafts.
+
+    External-haulier receipts never use this fallback.
+  */
+  const isOwnCarrierReceipt =
+    receipt.carrierOrganisationId === params.organisationId &&
+    !receipt.carrierCounterpartyId;
+
+  const storedCarrierRegistration =
+    cleanString(receipt.carrierRegistrationNumber) || null;
+  const storedCarrierReason =
+    receipt.carrierReasonForNoRegistrationNumber ?? null;
+
+  const useCurrentOwnCarrierDefaults =
+    isOwnCarrierReceipt &&
+    !storedCarrierRegistration &&
+    !storedCarrierReason;
+
+  const resolvedCarrierRegistration = useCurrentOwnCarrierDefaults
+    ? cleanString(settings?.ownCarrierRegistrationNumber) || null
+    : storedCarrierRegistration;
+
+  const resolvedCarrierReason = resolvedCarrierRegistration
+    ? null
+    : useCurrentOwnCarrierDefaults
+      ? settings?.ownCarrierReasonForNoRegistrationNumber ?? null
+      : storedCarrierReason;
+
+  const resolvedCarrierMeans = useCurrentOwnCarrierDefaults
+    ? settings?.ownCarrierMeansOfTransport ??
+      receipt.carrierMeansOfTransport ??
+      "Road"
+    : receipt.carrierMeansOfTransport ?? "Road";
+
   const sourceOfComponents = (
     value:
       | "NOT_PROVIDED"
@@ -226,9 +270,8 @@ export async function getJobLoadReceiveMovementDraft(params: {
     }),
 
     carrier: {
-      registrationNumber: receipt.carrierRegistrationNumber ?? null,
-      reasonForNoRegistrationNumber:
-        receipt.carrierReasonForNoRegistrationNumber ?? null,
+      registrationNumber: resolvedCarrierRegistration,
+      reasonForNoRegistrationNumber: resolvedCarrierReason,
       organisationName: receipt.carrierOrganisationName ?? "",
       address: {
         fullAddress: receipt.carrierFullAddress ?? "",
@@ -237,7 +280,7 @@ export async function getJobLoadReceiveMovementDraft(params: {
       emailAddress: receipt.carrierEmailAddress ?? null,
       phoneNumber: receipt.carrierPhoneNumber ?? null,
       vehicleRegistration: receipt.carrierVehicleRegistration ?? null,
-      meansOfTransport: receipt.carrierMeansOfTransport ?? "Road",
+      meansOfTransport: resolvedCarrierMeans,
     },
 
     brokerOrDealer: receipt.brokerDealerOrganisationName

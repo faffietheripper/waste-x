@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 import { notFound, redirect } from "next/navigation";
 import { and, asc, eq } from "drizzle-orm";
 
@@ -11,6 +12,11 @@ import {
   users,
   vehicles,
 } from "@/db/schema";
+import OwnCarrierDwtFields from "@/modules/digital-waste-tracking/components/OwnCarrierDwtFields";
+import {
+  canManageOwnCarrierDwtSettings,
+} from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
+import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingOrganisationSettings";
 import {
   archiveDriverAction,
   restoreDriverAction,
@@ -34,6 +40,8 @@ function message(key: string, type: "success" | "error") {
     invalid_haulier: "Choose a valid active haulier.",
     invalid_vehicle: "Choose a valid active vehicle.",
     vehicle_haulier_mismatch: "The default vehicle belongs to a different haulier.",
+    own_carrier_invalid_reason: "Choose a valid reason for having no carrier registration.",
+    own_carrier_invalid_means: "Choose a valid means of transport.",
   };
 
   return type === "success" ? success[key] ?? "Changes saved." : errors[key] ?? "Something went wrong.";
@@ -51,7 +59,7 @@ export default async function DriverDetailPage({
 
   const currentUser = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
-    columns: { organisationId: true },
+    columns: { organisationId: true, role: true },
   });
   if (!currentUser?.organisationId) redirect("/home");
 
@@ -60,6 +68,13 @@ export default async function DriverDetailPage({
     where: and(eq(drivers.id, params.driverId), eq(drivers.organisationId, organisationId)),
   });
   if (!driver) notFound();
+
+  const dwtSettings = await getWasteTrackingOrganisationSettings({
+    organisationId,
+  });
+  const canEditOwnCarrierDwt = canManageOwnCarrierDwtSettings(
+    currentUser.role,
+  );
 
   const [hauliers, vehicleRows] = await Promise.all([
     database
@@ -139,6 +154,33 @@ export default async function DriverDetailPage({
               ))}
             </Select>
             <Field label="Internal notes" name="notes" defaultValue={driver.notes ?? ""} />
+
+            <div className="md:col-span-2 rounded-3xl border border-black/10 bg-[#faf8f4] p-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-700">
+                Own Carrier DWT
+              </p>
+              <h3 className="mt-2 text-lg font-semibold text-black">
+                Organisation carrier identity
+              </h3>
+              <p className="mt-2 mb-5 text-sm leading-6 text-black/50">
+                These values apply only when the driver is saved as
+                <span className="font-semibold text-black"> Own / unassigned</span>.
+                If the driver belongs to an external haulier, Waste X uses that
+                haulier&apos;s carrier registration instead.
+              </p>
+              <OwnCarrierDwtFields
+                canEdit={canEditOwnCarrierDwt && driver.isActive}
+                initial={{
+                  registrationNumber:
+                    dwtSettings?.ownCarrierRegistrationNumber ?? "",
+                  reasonForNoRegistrationNumber:
+                    dwtSettings?.ownCarrierReasonForNoRegistrationNumber ?? "",
+                  meansOfTransport:
+                    dwtSettings?.ownCarrierMeansOfTransport ?? "Road",
+                }}
+              />
+            </div>
+
             {driver.isActive && (
               <div className="md:col-span-2">
                 <button type="submit" className="rounded-2xl bg-black px-6 py-3 text-sm font-semibold text-orange-400">Save Driver</button>

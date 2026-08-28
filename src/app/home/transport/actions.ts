@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -13,10 +14,15 @@ import {
   users,
   vehicles,
 } from "@/db/schema";
+import {
+  canManageOwnCarrierDwtSettings,
+  saveOwnCarrierDwtSettings,
+} from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
 
 type OrganisationContext = {
   userId: string;
   organisationId: string;
+  role: string | null;
 };
 
 async function requireOrganisationMember(): Promise<OrganisationContext> {
@@ -28,6 +34,7 @@ async function requireOrganisationMember(): Promise<OrganisationContext> {
     columns: {
       id: true,
       organisationId: true,
+      role: true,
       isActive: true,
       isSuspended: true,
     },
@@ -44,6 +51,7 @@ async function requireOrganisationMember(): Promise<OrganisationContext> {
   return {
     userId: currentUser.id,
     organisationId: currentUser.organisationId,
+    role: currentUser.role,
   };
 }
 
@@ -68,6 +76,41 @@ function normaliseTare(value: FormDataEntryValue | null) {
   if (!Number.isFinite(parsed) || parsed < 0) return "INVALID" as const;
 
   return parsed.toFixed(3);
+}
+
+async function saveOwnCarrierDwtFromDriverForm(
+  formData: FormData,
+  context: OrganisationContext,
+  haulierId: string | null,
+) {
+  if (haulierId) return null;
+  if (cleanString(formData.get("ownCarrierDwtPresent")) !== "1") return null;
+  if (!canManageOwnCarrierDwtSettings(context.role)) return null;
+
+  const result = await saveOwnCarrierDwtSettings({
+    organisationId: context.organisationId,
+    input: {
+      registrationNumber: cleanString(
+        formData.get("ownCarrierRegistrationNumber"),
+      ),
+      reasonForNoRegistrationNumber: cleanString(
+        formData.get("ownCarrierReasonForNoRegistrationNumber"),
+      ),
+      meansOfTransport: cleanString(
+        formData.get("ownCarrierMeansOfTransport"),
+      ),
+    },
+  });
+
+  if (!result.ok) {
+    return `own_carrier_${result.code}`;
+  }
+
+  revalidatePath("/home/settings/digital-waste-tracking");
+  revalidatePath("/home/dwt");
+  revalidatePath("/home/dwt/batch");
+
+  return null;
 }
 
 async function getActiveHaulier(organisationId: string, haulierId: string | null) {
@@ -138,6 +181,16 @@ export async function createDriverAction(formData: FormData) {
     ) {
       redirect("/home/transport/drivers/new?error=vehicle_haulier_mismatch");
     }
+  }
+
+  const ownCarrierError = await saveOwnCarrierDwtFromDriverForm(
+    formData,
+    context,
+    haulierId,
+  );
+
+  if (ownCarrierError) {
+    redirect(`/home/transport/drivers/new?error=${ownCarrierError}`);
   }
 
   const [created] = await database
@@ -211,6 +264,16 @@ export async function updateDriverAction(formData: FormData) {
     ) {
       driverError(driverId, "vehicle_haulier_mismatch");
     }
+  }
+
+  const ownCarrierError = await saveOwnCarrierDwtFromDriverForm(
+    formData,
+    context,
+    haulierId,
+  );
+
+  if (ownCarrierError) {
+    driverError(driverId, ownCarrierError);
   }
 
   await database

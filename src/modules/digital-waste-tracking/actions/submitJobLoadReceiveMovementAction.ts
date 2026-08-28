@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
@@ -555,7 +556,18 @@ export async function submitJobLoadReceiveMovementAction(
 
     await database
       .update(wasteReceipts)
-      .set({ status: "submitted", updatedAt: new Date() })
+      .set({
+        status: "submitted",
+        carrierRegistrationNumber:
+          cleanString(receiveMovementInput.carrier.registrationNumber) ?? null,
+        carrierReasonForNoRegistrationNumber:
+          cleanString(receiveMovementInput.carrier.registrationNumber)
+            ? null
+            : receiveMovementInput.carrier.reasonForNoRegistrationNumber ?? null,
+        carrierMeansOfTransport:
+          receiveMovementInput.carrier.meansOfTransport,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(wasteReceipts.id, receipt.id),

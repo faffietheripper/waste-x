@@ -1,4 +1,5 @@
 "use client";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 
 import Link from "next/link";
 import {
@@ -113,10 +114,10 @@ function reasonLabel(value: string) {
     NON_HAZ_WASTE_TRANSFER: "Non-hazardous waste transfer",
     NO_DOC_WITH_WASTE: "No document came with the waste",
     HWRC_RECEIPT: "Household waste recycling centre receipt",
-    ON_SITE: "Moved on site",
-    HOUSEHOLD: "Household waste",
-    ONE_OFF: "One-off movement",
-    MARINE: "Marine movement",
+    ON_SITE: "Movement within the same premises",
+    HOUSEHOLD: "Householder transporting own waste",
+    ONE_OFF: "One-off / infrequent waste transport",
+    MARINE: "Marine licence / exempt movement",
   };
   return labels[value] ?? value.replaceAll("_", " ");
 }

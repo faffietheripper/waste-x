@@ -1,4 +1,5 @@
 "use server";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -18,6 +19,10 @@ import {
   users,
   vehicles,
 } from "@/db/schema";
+import {
+  canManageOwnCarrierDwtSettings,
+  saveOwnCarrierDwtSettings,
+} from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
 
 import type {
   BookJobClient,
@@ -25,6 +30,7 @@ import type {
   BookJobDriver,
   BookJobHaulier,
   BookJobMaterial,
+  BookJobOwnCarrierDwt,
   BookJobVehicle,
   QuickCreateResult,
 } from "./lib/types";
@@ -32,6 +38,7 @@ import type {
 type QuickCreateContext = {
   userId: string;
   organisationId: string;
+  role: string | null;
 };
 
 async function requireQuickCreateAccess(): Promise<
@@ -77,6 +84,7 @@ async function requireQuickCreateAccess(): Promise<
     data: {
       userId: currentUser.id,
       organisationId: currentUser.organisationId,
+      role: currentUser.role,
     },
   };
 }
@@ -537,11 +545,16 @@ export async function quickCreateHaulierAction(
 
 export async function quickCreateDriverAction(
   formData: FormData,
-): Promise<QuickCreateResult<BookJobDriver>> {
+): Promise<
+  QuickCreateResult<{
+    driver: BookJobDriver;
+    ownCarrierDwt: BookJobOwnCarrierDwt | null;
+  }>
+> {
   const contextResult = await requireQuickCreateAccess();
   if (!contextResult.ok) return contextResult;
 
-  const { organisationId } = contextResult.data;
+  const { organisationId, role } = contextResult.data;
 
   const name = cleanString(formData.get("name"));
   const telephone = optionalString(formData.get("telephone"));
@@ -563,6 +576,47 @@ export async function quickCreateDriverAction(
   if (haulierId) {
     const haulier = await activeCounterpartyRole(organisationId, haulierId, "haulier");
     if (!haulier) return { ok: false, error: "That haulier is no longer available." };
+  }
+
+  let ownCarrierDwt: BookJobOwnCarrierDwt | null = null;
+
+  if (
+    ownerMode === "own" &&
+    cleanString(formData.get("ownCarrierDwtPresent")) === "1" &&
+    canManageOwnCarrierDwtSettings(role)
+  ) {
+    const ownCarrierResult = await saveOwnCarrierDwtSettings({
+      organisationId,
+      input: {
+        registrationNumber: cleanString(
+          formData.get("ownCarrierRegistrationNumber"),
+        ),
+        reasonForNoRegistrationNumber: cleanString(
+          formData.get("ownCarrierReasonForNoRegistrationNumber"),
+        ),
+        meansOfTransport: cleanString(
+          formData.get("ownCarrierMeansOfTransport"),
+        ),
+      },
+    });
+
+    if (!ownCarrierResult.ok) {
+      return { ok: false, error: ownCarrierResult.error };
+    }
+
+    ownCarrierDwt = {
+      registrationNumber:
+        ownCarrierResult.settings.registrationNumber ?? "",
+      reasonForNoRegistrationNumber:
+        ownCarrierResult.settings.reasonForNoRegistrationNumber ?? "",
+      meansOfTransport:
+        ownCarrierResult.settings.meansOfTransport,
+      canEdit: true,
+    };
+
+    revalidatePath("/home/settings/digital-waste-tracking");
+    revalidatePath("/home/dwt");
+    revalidatePath("/home/dwt/batch");
   }
 
   const [created] = await database
@@ -591,7 +645,13 @@ export async function quickCreateDriverAction(
   if (haulierId) revalidatePath(`/home/hauliers/${haulierId}`);
   refreshQuickCreatePaths();
 
-  return { ok: true, data: created };
+  return {
+    ok: true,
+    data: {
+      driver: created,
+      ownCarrierDwt,
+    },
+  };
 }
 
 export async function quickCreateVehicleAction(

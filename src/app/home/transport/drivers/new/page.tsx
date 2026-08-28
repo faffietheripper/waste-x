@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 import { redirect } from "next/navigation";
 import { and, asc, eq } from "drizzle-orm";
 
@@ -10,6 +11,11 @@ import {
   users,
   vehicles,
 } from "@/db/schema";
+import OwnCarrierDwtFields from "@/modules/digital-waste-tracking/components/OwnCarrierDwtFields";
+import {
+  canManageOwnCarrierDwtSettings,
+} from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
+import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingOrganisationSettings";
 import { createDriverAction } from "../../actions";
 
 function firstParam(value: string | string[] | undefined) {
@@ -22,6 +28,8 @@ function errorMessage(key: string) {
     invalid_haulier: "Choose a valid active haulier.",
     invalid_vehicle: "Choose a valid active vehicle.",
     vehicle_haulier_mismatch: "The default vehicle belongs to a different haulier.",
+    own_carrier_invalid_reason: "Choose a valid reason for having no carrier registration.",
+    own_carrier_invalid_means: "Choose a valid means of transport.",
     create_failed: "Waste X could not create the driver.",
   };
   return messages[key] ?? "Something went wrong.";
@@ -37,13 +45,20 @@ export default async function NewDriverPage({
 
   const currentUser = await database.query.users.findFirst({
     where: eq(users.id, session.user.id),
-    columns: { organisationId: true },
+    columns: { organisationId: true, role: true },
   });
   if (!currentUser?.organisationId) redirect("/home");
 
   const organisationId = currentUser.organisationId;
   const selectedHaulierId = firstParam(searchParams.haulierId);
   const error = firstParam(searchParams.error);
+
+  const dwtSettings = await getWasteTrackingOrganisationSettings({
+    organisationId,
+  });
+  const canEditOwnCarrierDwt = canManageOwnCarrierDwtSettings(
+    currentUser.role,
+  );
 
   const [hauliers, vehicleRows] = await Promise.all([
     database
@@ -103,6 +118,26 @@ export default async function NewDriverPage({
               <Field label="Telephone" name="telephone" placeholder="07..." />
               <Field label="Email" name="email" type="email" placeholder="driver@example.co.uk" />
             </div>
+          </Card>
+
+          <Card title="Own Carrier DWT">
+            <p className="mb-5 text-sm leading-6 text-black/50">
+              When this driver is saved as <span className="font-semibold text-black">Own / unassigned</span>,
+              Waste X can also save your organisation&apos;s carrier identity here. This is
+              the same organisation-level information used automatically on own-fleet DWT
+              submissions; it is not stored separately on each driver.
+            </p>
+            <OwnCarrierDwtFields
+              canEdit={canEditOwnCarrierDwt}
+              initial={{
+                registrationNumber:
+                  dwtSettings?.ownCarrierRegistrationNumber ?? "",
+                reasonForNoRegistrationNumber:
+                  dwtSettings?.ownCarrierReasonForNoRegistrationNumber ?? "",
+                meansOfTransport:
+                  dwtSettings?.ownCarrierMeansOfTransport ?? "Road",
+              }}
+            />
           </Card>
 
           <Card title="Usual Vehicle">

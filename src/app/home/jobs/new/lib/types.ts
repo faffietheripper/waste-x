@@ -1,3 +1,10 @@
+import type {
+  MeansOfTransport,
+  ReasonForNoRegistrationNumber,
+} from "@/modules/digital-waste-tracking/types/receiveMovement.types";
+
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
+
 export type BookJobClient = {
   id: string;
   name: string;
@@ -31,6 +38,13 @@ export type BookJobVehicle = {
   registrationNumber: string;
   vehicleType: string | null;
   haulierCounterpartyId: string | null;
+};
+
+export type BookJobOwnCarrierDwt = {
+  registrationNumber: string;
+  reasonForNoRegistrationNumber: ReasonForNoRegistrationNumber | "";
+  meansOfTransport: MeansOfTransport;
+  canEdit: boolean;
 };
 
 export type BookJobMaterial = {
@@ -83,6 +97,7 @@ export type BookJobFormData = {
   };
   permittedEwcCodeIds: string[];
   permittedEwcCodes: BookJobPermittedEwc[];
+  ownCarrierDwt: BookJobOwnCarrierDwt;
   clients: BookJobClient[];
   clientSites: BookJobClientSite[];
   hauliers: BookJobHaulier[];

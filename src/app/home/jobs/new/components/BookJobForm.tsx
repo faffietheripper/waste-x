@@ -1,4 +1,5 @@
 "use client";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 /* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
 
 import Link from "next/link";
@@ -14,6 +15,7 @@ import {
   quickCreateVehicleAction,
 } from "../quick-create-actions";
 import { matchCommercialRate } from "../lib/matchCommercialRate";
+import OwnCarrierDwtFields from "@/modules/digital-waste-tracking/components/OwnCarrierDwtFields";
 import type { BookJobFormData, BookJobInitialValues } from "../lib/types";
 
 type Props = {
@@ -69,6 +71,7 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
   const [drivers, setDrivers] = useState(data.drivers);
   const [vehicles, setVehicles] = useState(data.vehicles);
   const [materials, setMaterials] = useState(data.materials);
+  const [ownCarrierDwt, setOwnCarrierDwt] = useState(data.ownCarrierDwt);
   const [quickCreateKind, setQuickCreateKind] = useState<
     "client" | "clientSite" | "haulier" | "driver" | "vehicle" | "material" | null
   >(null);
@@ -362,8 +365,13 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
           return;
         }
 
-        setDrivers((current) => [...current, result.data]);
-        setDriverId(result.data.id);
+        setDrivers((current) => [...current, result.data.driver]);
+        setDriverId(result.data.driver.id);
+
+        if (result.data.ownCarrierDwt) {
+          setOwnCarrierDwt(result.data.ownCarrierDwt);
+        }
+
         setQuickCreateKind(null);
         return;
       }
@@ -1147,6 +1155,7 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
           transportMode={transportMode}
           haulierId={haulierId}
           haulierName={selectedHaulier?.name ?? null}
+          ownCarrierDwt={ownCarrierDwt}
           permittedEwcCodes={data.permittedEwcCodes}
           error={quickCreateError}
           saving={quickCreateSaving}
@@ -1250,6 +1259,7 @@ function QuickCreateModal({
   transportMode,
   haulierId,
   haulierName,
+  ownCarrierDwt,
   permittedEwcCodes,
   error,
   saving,
@@ -1262,6 +1272,7 @@ function QuickCreateModal({
   transportMode: "" | "own" | "external";
   haulierId: string;
   haulierName: string | null;
+  ownCarrierDwt: BookJobFormData["ownCarrierDwt"];
   permittedEwcCodes: BookJobFormData["permittedEwcCodes"];
   error: string;
   saving: boolean;
@@ -1506,6 +1517,18 @@ function QuickCreateModal({
                   </Field>
                 </div>
               </div>
+
+              {transportMode === "own" ? (
+                <div className="rounded-3xl border border-black/10 bg-white p-5">
+                  <p className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-orange-700">
+                    Own carrier DWT identity
+                  </p>
+                  <OwnCarrierDwtFields
+                    canEdit={ownCarrierDwt.canEdit}
+                    initial={ownCarrierDwt}
+                  />
+                </div>
+              ) : null}
             </>
           )}
 

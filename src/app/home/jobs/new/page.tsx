@@ -1,4 +1,5 @@
 import Link from "next/link";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 import { redirect } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
 
@@ -7,6 +8,10 @@ import { database } from "@/db/database";
 import { jobs, jobTemplates, users } from "@/db/schema";
 import { getSoloMasterData } from "@/modules/master-data/core/getSoloMasterData";
 import { getStage2Readiness } from "@/modules/master-data/core/getStage2Readiness";
+import {
+  canManageOwnCarrierDwtSettings,
+} from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
+import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingOrganisationSettings";
 
 import BookJobForm from "./components/BookJobForm";
 import type {
@@ -193,6 +198,12 @@ export default async function NewJobPage({
   }
 
   const masterData = await getSoloMasterData(currentUser.organisationId);
+  const dwtSettings = await getWasteTrackingOrganisationSettings({
+    organisationId: currentUser.organisationId,
+  });
+  const canEditOwnCarrierDwt = canManageOwnCarrierDwtSettings(
+    currentUser.role,
+  );
   const readiness = getStage2Readiness(masterData);
 
   if (!masterData.receivingSite || !masterData.primaryPermit) {
@@ -238,6 +249,15 @@ export default async function NewJobPage({
       description: item.description,
       isHazardous: item.isHazardous,
     })),
+    ownCarrierDwt: {
+      registrationNumber:
+        dwtSettings?.ownCarrierRegistrationNumber ?? "",
+      reasonForNoRegistrationNumber:
+        dwtSettings?.ownCarrierReasonForNoRegistrationNumber ?? "",
+      meansOfTransport:
+        dwtSettings?.ownCarrierMeansOfTransport ?? "Road",
+      canEdit: canEditOwnCarrierDwt,
+    },
     clients: masterData.clients.map((client) => ({
       id: client.id,
       name: client.name,

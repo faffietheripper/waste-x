@@ -1,4 +1,5 @@
 "use client";
+/* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 
 import { useState, useTransition } from "react";
 
@@ -21,10 +22,10 @@ type Props = {
 
 function reasonLabel(value: ReasonForNoRegistrationNumber) {
   const labels: Record<ReasonForNoRegistrationNumber, string> = {
-    ON_SITE: "Moved on site",
-    HOUSEHOLD: "Household waste",
-    ONE_OFF: "One-off movement",
-    MARINE: "Marine movement",
+    ON_SITE: "Movement within the same premises",
+    HOUSEHOLD: "Householder transporting own waste",
+    ONE_OFF: "One-off / infrequent waste transport",
+    MARINE: "Marine licence / exempt movement",
   };
   return labels[value];
 }
