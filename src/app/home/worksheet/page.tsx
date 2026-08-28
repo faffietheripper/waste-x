@@ -1,3 +1,4 @@
+/* WASTE_X_WORKSHEET_FAST_FLOW_V1 */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
@@ -154,6 +155,8 @@ function statusClasses(status: string) {
 
 const successMessages: Record<string, string> = {
   load_arrived: "Load marked as arrived.",
+  load_arrived_and_accepted:
+    "Load marked as arrived and accepted against the receiving permit.",
   load_details_saved: "Load details saved.",
   load_accepted: "Load accepted against the receiving permit.",
   load_rejected: "Load rejected and retained in the operational record.",
@@ -409,7 +412,7 @@ export default async function DailyOperationsPage({
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm text-white/45">
-                One row per load. Mark arrival, capture weight, accept and complete
+                One row per load. Accept the arrival, capture weight and complete
                 without reopening the job.
               </p>
             </div>
@@ -564,7 +567,7 @@ export default async function DailyOperationsPage({
               <p className="hidden text-xs text-black/35 xl:block">
                 {view === "completed"
                   ? "Final weights and weighbridge/load tickets"
-                  : "Normal path: Arrived → Weight → Accept → Complete"}
+                  : "Normal path: Accept / arrive → Weight → Complete"}
               </p>
             </div>
 
@@ -1092,12 +1095,20 @@ function PrimaryAction({
   returnDate: string;
 }) {
   if (load.direction === "incoming" && load.status === "planned") {
+    if (!load.driverId || !load.vehicleId) {
+      return (
+        <span className="inline-flex w-full justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[10px] font-semibold text-amber-800">
+          Assign driver + vehicle first
+        </span>
+      );
+    }
+
     return (
       <form action={markLoadArrivedAction}>
         <input type="hidden" name="loadId" value={load.id} />
         <input type="hidden" name="returnDate" value={returnDate} />
-        <button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-500">
-          Mark arrived
+        <button className="w-full rounded-lg bg-orange-500 px-3.5 py-2 text-xs font-bold text-black hover:bg-orange-400">
+          Accept / mark arrived
         </button>
       </form>
     );

@@ -1,6 +1,14 @@
+/* WASTE_X_WORKSHEET_FAST_FLOW_V1 */
 "use client";
 
-import { FormEvent, useMemo, useState, useTransition } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+  useTransition,
+} from "react";
+import { createPortal } from "react-dom";
 
 import {
   assignLoadTransportAction,
@@ -82,6 +90,26 @@ export default function TransportAssignmentPopover({
 
   const incomplete = !load.driverId || !load.vehicleId;
 
+  useEffect(() => {
+    if (!open) return;
+
+    const previousOverflow = document.body.style.overflow;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
   function changeProvider(value: string) {
     setProvider(value);
     setDriverId("");
@@ -150,16 +178,25 @@ export default function TransportAssignmentPopover({
         {incomplete ? "Set transport" : "Edit transport"}
       </button>
 
-      {open && (
-        <>
-          <button
-            type="button"
-            aria-label="Close transport editor"
-            onClick={() => setOpen(false)}
-            className="fixed inset-0 z-20 cursor-default"
-          />
-
-          <div className="absolute left-0 z-30 mt-2 w-[560px] rounded-2xl border border-black/10 bg-white p-4 shadow-2xl">
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[2px]"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setOpen(false);
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Edit actual transport"
+              className="max-h-[calc(100vh-3rem)] w-full max-w-[620px] overflow-y-auto rounded-[24px] border border-black/10 bg-white p-5 shadow-2xl"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-600">
@@ -378,9 +415,10 @@ export default function TransportAssignmentPopover({
                 </button>
               </form>
             </div>
-          </div>
-        </>
-      )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

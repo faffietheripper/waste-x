@@ -1,3 +1,4 @@
+/* WASTE_X_WORKSHEET_FAST_FLOW_V1 */
 "use server";
 
 import { and, desc, eq } from "drizzle-orm";
@@ -385,15 +386,89 @@ export async function markLoadArrivedAction(formData: FormData) {
     worksheetRedirect(returnDate, "error", "load_not_planned");
   }
 
+  /*
+    Fast-path check-in:
+    The normal yard workflow should not require separate "Arrived" and "Accept"
+    clicks when the operator is not adding any information between them.
+
+    We still preserve "arrived" as a meaningful exception state. If the vehicle
+    physically presents but the EWC is not permitted, Waste X records the
+    factual arrival, leaves the load at "arrived", and lets the operator reject
+    or correct the load instead of pretending it was accepted.
+  */
+  if (!load.wasteDescriptionSnapshot?.trim()) {
+    worksheetRedirect(returnDate, "error", "waste_description_required");
+  }
+
+  const driverId = load.driverId;
+  const vehicleId = load.vehicleId;
+
+  if (!driverId) {
+    worksheetRedirect(returnDate, "error", "driver_required");
+  }
+
+  if (!vehicleId) {
+    worksheetRedirect(returnDate, "error", "vehicle_required");
+  }
+
+  const driverError = await validateDriver(
+    driverId,
+    organisationId,
+    load.haulierCounterpartyId,
+  );
+
+  if (driverError) {
+    worksheetRedirect(returnDate, "error", driverError);
+  }
+
+  const vehicleError = await validateVehicle(
+    vehicleId,
+    organisationId,
+    load.haulierCounterpartyId,
+  );
+
+  if (vehicleError) {
+    worksheetRedirect(returnDate, "error", vehicleError);
+  }
+
+  const permitMatch = await incomingPermitAllowsLoad({
+    organisationId,
+    permitId: load.sitePermitId,
+    siteId: load.ownSiteId,
+    ewcCodeId: load.ewcCodeId,
+  });
+
   const now = new Date();
+  const arrivalFields = {
+    receivedAt: load.receivedAt ?? now,
+    movementAt: load.movementAt ?? now,
+    updatedAt: now,
+  };
+
+  if (!permitMatch) {
+    await database
+      .update(jobLoads)
+      .set({
+        ...arrivalFields,
+        status: "arrived",
+      })
+      .where(
+        and(
+          eq(jobLoads.id, load.id),
+          eq(jobLoads.organisationId, organisationId),
+        ),
+      );
+
+    await syncJobStatus(load.jobId, organisationId);
+    revalidateOperations(load.jobId);
+    worksheetRedirect(returnDate, "error", "permit_mismatch");
+  }
 
   await database
     .update(jobLoads)
     .set({
-      status: "arrived",
-      receivedAt: load.receivedAt ?? now,
-      movementAt: load.movementAt ?? now,
-      updatedAt: now,
+      ...arrivalFields,
+      status: "accepted",
     })
     .where(
       and(
@@ -404,7 +479,7 @@ export async function markLoadArrivedAction(formData: FormData) {
 
   await syncJobStatus(load.jobId, organisationId);
   revalidateOperations(load.jobId);
-  worksheetRedirect(returnDate, "success", "load_arrived");
+  worksheetRedirect(returnDate, "success", "load_arrived_and_accepted");
 }
 
 export async function saveLoadDetailsAction(formData: FormData) {
