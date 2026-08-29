@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import { clientEvidenceUploads } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
-import { jobLoads, jobs } from "@/db/schema";
+import { jobLoads, jobs, sites } from "@/db/schema";
 import { env } from "@/env";
 import {
   requireClientApiContext,
@@ -97,6 +97,25 @@ async function entityBelongsToOrganisation(
   return Boolean(load);
 }
 
+async function resolveEvidenceSite(
+  organisationId: string,
+  requestedSiteId: string | null | undefined,
+  fallbackSiteId: string | null,
+) {
+  const siteId = requestedSiteId ?? fallbackSiteId;
+  if (!siteId) return null;
+
+  const site = await database.query.sites.findFirst({
+    where: and(
+      eq(sites.id, siteId),
+      eq(sites.organisationId, organisationId),
+    ),
+    columns: { id: true },
+  });
+
+  return site?.id ?? null;
+}
+
 export async function POST(request: Request) {
   try {
     const context = await requireClientApiContext(request);
@@ -134,15 +153,33 @@ export async function POST(request: Request) {
       );
     }
 
+    const siteId = await resolveEvidenceSite(
+      context.organisationId,
+      parsed.data.siteId,
+      context.defaultSiteId,
+    );
+
+    if ((parsed.data.siteId ?? context.defaultSiteId) && !siteId) {
+      return clientApiError(
+        "INVALID_SITE",
+        400,
+        "The selected Waste X site does not belong to this organisation.",
+      );
+    }
+
     const existing = await database.query.clientEvidenceUploads.findFirst({
       where: eq(clientEvidenceUploads.evidenceId, parsed.data.evidenceId),
     });
 
     if (existing) {
-      if (
-        existing.organisationId !== context.organisationId ||
-        existing.sha256.toLowerCase() !== parsed.data.sha256.toLowerCase()
-      ) {
+      const sameUpload =
+        existing.organisationId === context.organisationId &&
+        existing.entityType === parsed.data.entityType &&
+        existing.entityId === parsed.data.entityId &&
+        existing.byteSize === parsed.data.byteSize &&
+        existing.sha256.toLowerCase() === parsed.data.sha256.toLowerCase();
+
+      if (!sameUpload) {
         return clientApiError(
           "EVIDENCE_ID_REUSED",
           409,
@@ -159,14 +196,15 @@ export async function POST(request: Request) {
       }
     }
 
-    const storageKey = existing?.storageKey ??
+    const storageKey =
+      existing?.storageKey ??
       `client-evidence/${context.organisationId}/${parsed.data.entityType}/${parsed.data.entityId}/${parsed.data.evidenceId}/${safeFileName(parsed.data.fileName)}`;
 
     if (!existing) {
       await database.insert(clientEvidenceUploads).values({
         evidenceId: parsed.data.evidenceId,
         organisationId: context.organisationId,
-        siteId: parsed.data.siteId ?? context.defaultSiteId,
+        siteId,
         deviceId: context.deviceId,
         userId: context.userId,
         entityType: parsed.data.entityType,
@@ -181,6 +219,12 @@ export async function POST(request: Request) {
         updatedAt: new Date(),
       });
     }
+
+    const uploadHeaders = {
+      "Content-Type": parsed.data.contentType,
+      "x-amz-meta-waste-x-evidence-id": parsed.data.evidenceId,
+      "x-amz-meta-waste-x-sha256": parsed.data.sha256.toLowerCase(),
+    };
 
     const uploadUrl = await getSignedUrl(
       storageClient(),
@@ -202,6 +246,7 @@ export async function POST(request: Request) {
       upload: {
         method: "PUT",
         url: uploadUrl,
+        headers: uploadHeaders,
         contentType: parsed.data.contentType,
         expiresInSeconds: URL_TTL_SECONDS,
       },
@@ -259,6 +304,20 @@ export async function PATCH(request: Request) {
         "EVIDENCE_SIZE_MISMATCH",
         409,
         "The uploaded evidence file does not match the expected size.",
+      );
+    }
+
+    const uploadedEvidenceId = head.Metadata?.["waste-x-evidence-id"];
+    const uploadedHash = head.Metadata?.["waste-x-sha256"];
+
+    if (
+      uploadedEvidenceId !== evidence.evidenceId ||
+      uploadedHash?.toLowerCase() !== evidence.sha256.toLowerCase()
+    ) {
+      return clientApiError(
+        "EVIDENCE_METADATA_MISMATCH",
+        409,
+        "The uploaded evidence file could not be verified.",
       );
     }
 
