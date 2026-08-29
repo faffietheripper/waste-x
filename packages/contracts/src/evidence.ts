@@ -14,6 +14,7 @@ export interface EvidenceUploadResponseV1 {
   upload?: {
     method: "PUT";
     url: string;
+    headers: Record<string, string>;
     contentType: string;
     expiresInSeconds: number;
   };
