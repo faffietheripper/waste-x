@@ -18,6 +18,10 @@ import {
 import { database } from "@/db/database";
 import {
   counterparties,
+  counterpartyRoles,
+  counterpartySiteAuthorisations,
+  counterpartySiteEwcCodes,
+  counterpartySites,
   drivers,
   ewcCodes,
   jobLoads,
@@ -68,6 +72,10 @@ export async function GET(request: Request) {
       organisationDrivers,
       organisationVehicles,
       organisationCounterparties,
+      organisationCounterpartyRoles,
+      organisationCounterpartySites,
+      organisationCounterpartyAuthorisations,
+      organisationCounterpartySiteEwcs,
       organisationPermits,
       organisationPermitEwcs,
       activeEwcs,
@@ -157,6 +165,34 @@ export async function GET(request: Request) {
           and(
             eq(counterparties.organisationId, context.organisationId),
             eq(counterparties.isActive, true),
+          ),
+        ),
+      database
+        .select()
+        .from(counterpartyRoles)
+        .where(eq(counterpartyRoles.organisationId, context.organisationId)),
+      database
+        .select()
+        .from(counterpartySites)
+        .where(
+          and(
+            eq(counterpartySites.organisationId, context.organisationId),
+            eq(counterpartySites.isActive, true),
+          ),
+        ),
+      database
+        .select()
+        .from(counterpartySiteAuthorisations)
+        .where(
+          eq(counterpartySiteAuthorisations.organisationId, context.organisationId),
+        ),
+      database
+        .select()
+        .from(counterpartySiteEwcCodes)
+        .where(
+          and(
+            eq(counterpartySiteEwcCodes.organisationId, context.organisationId),
+            eq(counterpartySiteEwcCodes.isActive, true),
           ),
         ),
       database
@@ -253,6 +289,10 @@ export async function GET(request: Request) {
       drivers: organisationDrivers,
       vehicles: organisationVehicles,
       counterparties: organisationCounterparties,
+      counterpartyRoles: organisationCounterpartyRoles,
+      counterpartySites: organisationCounterpartySites,
+      counterpartySiteAuthorisations: organisationCounterpartyAuthorisations,
+      counterpartySiteEwcCodes: organisationCounterpartySiteEwcs,
       ewcCodes: activeEwcs,
       permits: organisationPermits,
       permitEwcCodes: organisationPermitEwcs,
