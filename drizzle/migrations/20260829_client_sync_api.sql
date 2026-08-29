@@ -137,3 +137,129 @@ CREATE INDEX IF NOT EXISTS "client_evidence_entity_idx"
   ON "bb_client_evidence_upload" ("organisationId", "entityType", "entityId");
 CREATE INDEX IF NOT EXISTS "client_evidence_status_idx"
   ON "bb_client_evidence_upload" ("status");
+
+-- ---------------------------------------------------------------------------
+-- CLOUD CHANGE CAPTURE
+-- ---------------------------------------------------------------------------
+-- This generic trigger keeps the cursor feed aware of changes made through the
+-- existing Waste X Web application as well as future admin/API writes. Payloads
+-- are operational snapshots; authentication secrets/user password data are not
+-- attached to this trigger.
+
+CREATE OR REPLACE FUNCTION waste_x_capture_client_sync_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  row_data jsonb;
+  organisation_id text;
+  entity_id text;
+  site_id text;
+  next_version integer;
+  operation_type text;
+BEGIN
+  row_data := CASE WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+  organisation_id := row_data ->> 'organisationId';
+
+  IF organisation_id IS NULL OR organisation_id = '' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+
+  entity_id := COALESCE(
+    row_data ->> 'id',
+    CASE
+      WHEN row_data ? 'permitId' AND row_data ? 'ewcCodeId'
+      THEN (row_data ->> 'permitId') || ':' || (row_data ->> 'ewcCodeId')
+      ELSE NULL
+    END
+  );
+
+  IF entity_id IS NULL OR entity_id = '' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+
+  site_id := COALESCE(row_data ->> 'siteId', row_data ->> 'ownSiteId');
+  operation_type := CASE WHEN TG_OP = 'DELETE' THEN 'DELETE' ELSE 'UPSERT' END;
+
+  INSERT INTO "bb_sync_entity_version" (
+    "organisationId",
+    "entityType",
+    "entityId",
+    "version",
+    "updatedAt"
+  ) VALUES (
+    organisation_id,
+    TG_ARGV[0],
+    entity_id,
+    1,
+    now()
+  )
+  ON CONFLICT ("organisationId", "entityType", "entityId")
+  DO UPDATE SET
+    "version" = "bb_sync_entity_version"."version" + 1,
+    "updatedAt" = now()
+  RETURNING "version" INTO next_version;
+
+  INSERT INTO "bb_sync_change_feed" (
+    "organisationId",
+    "siteId",
+    "entityType",
+    "entityId",
+    "entityVersion",
+    "changeType",
+    "payload",
+    "changedAt"
+  ) VALUES (
+    organisation_id,
+    site_id,
+    TG_ARGV[0],
+    entity_id,
+    next_version,
+    operation_type,
+    CASE WHEN TG_OP = 'DELETE' THEN row_data ELSE row_data END,
+    now()
+  );
+
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS "client_sync_job_change" ON "bb_job";
+CREATE TRIGGER "client_sync_job_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_job"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('job');
+
+DROP TRIGGER IF EXISTS "client_sync_job_load_change" ON "bb_job_load";
+CREATE TRIGGER "client_sync_job_load_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_job_load"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('job_load');
+
+DROP TRIGGER IF EXISTS "client_sync_site_change" ON "bb_sites";
+CREATE TRIGGER "client_sync_site_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_sites"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('site');
+
+DROP TRIGGER IF EXISTS "client_sync_driver_change" ON "bb_driver";
+CREATE TRIGGER "client_sync_driver_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_driver"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('driver');
+
+DROP TRIGGER IF EXISTS "client_sync_vehicle_change" ON "bb_vehicle";
+CREATE TRIGGER "client_sync_vehicle_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_vehicle"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('vehicle');
+
+DROP TRIGGER IF EXISTS "client_sync_counterparty_change" ON "bb_counterparty";
+CREATE TRIGGER "client_sync_counterparty_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_counterparty"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('counterparty');
+
+DROP TRIGGER IF EXISTS "client_sync_permit_change" ON "bb_site_permit";
+CREATE TRIGGER "client_sync_permit_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_site_permit"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('permit');
+
+DROP TRIGGER IF EXISTS "client_sync_permit_ewc_change" ON "bb_permit_ewc_code";
+CREATE TRIGGER "client_sync_permit_ewc_change"
+AFTER INSERT OR UPDATE OR DELETE ON "bb_permit_ewc_code"
+FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('permit_ewc_code');
