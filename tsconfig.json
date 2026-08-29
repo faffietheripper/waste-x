@@ -31,5 +31,5 @@
     "src/components/app/BidForm.jsx",
     "src/components/app/NotificationsClient.tsx"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "desktop", "packages"]
 }

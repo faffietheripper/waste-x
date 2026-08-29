@@ -12,7 +12,13 @@
     "lint": "next lint",
     "db:push": "drizzle-kit push --config=drizzle.config.ts",
     "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
-    "drizzle": "drizzle-kit"
+    "drizzle": "drizzle-kit",
+    "desktop:install": "npm --prefix desktop install",
+    "desktop:web": "npm --prefix desktop run dev",
+    "desktop:dev": "npm --prefix desktop run tauri:dev",
+    "desktop:check": "npm --prefix desktop run check",
+    "desktop:build:web": "npm --prefix desktop run build",
+    "desktop:build": "npm --prefix desktop run tauri:build"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.4.1",
