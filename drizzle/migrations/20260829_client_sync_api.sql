@@ -141,10 +141,10 @@ CREATE INDEX IF NOT EXISTS "client_evidence_status_idx"
 -- ---------------------------------------------------------------------------
 -- CLOUD CHANGE CAPTURE
 -- ---------------------------------------------------------------------------
--- This generic trigger keeps the cursor feed aware of changes made through the
--- existing Waste X Web application as well as future admin/API writes. Payloads
--- are operational snapshots; authentication secrets/user password data are not
--- attached to this trigger.
+-- Existing Web/server-action writes must advance the same cursor used by
+-- Desktop/Mobile pull. The triggers are deferred until transaction commit.
+-- A client-sync transaction has written an APPLIED inbox receipt by then, so
+-- the trigger can skip that row and avoid double-counting a Desktop event.
 
 CREATE OR REPLACE FUNCTION waste_x_capture_client_sync_change()
 RETURNS trigger
@@ -175,6 +175,21 @@ BEGIN
   );
 
   IF entity_id IS NULL OR entity_id = '' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+
+  -- If this exact entity was successfully applied by the client sync processor
+  -- in the same PostgreSQL transaction, that processor already created the
+  -- version/change-feed entry atomically. Do not create a duplicate here.
+  IF EXISTS (
+    SELECT 1
+    FROM "bb_sync_event_inbox" inbox
+    WHERE inbox."organisationId" = organisation_id
+      AND inbox."entityType" = TG_ARGV[0]
+      AND inbox."entityId" = entity_id
+      AND inbox."resultStatus" = 'APPLIED'
+      AND inbox."receivedAt" >= transaction_timestamp()
+  ) THEN
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
 
@@ -216,7 +231,7 @@ BEGIN
     entity_id,
     next_version,
     operation_type,
-    CASE WHEN TG_OP = 'DELETE' THEN row_data ELSE row_data END,
+    row_data,
     now()
   );
 
@@ -225,41 +240,49 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS "client_sync_job_change" ON "bb_job";
-CREATE TRIGGER "client_sync_job_change"
+CREATE CONSTRAINT TRIGGER "client_sync_job_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_job"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('job');
 
 DROP TRIGGER IF EXISTS "client_sync_job_load_change" ON "bb_job_load";
-CREATE TRIGGER "client_sync_job_load_change"
+CREATE CONSTRAINT TRIGGER "client_sync_job_load_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_job_load"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('job_load');
 
 DROP TRIGGER IF EXISTS "client_sync_site_change" ON "bb_sites";
-CREATE TRIGGER "client_sync_site_change"
+CREATE CONSTRAINT TRIGGER "client_sync_site_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_sites"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('site');
 
 DROP TRIGGER IF EXISTS "client_sync_driver_change" ON "bb_driver";
-CREATE TRIGGER "client_sync_driver_change"
+CREATE CONSTRAINT TRIGGER "client_sync_driver_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_driver"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('driver');
 
 DROP TRIGGER IF EXISTS "client_sync_vehicle_change" ON "bb_vehicle";
-CREATE TRIGGER "client_sync_vehicle_change"
+CREATE CONSTRAINT TRIGGER "client_sync_vehicle_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_vehicle"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('vehicle');
 
 DROP TRIGGER IF EXISTS "client_sync_counterparty_change" ON "bb_counterparty";
-CREATE TRIGGER "client_sync_counterparty_change"
+CREATE CONSTRAINT TRIGGER "client_sync_counterparty_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_counterparty"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('counterparty');
 
 DROP TRIGGER IF EXISTS "client_sync_permit_change" ON "bb_site_permit";
-CREATE TRIGGER "client_sync_permit_change"
+CREATE CONSTRAINT TRIGGER "client_sync_permit_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_site_permit"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('permit');
 
 DROP TRIGGER IF EXISTS "client_sync_permit_ewc_change" ON "bb_permit_ewc_code";
-CREATE TRIGGER "client_sync_permit_ewc_change"
+CREATE CONSTRAINT TRIGGER "client_sync_permit_ewc_change"
 AFTER INSERT OR UPDATE OR DELETE ON "bb_permit_ewc_code"
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION waste_x_capture_client_sync_change('permit_ewc_code');
