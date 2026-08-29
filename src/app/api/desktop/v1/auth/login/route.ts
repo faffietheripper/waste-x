@@ -57,11 +57,13 @@ export async function POST(request: Request) {
       ),
       columns: {
         id: true,
+        organisationId: true,
         defaultSiteId: true,
         displayName: true,
         deviceType: true,
         platform: true,
         status: true,
+        createdAt: true,
       },
     });
 
@@ -81,7 +83,16 @@ export async function POST(request: Request) {
 
     return clientApiJson({
       ok: true,
-      device,
+      device: {
+        deviceId: device.id,
+        organisationId: device.organisationId,
+        defaultSiteId: device.defaultSiteId,
+        displayName: device.displayName,
+        deviceType: device.deviceType,
+        platform: device.platform,
+        status: device.status,
+        registeredAt: device.createdAt?.toISOString() ?? new Date().toISOString(),
+      },
       session: {
         token: session.sessionToken,
         expiresAt: session.expiresAt.toISOString(),
