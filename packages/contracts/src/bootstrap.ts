@@ -18,10 +18,17 @@ export interface OfflineEntitlementV1 {
   signedToken: string;
 }
 
+export interface BootstrapEntityVersionV1 {
+  entityType: string;
+  entityId: string;
+  version: number;
+}
+
 export interface DesktopBootstrapV1 {
   schemaVersion: 1;
   generatedAt: string;
   syncCursor: string | null;
+  entityVersions: BootstrapEntityVersionV1[];
   workingSet?: {
     forwardDays: number;
     horizonStart: string;
