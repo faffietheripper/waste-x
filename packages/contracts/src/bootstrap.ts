@@ -43,6 +43,10 @@ export interface DesktopBootstrapV1 {
   drivers: unknown[];
   vehicles: unknown[];
   counterparties: unknown[];
+  counterpartyRoles: unknown[];
+  counterpartySites: unknown[];
+  counterpartySiteAuthorisations: unknown[];
+  counterpartySiteEwcCodes: unknown[];
   ewcCodes: unknown[];
   permits: unknown[];
   permitEwcCodes: unknown[];
