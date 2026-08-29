@@ -9,6 +9,12 @@ import type {
 export type SyncEntityType =
   | "job"
   | "job_load"
+  | "site"
+  | "driver"
+  | "vehicle"
+  | "counterparty"
+  | "permit"
+  | "permit_ewc_code"
   | "ticket"
   | "evidence"
   | "operational_event";
