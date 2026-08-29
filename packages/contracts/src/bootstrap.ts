@@ -22,7 +22,12 @@ export interface DesktopBootstrapV1 {
   schemaVersion: 1;
   generatedAt: string;
   syncCursor: string | null;
-  device: DeviceIdentity;
+  workingSet?: {
+    forwardDays: number;
+    horizonStart: string;
+    horizonEnd: string;
+  };
+  device: DeviceIdentity | null;
   organisation: unknown;
   sites: unknown[];
   users: unknown[];
@@ -31,7 +36,10 @@ export interface DesktopBootstrapV1 {
   drivers: unknown[];
   vehicles: unknown[];
   counterparties: unknown[];
+  ewcCodes: unknown[];
   permits: unknown[];
   permitEwcCodes: unknown[];
-  offlineEntitlement: OfflineEntitlementV1;
+  // Step 6 issues this. Keeping it nullable prevents the client from treating
+  // an unsigned placeholder as real offline authorisation.
+  offlineEntitlement: OfflineEntitlementV1 | null;
 }
