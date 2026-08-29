@@ -13,6 +13,7 @@ import {
 import {
   clientDevices,
   syncChangeFeed,
+  syncEntityVersions,
 } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
@@ -72,6 +73,7 @@ export async function GET(request: Request) {
       activeEwcs,
       workingJobs,
       latestChange,
+      versions,
     ] = await Promise.all([
       database.query.organisations.findFirst({
         where: eq(organisations.id, context.organisationId),
@@ -195,6 +197,10 @@ export async function GET(request: Request) {
         .where(eq(syncChangeFeed.organisationId, context.organisationId))
         .orderBy(desc(syncChangeFeed.sequence))
         .limit(1),
+      database
+        .select()
+        .from(syncEntityVersions)
+        .where(eq(syncEntityVersions.organisationId, context.organisationId)),
     ]);
 
     const jobIds = workingJobs.map((job) => job.id);
@@ -222,6 +228,11 @@ export async function GET(request: Request) {
       },
       syncCursor:
         latestChange.length > 0 ? String(latestChange[0].sequence) : null,
+      entityVersions: versions.map((version) => ({
+        entityType: version.entityType,
+        entityId: version.entityId,
+        version: version.version,
+      })),
       device: device
         ? {
             deviceId: device.id,
