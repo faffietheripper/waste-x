@@ -67,6 +67,19 @@ export class WasteXApiClient {
     );
   }
 
+  logoutDesktop() {
+    return this.request<{ loggedOut: true }>("/api/desktop/v1/auth/logout", {
+      method: "POST",
+    });
+  }
+
+  revokeCurrentDevice() {
+    return this.request<{ revoked: true; deviceId: string }>(
+      "/api/desktop/v1/auth/device",
+      { method: "DELETE" },
+    );
+  }
+
   bootstrap() {
     return this.request<DesktopBootstrapV1>("/api/desktop/v1/bootstrap");
   }
