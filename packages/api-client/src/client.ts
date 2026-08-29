@@ -4,6 +4,9 @@ import type {
   DesktopLoginResponseV1,
   DesktopProvisionRequestV1,
   DesktopProvisionResponseV1,
+  EvidenceCompleteResponseV1,
+  EvidenceUploadRequestV1,
+  EvidenceUploadResponseV1,
   SyncPullRequestV1,
   SyncPullResponseV1,
   SyncPushRequestV1,
@@ -80,6 +83,23 @@ export class WasteXApiClient {
       method: "POST",
       body: JSON.stringify(body),
     });
+  }
+
+  initiateEvidence(body: EvidenceUploadRequestV1) {
+    return this.request<EvidenceUploadResponseV1>("/api/desktop/v1/evidence", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  completeEvidence(evidenceId: string) {
+    return this.request<EvidenceCompleteResponseV1>(
+      "/api/desktop/v1/evidence",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ evidenceId }),
+      },
+    );
   }
 
   private async request<T>(
