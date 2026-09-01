@@ -9,8 +9,9 @@
     "preview": "vite preview",
     "check": "tsc -b --pretty false",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "icons": "tauri icon app-icon.svg",
+    "tauri:dev": "npm run icons && tauri dev",
+    "tauri:build": "npm run icons && tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
