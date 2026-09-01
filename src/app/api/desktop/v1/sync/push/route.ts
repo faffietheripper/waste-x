@@ -22,6 +22,8 @@ import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 
 export const dynamic = "force-dynamic";
 
+const SHA256_HEX = /^[a-f0-9]{64}$/i;
+
 async function runPostApplyHooks({
   organisationId,
   userId,
@@ -93,7 +95,26 @@ export async function POST(request: Request) {
     const context = await requireClientApiContext(request);
     requireOperationsRole(context);
 
-    const parsed = syncPushSchema.safeParse(await request.json());
+    const requestBody = await request.json();
+
+    if (
+      requestBody &&
+      typeof requestBody === "object" &&
+      Array.isArray((requestBody as { events?: unknown }).events) &&
+      (requestBody as { events: unknown[] }).events.some((event) => {
+        if (!event || typeof event !== "object") return true;
+        const payloadHash = (event as { payloadHash?: unknown }).payloadHash;
+        return typeof payloadHash !== "string" || !SHA256_HEX.test(payloadHash);
+      })
+    ) {
+      return clientApiError(
+        "INVALID_SYNC_PAYLOAD_HASH",
+        400,
+        "Every Waste X sync event must include a valid SHA-256 payload hash.",
+      );
+    }
+
+    const parsed = syncPushSchema.safeParse(requestBody);
 
     if (!parsed.success) {
       return clientApiError(
