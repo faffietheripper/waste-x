@@ -16,6 +16,7 @@ import {
   processSyncEvent,
   syncPushSchema,
 } from "@/lib/client-api/sync";
+import { preflightSyncEvent } from "@/lib/client-api/sync-preflight";
 import { prepareJobLoadWasteReceipt } from "@/modules/digital-waste-tracking/data-access/prepareJobLoadWasteReceipt";
 import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 
@@ -119,7 +120,9 @@ export async function POST(request: Request) {
 
     const results = [];
     for (const event of orderedEvents) {
-      const eventResult = await processSyncEvent(context, event);
+      const preflightResult = await preflightSyncEvent(context, event);
+      const eventResult =
+        preflightResult ?? (await processSyncEvent(context, event));
       results.push(eventResult);
 
       if (eventResult.status === "APPLIED" && event.entityType === "job_load") {
