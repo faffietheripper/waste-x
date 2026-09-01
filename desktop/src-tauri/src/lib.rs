@@ -1,11 +1,13 @@
 use tauri::Manager;
 
 mod bootstrap;
+mod cloud_access;
 mod local_db;
 mod offline_auth;
 mod operations;
 mod provisioning;
 mod sync_engine;
+mod working_set;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -35,6 +37,8 @@ pub fn run() {
             operations::desktop_complete_load,
             sync_engine::desktop_sync_status,
             sync_engine::desktop_sync_now,
+            cloud_access::desktop_cloud_context,
+            cloud_access::desktop_cloud_catalogue,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Waste X Desktop");
