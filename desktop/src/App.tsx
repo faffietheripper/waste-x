@@ -1,9 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DevicePlatform, SyncEventV1 } from "@waste-x/contracts";
-import { calculateNetWeight } from "@waste-x/operations-core";
-import { type FormEvent, useEffect, useState } from "react";
-
-const platformExamples: DevicePlatform[] = ["WINDOWS", "MACOS"];
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 type LocalDbStatus = {
   ready: boolean;
@@ -11,21 +7,15 @@ type LocalDbStatus = {
   schemaVersion: number;
   cipherVersion: string;
   tableCount: number;
-  storage: string;
 };
 
 type ProvisioningStatus = {
   provisioned: boolean;
   deviceId: string | null;
-  organisationId: string | null;
-  defaultSiteId: string | null;
   displayName: string | null;
-  platform: string | null;
-  credentialsAvailable: boolean;
 };
 
 type AuthStatus = {
-  requiresUnlock: boolean;
   unlocked: boolean;
   canOffline: boolean;
   email: string | null;
@@ -35,40 +25,122 @@ type AuthStatus = {
 };
 
 type OperationalSummary = {
-  organisationId: string | null;
-  syncCursor: string | null;
-  lastBootstrapAt: string | null;
   jobs: number;
   jobLoads: number;
   pendingSyncEvents: number;
   conflicts: number;
 };
 
+type OpsReference = {
+  id: string;
+  label: string;
+  haulierCounterpartyId: string | null;
+};
+
+type DailyLoad = {
+  id: string;
+  jobId: string;
+  jobNumber: string;
+  jobDate: string | null;
+  loadNumber: number | null;
+  direction: "incoming" | "outgoing";
+  status: string;
+  haulierCounterpartyId: string | null;
+  driverId: string | null;
+  vehicleId: string | null;
+  wasteDescription: string;
+  ewcCode: string | null;
+  grossWeight: string | null;
+  tareWeight: string | null;
+  netWeight: string | null;
+  weightMetric: string;
+  ticketNumber: string | null;
+  notes: string | null;
+  entityVersion: number;
+  pendingEvents: number;
+};
+
+type DailyOperationsSnapshot = {
+  loads: DailyLoad[];
+  drivers: OpsReference[];
+  vehicles: OpsReference[];
+  pendingEvents: number;
+  conflicts: number;
+};
+
 type UnlockResult = {
   ok: boolean;
   mode: "ONLINE" | "OFFLINE";
-  userId: string;
-  role: string;
-  offlineExpiresAt: string;
 };
 
+type EditState = {
+  driverId: string;
+  vehicleId: string;
+  wasteDescription: string;
+  grossWeight: string;
+  tareWeight: string;
+  netWeight: string;
+  weightMetric: string;
+  ticketNumber: string;
+  notes: string;
+};
+
+function editStateFor(load: DailyLoad): EditState {
+  return {
+    driverId: load.driverId ?? "",
+    vehicleId: load.vehicleId ?? "",
+    wasteDescription: load.wasteDescription,
+    grossWeight: load.grossWeight ?? "",
+    tareWeight: load.tareWeight ?? "",
+    netWeight: load.netWeight ?? "",
+    weightMetric: load.weightMetric || "Tonnes",
+    ticketNumber: load.ticketNumber ?? "",
+    notes: load.notes ?? "",
+  };
+}
+
+function numberOrNull(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) throw new Error("Weights must be valid numbers.");
+  return parsed;
+}
+
 export function App() {
-  const exampleNetWeight = calculateNetWeight(28.46, 12.14);
   const [database, setDatabase] = useState<LocalDbStatus | null>(null);
-  const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [provisioning, setProvisioning] = useState<ProvisioningStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [summary, setSummary] = useState<OperationalSummary | null>(null);
+  const [operations, setOperations] = useState<DailyOperationsSnapshot | null>(null);
+  const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<EditState | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("Waste X Desktop — Mac");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const foundationEvent: Pick<SyncEventV1, "schemaVersion" | "eventType"> = {
-    schemaVersion: 1,
-    eventType: "DESKTOP_FOUNDATION_READY",
-  };
+  const selectedLoad = useMemo(
+    () => operations?.loads.find((load) => load.id === selectedLoadId) ?? null,
+    [operations, selectedLoadId],
+  );
+
+  const availableDrivers = useMemo(
+    () =>
+      operations?.drivers.filter(
+        (driver) => driver.haulierCounterpartyId === (selectedLoad?.haulierCounterpartyId ?? null),
+      ) ?? [],
+    [operations, selectedLoad],
+  );
+
+  const availableVehicles = useMemo(
+    () =>
+      operations?.vehicles.filter(
+        (vehicle) => vehicle.haulierCounterpartyId === (selectedLoad?.haulierCounterpartyId ?? null),
+      ) ?? [],
+    [operations, selectedLoad],
+  );
 
   async function refreshLocalState() {
     const [dbStatus, provisioningStatus, authStatus] = await Promise.all([
@@ -76,65 +148,65 @@ export function App() {
       invoke<ProvisioningStatus>("desktop_provisioning_status"),
       invoke<AuthStatus>("desktop_auth_status"),
     ]);
-
     setDatabase(dbStatus);
     setProvisioning(provisioningStatus);
     setAuth(authStatus);
 
     if (authStatus.unlocked) {
-      setSummary(await invoke<OperationalSummary>("desktop_operational_summary"));
+      const [operationalSummary, dailyOperations] = await Promise.all([
+        invoke<OperationalSummary>("desktop_operational_summary"),
+        invoke<DailyOperationsSnapshot>("desktop_daily_operations"),
+      ]);
+      setSummary(operationalSummary);
+      setOperations(dailyOperations);
     } else {
       setSummary(null);
+      setOperations(null);
+      setSelectedLoadId(null);
+      setEdit(null);
     }
   }
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function start() {
+    void (async () => {
       try {
         await invoke("local_db_self_test");
-        if (!cancelled) await refreshLocalState();
+        await refreshLocalState();
       } catch (error) {
-        if (!cancelled) {
-          setDatabaseError(error instanceof Error ? error.message : String(error));
-        }
+        setMessage(error instanceof Error ? error.message : String(error));
       }
-    }
-
-    void start();
-    return () => {
-      cancelled = true;
-    };
+    })();
   }, []);
 
   useEffect(() => {
     if (!email && auth?.email) setEmail(auth.email);
   }, [auth?.email, email]);
 
-  async function handleProvision(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (selectedLoad) setEdit(editStateFor(selectedLoad));
+  }, [selectedLoad?.id]);
+
+  async function run(task: () => Promise<unknown>, success: string) {
     setBusy(true);
     setMessage(null);
     try {
-      const result = await invoke<{ ok: boolean }>("desktop_provision_and_bootstrap", {
-        input: { email, password, displayName },
-      });
-      if (!result.ok) throw new Error("Waste X Desktop provisioning did not complete.");
-
-      const unlock = await invoke<UnlockResult>("desktop_unlock", {
-        input: { email, password },
-      });
-      setPassword("");
+      await task();
       await refreshLocalState();
-      setMessage(
-        `This Mac is provisioned and unlocked ${unlock.mode === "ONLINE" ? "through Cloud" : "offline"}.`,
-      );
+      setMessage(success);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleProvision(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run(async () => {
+      await invoke("desktop_provision_and_bootstrap", { input: { email, password, displayName } });
+      await invoke<UnlockResult>("desktop_unlock", { input: { email, password } });
+      setPassword("");
+    }, "This Mac is provisioned and the operational working set is stored locally.");
   }
 
   async function handleUnlock(event: FormEvent<HTMLFormElement>) {
@@ -142,30 +214,14 @@ export function App() {
     setBusy(true);
     setMessage(null);
     try {
-      const result = await invoke<UnlockResult>("desktop_unlock", {
-        input: { email, password },
-      });
+      const result = await invoke<UnlockResult>("desktop_unlock", { input: { email, password } });
       setPassword("");
       await refreshLocalState();
       setMessage(
-        result.mode === "ONLINE"
-          ? "Signed in through Waste X Cloud. Offline access has been refreshed for 14 days."
-          : "Cloud is unavailable. Waste X unlocked using the encrypted offline entitlement.",
+        result.mode === "OFFLINE"
+          ? "Cloud is unavailable — Waste X unlocked offline from encrypted local data."
+          : "Cloud sign-in verified. Offline access refreshed for 14 days.",
       );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRefresh() {
-    setBusy(true);
-    setMessage(null);
-    try {
-      await invoke("desktop_refresh_bootstrap");
-      await refreshLocalState();
-      setMessage("Cloud bootstrap refreshed into encrypted local storage.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -175,172 +231,178 @@ export function App() {
 
   async function handleLock() {
     await invoke("desktop_lock");
-    setPassword("");
     setMessage(null);
     await refreshLocalState();
+  }
+
+  async function saveDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedLoad || !edit) return;
+    await run(
+      () =>
+        invoke("desktop_save_load_details", {
+          input: {
+            loadId: selectedLoad.id,
+            driverId: edit.driverId || null,
+            vehicleId: edit.vehicleId || null,
+            wasteDescription: edit.wasteDescription,
+            grossWeight: numberOrNull(edit.grossWeight),
+            tareWeight: numberOrNull(edit.tareWeight),
+            netWeight: numberOrNull(edit.netWeight),
+            weightMetric: edit.weightMetric,
+            weightIsEstimate: false,
+            ticketNumber: edit.ticketNumber || null,
+            notes: edit.notes || null,
+          },
+        }),
+      "Load details saved locally and queued for Cloud sync.",
+    );
+  }
+
+  async function loadAction(command: string, success: string) {
+    if (!selectedLoad) return;
+    await run(() => invoke(command, { input: { loadId: selectedLoad.id } }), success);
+  }
+
+  async function rejectLoad() {
+    if (!selectedLoad) return;
+    const reason = window.prompt("Why is this incoming load being rejected?");
+    if (!reason) return;
+    await run(
+      () => invoke("desktop_reject_load", { input: { loadId: selectedLoad.id, reason } }),
+      "Load rejected locally and queued for Cloud sync.",
+    );
   }
 
   const locked = Boolean(provisioning?.provisioned && !auth?.unlocked);
 
   return (
     <main className="shell">
-      <section className="hero">
-        <span className="eyebrow">Waste X Desktop</span>
-        <h1>
-          {locked
-            ? "Waste X is locked."
-            : database?.ready
-              ? "Local-first foundation is alive."
-              : "Offline foundation is starting."}
-        </h1>
-        <p>
-          Waste X Desktop owns an encrypted operational database on this machine.
-          Cloud remains the permanent system of record, while authorised local
-          operations can continue through connectivity loss.
-        </p>
+      <header className="topbar">
+        <div>
+          <span className="eyebrow">Waste X Desktop</span>
+          <h1>{locked ? "Waste X is locked." : "Local-first operations."}</h1>
+          <p>
+            Yard actions commit to encrypted SQLite first. Cloud sync is a consequence,
+            not a prerequisite for operating the site.
+          </p>
+        </div>
+        {auth?.unlocked ? (
+          <button className="secondary-button" onClick={handleLock}>Lock Desktop</button>
+        ) : null}
+      </header>
+
+      <section className="status-grid">
+        <article><strong>Local database</strong><span>{database?.ready ? `Encrypted · v${database.schemaVersion}` : "Starting…"}</span></article>
+        <article><strong>Authentication</strong><span>{auth?.unlocked ? `${auth.mode} unlocked` : provisioning?.provisioned ? "Locked" : "Not provisioned"}</span></article>
+        <article><strong>Offline autonomy</strong><span>{auth?.canOffline ? `${auth.offlineDaysRemaining} days remaining` : "Needs online renewal"}</span></article>
+        <article><strong>Sync outbox</strong><span>{operations ? `${operations.pendingEvents} pending · ${operations.conflicts} conflicts` : "Protected"}</span></article>
       </section>
 
-      <section className="grid" aria-label="Desktop foundation status">
-        <article>
-          <strong>Platforms</strong>
-          <span>{platformExamples.join(" + ")}</span>
-        </article>
-        <article>
-          <strong>Shared contracts</strong>
-          <span>Schema v{foundationEvent.schemaVersion}</span>
-        </article>
-        <article>
-          <strong>Local database</strong>
-          <span>
-            {databaseError
-              ? `Error: ${databaseError}`
-              : database?.ready
-                ? `Encrypted · schema v${database.schemaVersion} · ${database.tableCount} local tables`
-                : "Initialising SQLCipher…"}
-          </span>
-        </article>
-        <article>
-          <strong>Authentication</strong>
-          <span>
-            {auth?.unlocked
-              ? `${auth.mode === "OFFLINE" ? "Offline" : "Online"} session unlocked`
-              : provisioning?.provisioned
-                ? "Locked"
-                : "Not provisioned"}
-          </span>
-        </article>
-        <article>
-          <strong>Local working set</strong>
-          <span>
-            {auth?.unlocked && summary
-              ? `${summary.jobs} jobs · ${summary.jobLoads} loads`
-              : provisioning?.provisioned
-                ? "Protected while locked"
-                : "Not bootstrapped yet"}
-          </span>
-        </article>
-        <article>
-          <strong>Offline autonomy</strong>
-          <span>
-            {auth?.canOffline
-              ? `${auth.offlineDaysRemaining} day${auth.offlineDaysRemaining === 1 ? "" : "s"} remaining`
-              : provisioning?.provisioned
-                ? "Online sign-in required to enable"
-                : "Waiting for provisioning"}
-          </span>
-        </article>
-      </section>
+      {!provisioning?.provisioned ? (
+        <section className="panel">
+          <span className="eyebrow">Initial provisioning</span>
+          <h2>Connect this Mac to Waste X.</h2>
+          <form className="form-grid" onSubmit={handleProvision}>
+            <label><span>Email</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+            <label><span>Password</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+            <label className="wide"><span>Desktop name</span><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required /></label>
+            <button disabled={busy}>{busy ? "Provisioning…" : "Provision this Mac"}</button>
+          </form>
+        </section>
+      ) : !auth?.unlocked ? (
+        <section className="panel auth-panel">
+          <span className="eyebrow">Secure unlock</span>
+          <h2>Sign in to Waste X Desktop.</h2>
+          <p className="small-copy">If Cloud cannot be reached, Waste X will validate against the encrypted offline entitlement instead.</p>
+          <form className="form-grid" onSubmit={handleUnlock}>
+            <label><span>Email</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+            <label><span>Password</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus /></label>
+            <button disabled={busy}>{busy ? "Checking…" : "Unlock Waste X"}</button>
+          </form>
+        </section>
+      ) : (
+        <>
+          <section className="operations-header">
+            <div>
+              <span className="eyebrow">Daily Operations</span>
+              <h2>{summary?.jobLoads ?? 0} local loads ready</h2>
+            </div>
+            <div className="ops-meta">
+              <span>{summary?.jobs ?? 0} jobs</span>
+              <span>{operations?.pendingEvents ?? 0} waiting to sync</span>
+              <button
+                className="secondary-button"
+                disabled={busy || auth.mode === "OFFLINE"}
+                onClick={() => run(() => invoke("desktop_refresh_bootstrap"), "Cloud bootstrap refreshed.")}
+              >
+                Refresh Cloud
+              </button>
+            </div>
+          </section>
 
-      <section className="provisioning-panel">
-        {!provisioning?.provisioned ? (
-          <>
-            <div>
-              <span className="eyebrow">Initial provisioning</span>
-              <h2>Connect this Mac to Waste X.</h2>
-              <p className="panel-copy">
-                Sign in once to register a permanent Desktop device and copy the
-                operational working set into encrypted SQLite. Your Waste X password
-                is never stored.
-              </p>
-            </div>
-            <form className="provision-form" onSubmit={handleProvision}>
-              <label>
-                <span>Waste X email</span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="username" />
-              </label>
-              <label>
-                <span>Waste X password</span>
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required autoComplete="current-password" />
-              </label>
-              <label>
-                <span>Desktop name</span>
-                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
-              </label>
-              <button type="submit" disabled={busy}>{busy ? "Provisioning…" : "Provision this Mac"}</button>
-            </form>
-          </>
-        ) : !auth?.unlocked ? (
-          <>
-            <div>
-              <span className="eyebrow">Secure unlock</span>
-              <h2>Sign in to Waste X Desktop.</h2>
-              <p className="panel-copy">
-                When Cloud is reachable, Waste X validates this account/device and
-                renews offline access. If Cloud is unavailable, the encrypted local
-                credential verifier and device-bound entitlement can unlock this
-                Desktop until the offline window expires.
-              </p>
-            </div>
-            <form className="provision-form" onSubmit={handleUnlock}>
-              <label>
-                <span>Waste X email</span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="username" />
-              </label>
-              <label>
-                <span>Waste X password</span>
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required autoComplete="current-password" autoFocus />
-              </label>
-              <button type="submit" disabled={busy}>{busy ? "Checking…" : "Unlock Waste X"}</button>
-            </form>
-            <div className={`auth-banner ${auth?.canOffline ? "ready" : ""}`}>
-              {auth?.canOffline
-                ? `Offline access is ready until ${auth.offlineExpiresAt ? new Date(auth.offlineExpiresAt).toLocaleString() : "the entitlement expiry"}.`
-                : "First unlock must be online so this Desktop can receive its 14-day offline entitlement."}
-            </div>
-          </>
-        ) : (
-          <>
-            <div>
-              <span className="eyebrow">Authorised session</span>
-              <h2>This Desktop is unlocked.</h2>
-              <p className="panel-copy">
-                Device {provisioning.deviceId} is registered to this installation.
-                The working set below is being read from encrypted local storage.
-              </p>
-            </div>
-            <div className="provisioned-actions">
-              <div className="local-counts">
-                <strong>{summary?.jobs ?? 0}</strong><span>local jobs</span>
-                <strong>{summary?.jobLoads ?? 0}</strong><span>local loads</span>
-              </div>
-              <div className="button-row">
-                <button type="button" onClick={handleRefresh} disabled={busy}>
-                  {busy ? "Refreshing…" : "Refresh Cloud bootstrap"}
+          <section className="operations-layout">
+            <div className="load-list">
+              {operations?.loads.map((load) => (
+                <button
+                  key={load.id}
+                  className={`load-row ${selectedLoadId === load.id ? "selected" : ""}`}
+                  onClick={() => setSelectedLoadId(load.id)}
+                >
+                  <div className="load-title">
+                    <strong>{load.jobNumber || "Job"} · Load {load.loadNumber ?? "—"}</strong>
+                    <span className={`status-pill status-${load.status}`}>{load.status}</span>
+                  </div>
+                  <span>{load.direction} · {load.jobDate ?? "No date"} · {load.ewcCode ?? "No EWC"}</span>
+                  <span>{load.wasteDescription || "Waste description required"}</span>
+                  <span className="load-foot">Net {load.netWeight ?? "—"} {load.weightMetric} {load.pendingEvents > 0 ? `· ${load.pendingEvents} local change${load.pendingEvents === 1 ? "" : "s"}` : ""}</span>
                 </button>
-                <button type="button" className="secondary-button" onClick={handleLock} disabled={busy}>
-                  Lock Desktop
-                </button>
-              </div>
+              ))}
+              {!operations?.loads.length ? <div className="empty-state">No operational loads are cached on this Desktop.</div> : null}
             </div>
-            <div className={`auth-banner ${auth.canOffline ? "ready" : ""}`}>
-              {auth.mode === "OFFLINE" ? "Running in offline authenticated mode. " : "Cloud authentication is current. "}
-              {auth.canOffline ? `${auth.offlineDaysRemaining} days of offline access remain.` : "Offline entitlement needs refreshing."}
-            </div>
-          </>
-        )}
 
-        {message ? <div className="status-message">{message}</div> : null}
-      </section>
+            <div className="load-editor">
+              {selectedLoad && edit ? (
+                <>
+                  <div className="editor-heading">
+                    <div>
+                      <span className="eyebrow">Selected load</span>
+                      <h3>{selectedLoad.jobNumber} · Load {selectedLoad.loadNumber ?? "—"}</h3>
+                    </div>
+                    <span className={`status-pill status-${selectedLoad.status}`}>{selectedLoad.status}</span>
+                  </div>
+
+                  <form className="editor-form" onSubmit={saveDetails}>
+                    <label><span>Driver</span><select value={edit.driverId} onChange={(e) => setEdit({ ...edit, driverId: e.target.value })}><option value="">Select driver</option>{availableDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.label}</option>)}</select></label>
+                    <label><span>Vehicle</span><select value={edit.vehicleId} onChange={(e) => setEdit({ ...edit, vehicleId: e.target.value })}><option value="">Select vehicle</option>{availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}</option>)}</select></label>
+                    <label className="wide"><span>Waste description</span><input value={edit.wasteDescription} onChange={(e) => setEdit({ ...edit, wasteDescription: e.target.value })} /></label>
+                    <label><span>Gross</span><input inputMode="decimal" value={edit.grossWeight} onChange={(e) => setEdit({ ...edit, grossWeight: e.target.value })} /></label>
+                    <label><span>Tare</span><input inputMode="decimal" value={edit.tareWeight} onChange={(e) => setEdit({ ...edit, tareWeight: e.target.value })} /></label>
+                    <label><span>Net</span><input inputMode="decimal" value={edit.netWeight} onChange={(e) => setEdit({ ...edit, netWeight: e.target.value })} /></label>
+                    <label><span>Metric</span><select value={edit.weightMetric} onChange={(e) => setEdit({ ...edit, weightMetric: e.target.value })}><option>Tonnes</option><option>Kilograms</option><option>Grams</option></select></label>
+                    <label className="wide"><span>Ticket number</span><input value={edit.ticketNumber} onChange={(e) => setEdit({ ...edit, ticketNumber: e.target.value })} /></label>
+                    <label className="wide"><span>Notes</span><textarea rows={3} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
+                    <button disabled={busy || ["completed", "rejected", "cancelled"].includes(selectedLoad.status)}>Save locally</button>
+                  </form>
+
+                  <div className="action-row">
+                    {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" ? <button disabled={busy} onClick={() => loadAction("desktop_mark_load_arrived", "Arrival recorded locally and queued for sync.")}>Mark Arrived</button> : null}
+                    {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button disabled={busy} onClick={() => loadAction("desktop_accept_load", "Load accepted locally and queued for sync.")}>Accept</button> : null}
+                    {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button className="danger-button" disabled={busy} onClick={rejectLoad}>Reject</button> : null}
+                    {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? <button disabled={busy} onClick={() => loadAction("desktop_complete_load", "Load completed locally and queued for sync.")}>Complete Load</button> : null}
+                  </div>
+
+                  <div className="local-proof">Entity version {selectedLoad.entityVersion} · {selectedLoad.pendingEvents} unsynced local event{selectedLoad.pendingEvents === 1 ? "" : "s"}</div>
+                </>
+              ) : (
+                <div className="empty-state editor-empty">Select a load to operate it from encrypted local storage.</div>
+              )}
+            </div>
+          </section>
+        </>
+      )}
+
+      {message ? <div className="toast">{message}</div> : null}
     </main>
   );
 }

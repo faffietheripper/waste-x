@@ -3,6 +3,7 @@ use tauri::Manager;
 mod bootstrap;
 mod local_db;
 mod offline_auth;
+mod operations;
 mod provisioning;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -24,6 +25,12 @@ pub fn run() {
             offline_auth::desktop_unlock,
             offline_auth::desktop_lock,
             offline_auth::desktop_operational_summary,
+            operations::desktop_daily_operations,
+            operations::desktop_save_load_details,
+            operations::desktop_mark_load_arrived,
+            operations::desktop_accept_load,
+            operations::desktop_reject_load,
+            operations::desktop_complete_load,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Waste X Desktop");
