@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
   grid: { marginTop: 14, gap: 10 },
   infoCard: { padding: 16, borderRadius: 15, backgroundColor: "#fff" },
   infoLabel: { color: "#94a3b8", fontSize: 10, fontWeight: "800", letterSpacing: 1 },
-  infoValue: { marginTop: 6, color: "#1e293b", fontSize: 13, fontWeight: "650" },
+  infoValue: { marginTop: 6, color: "#1e293b", fontSize: 13, fontWeight: "600" },
   sharedCard: { marginTop: 14, padding: 20, borderRadius: 18, backgroundColor: "#fff" },
   sectionTitle: { color: "#111827", fontSize: 18, fontWeight: "800" },
   packageRow: { marginTop: 11, flexDirection: "row", alignItems: "center", gap: 9 },
