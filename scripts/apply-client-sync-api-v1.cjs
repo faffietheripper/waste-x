@@ -3,11 +3,11 @@
 
 const fs = require("fs");
 const path = require("path");
+const readline = require("readline");
 const { Client } = require("pg");
 require("dotenv").config({ path: path.resolve(process.cwd(), ".env") });
 
 const APPLY_FLAG = "--confirm-development";
-const allowProduction = process.argv.includes("--allow-production");
 
 if (!process.argv.includes(APPLY_FLAG)) {
   console.error(
@@ -21,10 +21,7 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-if (
-  !allowProduction &&
-  (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production")
-) {
+if (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production") {
   console.error(
     "Refusing to run while the environment is marked production. Use a development/staging database.",
   );
@@ -42,8 +39,31 @@ console.log(`Target host: ${databaseUrl.hostname}`);
 console.log(`Target database: ${databaseUrl.pathname.replace(/^\//, "") || "(default)"}`);
 console.log("Applying:");
 for (const file of migrations) console.log(`  - ${file}`);
+console.log("");
+console.log("Use this only against a DEVELOPMENT/STAGING database.");
+
+function confirmApply() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error("Refusing non-interactive execution. Run this command in a terminal.");
+    process.exit(1);
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question('Type APPLY to continue, or anything else to cancel: ', (answer) => {
+      rl.close();
+      resolve(answer.trim() === "APPLY");
+    });
+  });
+}
 
 async function main() {
+  const confirmed = await confirmApply();
+  if (!confirmed) {
+    console.log("Migration cancelled. No SQL was executed.");
+    return;
+  }
+
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
 
