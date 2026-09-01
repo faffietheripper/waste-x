@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Waste X",
+    "slug": "waste-x-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "wastex",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.wastex.mobile",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.wastex.mobile",
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Allow Waste X to use Face ID to protect operational access."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
