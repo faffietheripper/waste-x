@@ -5,6 +5,7 @@ mod local_db;
 mod offline_auth;
 mod operations;
 mod provisioning;
+mod sync_engine;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +14,7 @@ pub fn run() {
             let local_db = local_db::initialise(app.handle())?;
             app.manage(local_db);
             app.manage(offline_auth::DesktopAuthState::default());
+            app.manage(sync_engine::SyncEngineState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -31,6 +33,8 @@ pub fn run() {
             operations::desktop_accept_load,
             operations::desktop_reject_load,
             operations::desktop_complete_load,
+            sync_engine::desktop_sync_status,
+            sync_engine::desktop_sync_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Waste X Desktop");

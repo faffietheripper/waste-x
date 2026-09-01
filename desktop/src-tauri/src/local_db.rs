@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, State};
 const DB_FILE_NAME: &str = "waste-x-local.db";
 const KEYRING_SERVICE: &str = "com.wastex.desktop.local-database";
 const KEYRING_ACCOUNT: &str = "database-key-v1";
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 pub struct LocalDb {
     connection: Mutex<Connection>,
@@ -89,6 +89,16 @@ fn apply_schema_migrations(connection: &mut Connection) -> rusqlite::Result<()> 
         transaction.commit()?;
     }
 
+    if current_version < 2 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V2)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
+            params![2_i64],
+        )?;
+        transaction.commit()?;
+    }
+
     Ok(())
 }
 
@@ -103,8 +113,6 @@ pub fn initialise(app: &AppHandle) -> Result<LocalDb, Box<dyn std::error::Error>
     let key = load_or_create_database_key()?;
     let mut connection = Connection::open(&path)?;
 
-    // SQLCipher requires the key before any schema read. The key contains only
-    // generated hexadecimal characters and is never written to application logs.
     connection.execute_batch(&format!("PRAGMA key = \"x'{key}'\";"))?;
 
     let cipher_version: String = connection
@@ -447,4 +455,23 @@ CREATE TABLE local_sync_metadata (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+"#;
+
+const MIGRATION_V2: &str = r#"
+CREATE TABLE IF NOT EXISTS local_sync_remote_conflict (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cursor TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    entity_version INTEGER NOT NULL,
+    change_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS local_sync_remote_conflict_entity_idx
+    ON local_sync_remote_conflict(entity_type, entity_id, resolved_at);
+CREATE INDEX IF NOT EXISTS local_sync_queue_entity_state_idx
+    ON local_sync_queue(entity_type, entity_id, status, device_sequence);
 "#;
