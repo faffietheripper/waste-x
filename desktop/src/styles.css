@@ -38,6 +38,11 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .local-counts { display: grid; grid-template-columns: auto auto; gap: 4px 10px; align-items: baseline; }
 .local-counts strong { font-size: 26px; }
 .local-counts span { color: #64748b; font-size: 13px; }
+.button-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.secondary-button { background: #e2e8f0; color: #1e293b; }
+.secondary-button:hover:not(:disabled) { background: #cbd5e1; }
+.auth-banner { margin-top: 18px; padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; color: #475569; font-size: 13px; }
+.auth-banner.ready { border-color: #bbf7d0; background: #f0fdf4; color: #166534; }
 .status-message { margin-top: 18px; padding: 12px 14px; border-radius: 10px; background: #f1f5f9; color: #334155; font-size: 14px; }
 
 @media (max-width: 720px) {
