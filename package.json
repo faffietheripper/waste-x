@@ -13,6 +13,8 @@
     "db:push": "drizzle-kit push --config=drizzle.config.ts",
     "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
     "drizzle": "drizzle-kit",
+    "desktop:sync-db:apply": "node scripts/apply-client-sync-api-v1.cjs --confirm-development",
+    "desktop:sync-db:verify": "node scripts/verify-client-sync-api-v1.cjs",
     "desktop:install": "npm --prefix desktop install",
     "desktop:web": "npm --prefix desktop run dev",
     "desktop:dev": "npm --prefix desktop run tauri:dev",
