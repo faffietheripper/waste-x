@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod bootstrap;
+mod bridge_client;
 mod cloud_access;
 mod local_db;
 mod offline_auth;
@@ -39,6 +40,7 @@ pub fn run() {
             sync_engine::desktop_sync_now,
             cloud_access::desktop_cloud_context,
             cloud_access::desktop_cloud_catalogue,
+            bridge_client::desktop_bridge_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Waste X Desktop");

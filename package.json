@@ -21,7 +21,10 @@
     "desktop:dev": "npm --prefix desktop run tauri:dev",
     "desktop:check": "npm --prefix desktop run check",
     "desktop:build:web": "npm --prefix desktop run build",
-    "desktop:build": "npm --prefix desktop run tauri:build"
+    "desktop:build": "npm --prefix desktop run tauri:build",
+    "desktop:bridge:dev": "cargo run --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge",
+    "desktop:bridge:check": "cargo check --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge",
+    "desktop:bridge:build": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.4.1",
