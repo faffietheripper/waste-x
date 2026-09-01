@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+const sha256HexSchema = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/i, "Expected a SHA-256 hex digest.");
+
 export const syncEventV1Schema = z.object({
   schemaVersion: z.literal(1),
   eventId: z.string().uuid(),
@@ -21,7 +25,7 @@ export const syncEventV1Schema = z.object({
   occurredAt: z.string().datetime({ offset: true }),
   recordedAt: z.string().datetime({ offset: true }),
   payload: z.unknown(),
-  payloadHash: z.string().min(1),
+  payloadHash: sha256HexSchema,
 });
 
 export const syncPushRequestV1Schema = z.object({
