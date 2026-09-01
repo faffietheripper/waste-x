@@ -20,18 +20,18 @@ const requiredTables = [
 ];
 
 const requiredTriggers = [
-  "waste_x_client_sync_job_trigger",
-  "waste_x_client_sync_job_load_trigger",
-  "waste_x_client_sync_site_trigger",
-  "waste_x_client_sync_driver_trigger",
-  "waste_x_client_sync_vehicle_trigger",
-  "waste_x_client_sync_counterparty_trigger",
-  "waste_x_client_sync_counterparty_role_trigger",
-  "waste_x_client_sync_counterparty_site_trigger",
-  "waste_x_client_sync_counterparty_site_authorisation_trigger",
-  "waste_x_client_sync_counterparty_site_ewc_code_trigger",
-  "waste_x_client_sync_site_permit_trigger",
-  "waste_x_client_sync_permit_ewc_code_trigger",
+  "client_sync_job_change",
+  "client_sync_job_load_change",
+  "client_sync_site_change",
+  "client_sync_driver_change",
+  "client_sync_vehicle_change",
+  "client_sync_counterparty_change",
+  "client_sync_counterparty_role_change",
+  "client_sync_counterparty_site_change",
+  "client_sync_counterparty_site_auth_change",
+  "client_sync_counterparty_site_ewc_change",
+  "client_sync_permit_change",
+  "client_sync_permit_ewc_change",
 ];
 
 async function main() {
@@ -51,18 +51,29 @@ async function main() {
     );
     const foundTriggers = new Set(triggers.rows.map((row) => row.tgname));
 
+    const changeCaptureFunction = await client.query(
+      `select 1 as found from pg_proc where proname = 'waste_x_capture_client_sync_change' limit 1`,
+    );
+    const hasChangeCaptureFunction = changeCaptureFunction.rowCount > 0;
+
     const missingTables = requiredTables.filter((name) => !foundTables.has(name));
     const missingTriggers = requiredTriggers.filter((name) => !foundTriggers.has(name));
 
     console.log(`Tables: ${foundTables.size}/${requiredTables.length}`);
     console.log(`Triggers: ${foundTriggers.size}/${requiredTriggers.length}`);
+    console.log(
+      `Change-capture function: ${hasChangeCaptureFunction ? "present" : "missing"}`,
+    );
 
-    if (missingTables.length || missingTriggers.length) {
+    if (missingTables.length || missingTriggers.length || !hasChangeCaptureFunction) {
       if (missingTables.length) {
         console.error(`Missing tables: ${missingTables.join(", ")}`);
       }
       if (missingTriggers.length) {
         console.error(`Missing triggers: ${missingTriggers.join(", ")}`);
+      }
+      if (!hasChangeCaptureFunction) {
+        console.error("Missing function: waste_x_capture_client_sync_change");
       }
       process.exitCode = 1;
       return;
