@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 mod local_db;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
