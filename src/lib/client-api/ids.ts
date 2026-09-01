@@ -1,20 +1,34 @@
 import crypto from "node:crypto";
 
+const MAX_UUID_V7_TIMESTAMP = 281_474_976_710_655; // 2^48 - 1
+
 /**
  * Generates an RFC 9562 UUIDv7 using the current Unix epoch milliseconds plus
  * cryptographically secure random bytes. UUIDv7 keeps offline-created Waste X
  * identifiers globally unique while remaining broadly time-sortable.
+ *
+ * This intentionally avoids BigInt literals so it remains compatible with the
+ * existing Waste X Next.js TypeScript target.
  */
 export function uuidV7(now = Date.now()) {
-  const bytes = crypto.randomBytes(16);
-  const timestamp = BigInt(now);
+  const timestamp = Math.floor(now);
 
-  bytes[0] = Number((timestamp >> 40n) & 0xffn);
-  bytes[1] = Number((timestamp >> 32n) & 0xffn);
-  bytes[2] = Number((timestamp >> 24n) & 0xffn);
-  bytes[3] = Number((timestamp >> 16n) & 0xffn);
-  bytes[4] = Number((timestamp >> 8n) & 0xffn);
-  bytes[5] = Number(timestamp & 0xffn);
+  if (
+    !Number.isFinite(timestamp) ||
+    timestamp < 0 ||
+    timestamp > MAX_UUID_V7_TIMESTAMP
+  ) {
+    throw new RangeError("UUIDv7 timestamp must fit within 48 bits.");
+  }
+
+  const bytes = crypto.randomBytes(16);
+  let remainingTimestamp = timestamp;
+
+  // UUIDv7 stores Unix epoch milliseconds in the first 48 bits, big-endian.
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = remainingTimestamp % 256;
+    remainingTimestamp = Math.floor(remainingTimestamp / 256);
+  }
 
   // Version 7 in the high nibble of octet 6.
   bytes[6] = (bytes[6] & 0x0f) | 0x70;
