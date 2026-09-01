@@ -24,7 +24,13 @@
     "desktop:build": "npm --prefix desktop run tauri:build",
     "desktop:bridge:dev": "cargo run --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge",
     "desktop:bridge:check": "cargo check --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge",
-    "desktop:bridge:build": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge"
+    "desktop:bridge:build": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --bin waste-x-bridge",
+    "mobile:install": "npm --prefix mobile install",
+    "mobile:start": "npm --prefix mobile run start",
+    "mobile:ios": "npm --prefix mobile run ios",
+    "mobile:android": "npm --prefix mobile run android",
+    "mobile:prebuild": "npm --prefix mobile run prebuild",
+    "mobile:check": "npm --prefix mobile run check"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.4.1",
@@ -63,7 +69,7 @@
     "react-dom": "^18",
     "react-hook-form": "^7.52.2",
     "react-icons": "^5.2.1",
-    "react-use-measure": "^2.1.1",
+    "react-use-measure": "^1.1.1",
     "recharts": "^3.8.1",
     "resend": "^6.18.1",
     "tailwind-merge": "^2.4.0",
