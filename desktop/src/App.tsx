@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type LocalDbStatus = {
   ready: boolean;
@@ -68,6 +68,31 @@ type DailyOperationsSnapshot = {
   conflicts: number;
 };
 
+type DesktopSyncStatus = {
+  running: boolean;
+  cloudReachable: boolean;
+  authRequired: boolean;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  cursor: string | null;
+  pending: number;
+  retryableFailed: number;
+  permanentFailed: number;
+  conflicts: number;
+  deferredRemoteChanges: number;
+};
+
+type DesktopSyncRunResult = {
+  status: DesktopSyncStatus;
+  pushedApplied: number;
+  pushedDuplicates: number;
+  pushedConflicts: number;
+  pushedFailed: number;
+  pulledChanges: number;
+  deferredRemoteChanges: number;
+};
+
 type UnlockResult = {
   ok: boolean;
   mode: "ONLINE" | "OFFLINE";
@@ -107,19 +132,28 @@ function numberOrNull(value: string) {
   return parsed;
 }
 
+function shortTime(value: string | null) {
+  if (!value) return "Never";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export function App() {
   const [database, setDatabase] = useState<LocalDbStatus | null>(null);
   const [provisioning, setProvisioning] = useState<ProvisioningStatus | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [summary, setSummary] = useState<OperationalSummary | null>(null);
   const [operations, setOperations] = useState<DailyOperationsSnapshot | null>(null);
+  const [sync, setSync] = useState<DesktopSyncStatus | null>(null);
   const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("Waste X Desktop — Mac");
   const [busy, setBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const syncLoopActive = useRef(false);
 
   const selectedLoad = useMemo(
     () => operations?.loads.find((load) => load.id === selectedLoadId) ?? null,
@@ -148,22 +182,58 @@ export function App() {
       invoke<ProvisioningStatus>("desktop_provisioning_status"),
       invoke<AuthStatus>("desktop_auth_status"),
     ]);
+
     setDatabase(dbStatus);
     setProvisioning(provisioningStatus);
     setAuth(authStatus);
 
     if (authStatus.unlocked) {
-      const [operationalSummary, dailyOperations] = await Promise.all([
+      const [operationalSummary, dailyOperations, syncStatus] = await Promise.all([
         invoke<OperationalSummary>("desktop_operational_summary"),
         invoke<DailyOperationsSnapshot>("desktop_daily_operations"),
+        invoke<DesktopSyncStatus>("desktop_sync_status"),
       ]);
       setSummary(operationalSummary);
       setOperations(dailyOperations);
+      setSync(syncStatus);
     } else {
       setSummary(null);
       setOperations(null);
+      setSync(null);
       setSelectedLoadId(null);
       setEdit(null);
+    }
+  }
+
+  async function syncNow(showToast = true) {
+    if (syncLoopActive.current) return;
+    syncLoopActive.current = true;
+    setSyncBusy(true);
+    try {
+      const result = await invoke<DesktopSyncRunResult>("desktop_sync_now");
+      setSync(result.status);
+      await refreshLocalState();
+
+      if (showToast) {
+        if (!result.status.cloudReachable) {
+          setMessage("Cloud is still unavailable. Local operations remain safe and queued.");
+        } else if (result.status.authRequired) {
+          setMessage("Cloud is reachable, but the Desktop session must be renewed with an online sign-in.");
+        } else if (result.pushedConflicts > 0 || result.status.conflicts > 0) {
+          setMessage("Sync stopped safely at a conflict. Later physical events remain queued in order.");
+        } else if (result.status.permanentFailed > 0) {
+          setMessage("Cloud rejected an event. Waste X kept it locally for review instead of discarding it.");
+        } else {
+          setMessage(
+            `Sync complete: ${result.pushedApplied + result.pushedDuplicates} uploaded · ${result.pulledChanges} Cloud changes received.`,
+          );
+        }
+      }
+    } catch (error) {
+      if (showToast) setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSyncBusy(false);
+      syncLoopActive.current = false;
     }
   }
 
@@ -185,6 +255,17 @@ export function App() {
   useEffect(() => {
     if (selectedLoad) setEdit(editStateFor(selectedLoad));
   }, [selectedLoad?.id]);
+
+  useEffect(() => {
+    if (!auth?.unlocked) return;
+
+    const initial = window.setTimeout(() => void syncNow(false), 1200);
+    const interval = window.setInterval(() => void syncNow(false), 15_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [auth?.unlocked]);
 
   async function run(task: () => Promise<unknown>, success: string) {
     setBusy(true);
@@ -275,6 +356,7 @@ export function App() {
   }
 
   const locked = Boolean(provisioning?.provisioned && !auth?.unlocked);
+  const syncProblems = (sync?.conflicts ?? 0) + (sync?.permanentFailed ?? 0) + (sync?.deferredRemoteChanges ?? 0);
 
   return (
     <main className="shell">
@@ -288,15 +370,20 @@ export function App() {
           </p>
         </div>
         {auth?.unlocked ? (
-          <button className="secondary-button" onClick={handleLock}>Lock Desktop</button>
+          <div className="top-actions">
+            <button className="secondary-button" disabled={syncBusy} onClick={() => void syncNow(true)}>
+              {syncBusy || sync?.running ? "Syncing…" : "Sync now"}
+            </button>
+            <button className="secondary-button" onClick={handleLock}>Lock Desktop</button>
+          </div>
         ) : null}
       </header>
 
       <section className="status-grid">
-        <article><strong>Local database</strong><span>{database?.ready ? `Encrypted · v${database.schemaVersion}` : "Starting…"}</span></article>
+        <article><strong>Local database</strong><span>{database?.ready ? `Encrypted · schema v${database.schemaVersion}` : "Starting…"}</span></article>
         <article><strong>Authentication</strong><span>{auth?.unlocked ? `${auth.mode} unlocked` : provisioning?.provisioned ? "Locked" : "Not provisioned"}</span></article>
-        <article><strong>Offline autonomy</strong><span>{auth?.canOffline ? `${auth.offlineDaysRemaining} days remaining` : "Needs online renewal"}</span></article>
-        <article><strong>Sync outbox</strong><span>{operations ? `${operations.pendingEvents} pending · ${operations.conflicts} conflicts` : "Protected"}</span></article>
+        <article><strong>Cloud sync</strong><span>{!auth?.unlocked ? "Protected" : sync?.authRequired ? "Sign-in required" : sync?.cloudReachable ? "Connected" : "Offline / waiting"}</span></article>
+        <article><strong>Sync outbox</strong><span>{sync ? `${sync.pending} pending · ${sync.retryableFailed} retrying · ${syncProblems} review` : "Protected"}</span></article>
       </section>
 
       {!provisioning?.provisioned ? (
@@ -314,7 +401,7 @@ export function App() {
         <section className="panel auth-panel">
           <span className="eyebrow">Secure unlock</span>
           <h2>Sign in to Waste X Desktop.</h2>
-          <p className="small-copy">If Cloud cannot be reached, Waste X will validate against the encrypted offline entitlement instead.</p>
+          <p className="small-copy">If Cloud cannot be reached, Waste X validates against the encrypted offline entitlement instead.</p>
           <form className="form-grid" onSubmit={handleUnlock}>
             <label><span>Email</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
             <label><span>Password</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus /></label>
@@ -323,6 +410,27 @@ export function App() {
         </section>
       ) : (
         <>
+          <section className={`sync-strip ${sync?.cloudReachable ? "online" : "offline"} ${syncProblems > 0 ? "problem" : ""}`}>
+            <div>
+              <strong>{sync?.cloudReachable ? "Cloud connected" : "Local operations active"}</strong>
+              <span>
+                {sync?.authRequired
+                  ? "Cloud session needs an online sign-in before queued work can upload."
+                  : sync?.lastError
+                    ? sync.lastError
+                    : sync?.cloudReachable
+                      ? `Last successful sync ${shortTime(sync.lastSuccessAt)}.`
+                      : "Waste X will retry automatically every 15 seconds while this Desktop is unlocked."}
+              </span>
+            </div>
+            <div className="sync-metrics">
+              <span><strong>{sync?.pending ?? 0}</strong> pending</span>
+              <span><strong>{sync?.retryableFailed ?? 0}</strong> retrying</span>
+              <span><strong>{syncProblems}</strong> review</span>
+              <span>cursor {sync?.cursor ?? "—"}</span>
+            </div>
+          </section>
+
           <section className="operations-header">
             <div>
               <span className="eyebrow">Daily Operations</span>
@@ -330,25 +438,15 @@ export function App() {
             </div>
             <div className="ops-meta">
               <span>{summary?.jobs ?? 0} jobs</span>
-              <span>{operations?.pendingEvents ?? 0} waiting to sync</span>
-              <button
-                className="secondary-button"
-                disabled={busy || auth.mode === "OFFLINE"}
-                onClick={() => run(() => invoke("desktop_refresh_bootstrap"), "Cloud bootstrap refreshed.")}
-              >
-                Refresh Cloud
-              </button>
+              <span>{operations?.pendingEvents ?? 0} local events</span>
+              <button className="secondary-button" disabled={busy} onClick={() => run(() => invoke("desktop_refresh_bootstrap"), "Cloud bootstrap refreshed.")}>Refresh bootstrap</button>
             </div>
           </section>
 
           <section className="operations-layout">
             <div className="load-list">
               {operations?.loads.map((load) => (
-                <button
-                  key={load.id}
-                  className={`load-row ${selectedLoadId === load.id ? "selected" : ""}`}
-                  onClick={() => setSelectedLoadId(load.id)}
-                >
+                <button key={load.id} className={`load-row ${selectedLoadId === load.id ? "selected" : ""}`} onClick={() => setSelectedLoadId(load.id)}>
                   <div className="load-title">
                     <strong>{load.jobNumber || "Job"} · Load {load.loadNumber ?? "—"}</strong>
                     <span className={`status-pill status-${load.status}`}>{load.status}</span>
