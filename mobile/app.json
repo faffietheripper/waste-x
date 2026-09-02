@@ -30,6 +30,12 @@
           "configureAndroidBackup": true,
           "faceIDPermission": "Allow Waste X to use Face ID to protect operational access."
         }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Waste X to use Face ID to unlock authorised offline operations."
+        }
       ]
     ],
     "experiments": {

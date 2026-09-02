@@ -1,4 +1,4 @@
-export interface DesktopOfflineEntitlementV1 {
+export interface ClientOfflineEntitlementV1 {
   version: 1;
   deviceId: string;
   organisationId: string;
@@ -11,7 +11,12 @@ export interface DesktopOfflineEntitlementV1 {
   signature: string;
 }
 
-export interface DesktopOfflineEntitlementResponseV1 {
+export interface ClientOfflineEntitlementResponseV1 {
   ok: true;
-  offlineEntitlement: DesktopOfflineEntitlementV1;
+  offlineEntitlement: ClientOfflineEntitlementV1;
 }
+
+export type DesktopOfflineEntitlementV1 = ClientOfflineEntitlementV1;
+export type DesktopOfflineEntitlementResponseV1 = ClientOfflineEntitlementResponseV1;
+export type MobileOfflineEntitlementV1 = ClientOfflineEntitlementV1;
+export type MobileOfflineEntitlementResponseV1 = ClientOfflineEntitlementResponseV1;

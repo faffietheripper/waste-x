@@ -2,6 +2,7 @@ import type {
   DesktopBootstrapV1,
   DesktopLoginRequestV1,
   DesktopLoginResponseV1,
+  DesktopOfflineEntitlementResponseV1,
   DesktopProvisionRequestV1,
   DesktopProvisionResponseV1,
   EvidenceCompleteResponseV1,
@@ -9,6 +10,7 @@ import type {
   EvidenceUploadResponseV1,
   MobileLoginRequestV1,
   MobileLoginResponseV1,
+  MobileOfflineEntitlementResponseV1,
   MobileProvisionRequestV1,
   MobileProvisionResponseV1,
   SyncPullRequestV1,
@@ -71,6 +73,12 @@ export class WasteXApiClient {
     );
   }
 
+  offlineEntitlementDesktop() {
+    return this.request<DesktopOfflineEntitlementResponseV1>(
+      "/api/desktop/v1/auth/offline-entitlement",
+    );
+  }
+
   logoutDesktop() {
     return this.request<{ loggedOut: true }>("/api/desktop/v1/auth/logout", {
       method: "POST",
@@ -90,6 +98,12 @@ export class WasteXApiClient {
       "/api/mobile/v1/auth/login",
       { method: "POST", body: JSON.stringify(body) },
       false,
+    );
+  }
+
+  offlineEntitlementMobile() {
+    return this.request<MobileOfflineEntitlementResponseV1>(
+      "/api/mobile/v1/auth/offline-entitlement",
     );
   }
 
@@ -156,17 +170,9 @@ export class WasteXApiClient {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
 
-    if (init.body) {
-      headers.set("Content-Type", "application/json");
-    }
-
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
-
-    if (deviceSecret) {
-      headers.set("X-Waste-X-Device-Secret", deviceSecret);
-    }
+    if (init.body) headers.set("Content-Type", "application/json");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (deviceSecret) headers.set("X-Waste-X-Device-Secret", deviceSecret);
 
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       ...init,
@@ -174,9 +180,7 @@ export class WasteXApiClient {
     });
 
     const responseBody = (await response.json().catch(() => null)) as
-      | ({
-          error?: { code?: string; message?: string };
-        } & T)
+      | ({ error?: { code?: string; message?: string } } & T)
       | null;
 
     if (!response.ok) {

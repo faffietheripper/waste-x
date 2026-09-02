@@ -1,3 +1,7 @@
+import { eq } from "drizzle-orm";
+
+import { clientDevices } from "@/db/client-sync-schema";
+import { database } from "@/db/database";
 import {
   requireClientApiContext,
   requireOperationsRole,
@@ -16,12 +20,24 @@ export async function GET(request: Request) {
     const context = await requireClientApiContext(request);
     requireOperationsRole(context);
 
+    const device = await database.query.clientDevices.findFirst({
+      where: eq(clientDevices.id, context.deviceId),
+      columns: { deviceType: true },
+    });
+    if (device?.deviceType !== "MOBILE") {
+      return clientApiError(
+        "MOBILE_DEVICE_REQUIRED",
+        403,
+        "A registered Waste X Mobile device is required.",
+      );
+    }
+
     const deviceSecret = request.headers.get("x-waste-x-device-secret")?.trim();
     if (!deviceSecret) {
       return clientApiError(
         "DEVICE_SECRET_REQUIRED",
         401,
-        "Waste X Desktop device authentication is required.",
+        "Waste X Mobile device authentication is required.",
       );
     }
 
