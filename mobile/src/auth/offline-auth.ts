@@ -57,13 +57,13 @@ function base64Url(bytes: Uint8Array) {
 }
 
 async function sha256(data: Uint8Array) {
-  // TypeScript 6 models Uint8Array as potentially backed by SharedArrayBuffer,
-  // while expo-crypto requires a BufferSource backed by a normal ArrayBuffer.
-  // Copying guarantees the stricter backing type without unsafe casts.
-  const stableData = new Uint8Array(data.byteLength);
+  // Expo's native digest bridge requires a TypedArray at runtime, while
+  // TypeScript 6 requires that TypedArray to be backed by ArrayBuffer rather
+  // than the wider ArrayBufferLike type. Create that exact representation.
+  const stableData = new Uint8Array(new ArrayBuffer(data.byteLength));
   stableData.set(data);
   return new Uint8Array(
-    await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, stableData.buffer),
+    await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, stableData),
   );
 }
 
