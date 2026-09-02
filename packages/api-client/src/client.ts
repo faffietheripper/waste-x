@@ -174,10 +174,20 @@ export class WasteXApiClient {
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (deviceSecret) headers.set("X-Waste-X-Device-Secret", deviceSecret);
 
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      ...init,
-      headers,
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...init,
+        headers,
+      });
+    } catch (error) {
+      if (error instanceof WasteXApiError) throw error;
+      throw new WasteXApiError(
+        "Waste X Cloud is unreachable. Check connectivity, or use offline access if this device is already authorised.",
+        0,
+        "CLOUD_UNREACHABLE",
+      );
+    }
 
     const responseBody = (await response.json().catch(() => null)) as
       | ({ error?: { code?: string; message?: string } } & T)
