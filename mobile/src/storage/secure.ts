@@ -3,16 +3,59 @@ import * as SecureStore from "expo-secure-store";
 
 const DEVICE_ID_KEY = "waste-x-mobile-device-id-v1";
 const DATABASE_KEY = "waste-x-mobile-database-key-v1";
+const DEVICE_SECRET_KEY = "waste-x-mobile-device-secret-v1";
+const SESSION_TOKEN_KEY = "waste-x-mobile-session-token-v1";
+const SESSION_EXPIRY_KEY = "waste-x-mobile-session-expiry-v1";
+const AUTH_PROFILE_KEY = "waste-x-mobile-auth-profile-v1";
 
 const secureOptions: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
 };
 
+export type StoredMobileAuthProfile = {
+  userId: string;
+  email: string;
+  role: string;
+  organisationId: string;
+  displayName: string;
+};
+
+function isUuidV7(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function createUuidV7() {
+  const timestamp = BigInt(Date.now());
+  const random = await Crypto.getRandomBytesAsync(10);
+  const bytes = new Uint8Array(16);
+
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = Number((timestamp >> BigInt((5 - index) * 8)) & 0xffn);
+  }
+
+  bytes[6] = 0x70 | (random[0]! & 0x0f);
+  bytes[7] = random[1]!;
+  bytes[8] = 0x80 | (random[2]! & 0x3f);
+  for (let index = 9; index < 16; index += 1) {
+    bytes[index] = random[index - 6]!;
+  }
+
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
+}
+
 export async function getOrCreateDeviceId() {
   const existing = await SecureStore.getItemAsync(DEVICE_ID_KEY, secureOptions);
-  if (existing) return existing;
+  if (existing) {
+    if (isUuidV7(existing)) return existing;
 
-  const deviceId = Crypto.randomUUID();
+    // Never rotate an already-provisioned legacy device ID. The initial
+    // Step 11 scaffold generated UUIDv4 IDs before Mobile registration landed.
+    const existingSecret = await getMobileDeviceSecret();
+    if (existingSecret) return existing;
+  }
+
+  const deviceId = await createUuidV7();
   await SecureStore.setItemAsync(DEVICE_ID_KEY, deviceId, secureOptions);
   return deviceId;
 }
@@ -25,4 +68,60 @@ export async function getOrCreateDatabaseKey() {
   const key = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
   await SecureStore.setItemAsync(DATABASE_KEY, key, secureOptions);
   return key;
+}
+
+export function getMobileDeviceSecret() {
+  return SecureStore.getItemAsync(DEVICE_SECRET_KEY, secureOptions);
+}
+
+export function getMobileSessionToken() {
+  return SecureStore.getItemAsync(SESSION_TOKEN_KEY, secureOptions);
+}
+
+export function getMobileSessionExpiry() {
+  return SecureStore.getItemAsync(SESSION_EXPIRY_KEY, secureOptions);
+}
+
+export async function getMobileAuthProfile(): Promise<StoredMobileAuthProfile | null> {
+  const value = await SecureStore.getItemAsync(AUTH_PROFILE_KEY, secureOptions);
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as StoredMobileAuthProfile;
+  } catch {
+    return null;
+  }
+}
+
+export async function storeMobileProvisioning(input: {
+  deviceSecret: string;
+  sessionToken: string;
+  sessionExpiresAt: string;
+  profile: StoredMobileAuthProfile;
+}) {
+  await Promise.all([
+    SecureStore.setItemAsync(DEVICE_SECRET_KEY, input.deviceSecret, secureOptions),
+    SecureStore.setItemAsync(SESSION_TOKEN_KEY, input.sessionToken, secureOptions),
+    SecureStore.setItemAsync(SESSION_EXPIRY_KEY, input.sessionExpiresAt, secureOptions),
+    SecureStore.setItemAsync(AUTH_PROFILE_KEY, JSON.stringify(input.profile), secureOptions),
+  ]);
+}
+
+export async function storeMobileSession(input: {
+  sessionToken: string;
+  sessionExpiresAt: string;
+  profile: StoredMobileAuthProfile;
+}) {
+  await Promise.all([
+    SecureStore.setItemAsync(SESSION_TOKEN_KEY, input.sessionToken, secureOptions),
+    SecureStore.setItemAsync(SESSION_EXPIRY_KEY, input.sessionExpiresAt, secureOptions),
+    SecureStore.setItemAsync(AUTH_PROFILE_KEY, JSON.stringify(input.profile), secureOptions),
+  ]);
+}
+
+export async function clearMobileSession() {
+  await Promise.all([
+    SecureStore.deleteItemAsync(SESSION_TOKEN_KEY, secureOptions),
+    SecureStore.deleteItemAsync(SESSION_EXPIRY_KEY, secureOptions),
+    SecureStore.deleteItemAsync(AUTH_PROFILE_KEY, secureOptions),
+  ]);
 }

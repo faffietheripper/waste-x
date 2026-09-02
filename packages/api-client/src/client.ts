@@ -7,6 +7,10 @@ import type {
   EvidenceCompleteResponseV1,
   EvidenceUploadRequestV1,
   EvidenceUploadResponseV1,
+  MobileLoginRequestV1,
+  MobileLoginResponseV1,
+  MobileProvisionRequestV1,
+  MobileProvisionResponseV1,
   SyncPullRequestV1,
   SyncPullResponseV1,
   SyncPushRequestV1,
@@ -69,6 +73,28 @@ export class WasteXApiClient {
 
   logoutDesktop() {
     return this.request<{ loggedOut: true }>("/api/desktop/v1/auth/logout", {
+      method: "POST",
+    });
+  }
+
+  provisionMobile(body: MobileProvisionRequestV1) {
+    return this.request<MobileProvisionResponseV1>(
+      "/api/mobile/v1/auth/provision",
+      { method: "POST", body: JSON.stringify(body) },
+      false,
+    );
+  }
+
+  loginMobile(body: MobileLoginRequestV1) {
+    return this.request<MobileLoginResponseV1>(
+      "/api/mobile/v1/auth/login",
+      { method: "POST", body: JSON.stringify(body) },
+      false,
+    );
+  }
+
+  logoutMobile() {
+    return this.request<{ loggedOut: true }>("/api/mobile/v1/auth/logout", {
       method: "POST",
     });
   }

@@ -42,3 +42,48 @@ export interface DesktopLoginResponseV1 {
     organisationId: string;
   };
 }
+
+export interface MobileProvisionRequestV1 {
+  deviceId: string;
+  email: string;
+  password: string;
+  displayName: string;
+  platform: "IOS" | "ANDROID";
+  defaultSiteId?: string | null;
+}
+
+export interface MobileProvisionResponseV1 {
+  device: DeviceIdentity;
+  credentials: {
+    deviceSecret: string;
+    sessionToken: string;
+    sessionExpiresAt: string;
+  };
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    organisationId: string;
+  };
+}
+
+export interface MobileLoginRequestV1 {
+  email: string;
+  password: string;
+  deviceId: string;
+  deviceSecret: string;
+}
+
+export interface MobileLoginResponseV1 {
+  device: DeviceIdentity;
+  session: {
+    token: string;
+    expiresAt: string;
+  };
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    organisationId: string;
+  };
+}
