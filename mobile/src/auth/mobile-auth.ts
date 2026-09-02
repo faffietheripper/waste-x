@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 
+import { WasteXApiError } from "@waste-x/api-client";
 import type {
   MobileLoginResponseV1,
   MobileProvisionResponseV1,
@@ -31,6 +32,7 @@ import {
 export type MobileAuthSnapshot = {
   provisioned: boolean;
   authenticated: boolean;
+  cloudReachable: boolean;
   onlineAuthenticated: boolean;
   offlineUnlocked: boolean;
   offline: OfflineEntitlementStatus;
@@ -59,18 +61,57 @@ async function refreshOfflineEntitlement() {
 }
 
 export async function getMobileAuthSnapshot(): Promise<MobileAuthSnapshot> {
-  const [deviceSecret, token, expiry, profile, offline] = await Promise.all([
+  const [deviceSecret, token, expiry, profile] = await Promise.all([
     getMobileDeviceSecret(),
     getMobileSessionToken(),
     getMobileSessionExpiry(),
     getMobileAuthProfile(),
-    verifyStoredOfflineEntitlement(),
   ]);
-  const onlineAuthenticated = Boolean(token && expiry && Date.parse(expiry) > Date.now() && profile);
+
+  const localSessionCurrent = Boolean(
+    token && expiry && Date.parse(expiry) > Date.now() && profile,
+  );
+
+  let cloudReachable = false;
+  let onlineAuthenticated = false;
+
+  if (localSessionCurrent && deviceSecret) {
+    try {
+      await refreshOfflineEntitlement();
+      await observeTrustedTime();
+      cloudReachable = true;
+      onlineAuthenticated = true;
+    } catch (error) {
+      if (error instanceof WasteXApiError && error.code === "CLOUD_UNREACHABLE") {
+        cloudReachable = false;
+      } else if (
+        error instanceof WasteXApiError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        // Cloud explicitly rejected the current session/device/user. Do not
+        // continue using a previously cached entitlement after learning that
+        // authorisation has been revoked or suspended.
+        await Promise.all([
+          clearMobileSession(),
+          clearMobileOfflineEntitlement(),
+        ]);
+        lockOfflineOperations();
+      } else {
+        // A reachable server may still have a transient application error.
+        // Treat it as unavailable for this snapshot, but preserve the signed
+        // entitlement until Cloud explicitly rejects authorisation.
+        cloudReachable = false;
+      }
+    }
+  }
+
+  const offline = await verifyStoredOfflineEntitlement();
   const offlineUnlocked = isOfflineUnlocked() && offline.valid;
+
   return {
     provisioned: Boolean(deviceSecret),
     authenticated: onlineAuthenticated || offlineUnlocked,
+    cloudReachable,
     onlineAuthenticated,
     offlineUnlocked,
     offline,
@@ -101,9 +142,19 @@ export async function provisionMobile(input: { email: string; password: string; 
 }
 
 export async function loginMobile(input: { email: string; password: string }) {
-  const [deviceId, deviceSecret] = await Promise.all([getOrCreateDeviceId(), getMobileDeviceSecret()]);
-  if (!deviceSecret) throw new Error("This Waste X Mobile installation has not been registered yet.");
-  const response = await wasteXMobileApi.loginMobile({ email: input.email.trim(), password: input.password, deviceId, deviceSecret });
+  const [deviceId, deviceSecret] = await Promise.all([
+    getOrCreateDeviceId(),
+    getMobileDeviceSecret(),
+  ]);
+  if (!deviceSecret) {
+    throw new Error("This Waste X Mobile installation has not been registered yet.");
+  }
+  const response = await wasteXMobileApi.loginMobile({
+    email: input.email.trim(),
+    password: input.password,
+    deviceId,
+    deviceSecret,
+  });
   await storeMobileSession({
     sessionToken: response.session.token,
     sessionExpiresAt: response.session.expiresAt,
@@ -126,6 +177,9 @@ export async function logoutMobile() {
     if (snapshot.onlineAuthenticated) await wasteXMobileApi.logoutMobile();
   } finally {
     lockOfflineOperations();
-    await Promise.all([clearMobileSession(), clearMobileOfflineEntitlement()]);
+    await Promise.all([
+      clearMobileSession(),
+      clearMobileOfflineEntitlement(),
+    ]);
   }
 }
