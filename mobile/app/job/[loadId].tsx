@@ -10,7 +10,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import type { MobileAssignmentLocationV1, MobileAssignmentV1 } from "@waste-x/contracts";
+import type {
+  MobileAssignmentLocationV1,
+  MobileAssignmentV1,
+} from "@waste-x/contracts";
 
 import { getLocalMobileAssignmentByLoadId } from "@/assignments/local-working-set";
 import {
@@ -23,7 +26,15 @@ import {
   humanStatus,
 } from "@/field-ops/presentation";
 import {
+  getMobileFieldWorkflowState,
+  getNextMobileFieldWorkflowAction,
+  humanFieldWorkflowStep,
+  MOBILE_FIELD_WORKFLOW_STEPS,
+} from "@/field-ops/workflow";
+import {
   getMobileSyncStatus,
+  queueMobileJobLoadEvent,
+  syncPendingMobileEvents,
   type MobileSyncStatus,
 } from "@/sync/mobile-sync";
 
@@ -34,7 +45,19 @@ export default function MobileJobDetailScreen() {
   const [auth, setAuth] = useState<MobileAuthSnapshot | null>(null);
   const [syncStatus, setSyncStatus] = useState<MobileSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  async function reloadLocalDetail() {
+    const [localAssignment, localSync] = await Promise.all([
+      getLocalMobileAssignmentByLoadId(loadId ?? ""),
+      getMobileSyncStatus(),
+    ]);
+    setAssignment(localAssignment);
+    setSyncStatus(localSync);
+    return localAssignment;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +100,54 @@ export default function MobileJobDetailScreen() {
     return assignment.job.direction === "incoming" ? "COLLECTION" : "DELIVERY";
   }, [assignment]);
 
+  async function recordNextFieldAction() {
+    if (!assignment) return;
+
+    const workflow = getMobileFieldWorkflowState(assignment);
+    const action = getNextMobileFieldWorkflowAction(workflow.step);
+    if (!action) return;
+
+    setActionBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const queued = await queueMobileJobLoadEvent({
+        loadId: assignment.load.id,
+        eventType: action.eventType,
+      });
+      setAssignment(queued.assignment);
+      setSyncStatus(await getMobileSyncStatus());
+      setMessage(
+        auth?.onlineAuthenticated
+          ? `${action.label} saved on this phone first. Syncing with Waste X Cloud…`
+          : `${action.label} saved securely on this phone and queued for sync.`,
+      );
+
+      if (auth?.onlineAuthenticated) {
+        try {
+          await syncPendingMobileEvents();
+          const refreshed = await reloadLocalDetail();
+          setMessage(
+            refreshed
+              ? `${action.label} saved locally and confirmed by Waste X Cloud.`
+              : `${action.label} synced.`,
+          );
+        } catch (syncError) {
+          setSyncStatus(await getMobileSyncStatus());
+          setMessage(
+            `${action.label} is safe on this phone. Cloud sync will retry when connectivity is available.`,
+          );
+          console.warn("[MOBILE_FIELD_OPS] Immediate sync deferred", syncError);
+        }
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.screen}>
@@ -88,7 +159,7 @@ export default function MobileJobDetailScreen() {
     );
   }
 
-  if (error || !assignment) {
+  if (error && !assignment) {
     return (
       <SafeAreaView style={styles.screen}>
         <View style={styles.emptyContainer}>
@@ -108,8 +179,33 @@ export default function MobileJobDetailScreen() {
     );
   }
 
+  if (!assignment) {
+    return (
+      <SafeAreaView style={styles.screen}>
+        <View style={styles.emptyContainer}>
+          <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </Pressable>
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyEyebrow}>JOB UNAVAILABLE</Text>
+            <Text style={styles.emptyTitle}>This load is not in your local working set.</Text>
+            <Text style={styles.emptyBody}>
+              Waste X only opens field jobs that are currently authorised and cached on this phone.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const weight = formatWeight(assignment);
   const pending = syncStatus?.pending ?? 0;
+  const workflow = getMobileFieldWorkflowState(assignment);
+  const nextAction = getNextMobileFieldWorkflowAction(workflow.step);
+  const terminalLoad = ["completed", "rejected", "cancelled"].includes(
+    assignment.load.status.toLowerCase(),
+  );
+  const workflowIndex = MOBILE_FIELD_WORKFLOW_STEPS.indexOf(workflow.step);
 
   return (
     <SafeAreaView style={styles.screen} edges={["top"]}>
@@ -144,15 +240,100 @@ export default function MobileJobDetailScreen() {
         </Text>
 
         <View style={styles.statusCard}>
-          <View>
-            <Text style={styles.statusLabel}>CURRENT STATUS</Text>
-            <Text style={styles.statusValue}>{humanStatus(assignment.load.status)}</Text>
+          <View style={styles.flexOne}>
+            <Text style={styles.statusLabel}>FIELD PROGRESS</Text>
+            <Text style={styles.statusValue}>{humanFieldWorkflowStep(workflow.step)}</Text>
+            <Text style={styles.canonicalStatus}>
+              Load status · {humanStatus(assignment.load.status)}
+            </Text>
           </View>
           <View style={styles.versionBadge}>
             <Text style={styles.versionLabel}>LOCAL VERSION</Text>
             <Text style={styles.versionValue}>v{assignment.load.entityVersion}</Text>
           </View>
         </View>
+
+        {error ? (
+          <View style={styles.errorCard}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : null}
+        {message ? (
+          <View style={styles.messageCard}>
+            <Text style={styles.messageText}>{message}</Text>
+          </View>
+        ) : null}
+
+        <Section title="Field workflow">
+          <View style={styles.timeline}>
+            {MOBILE_FIELD_WORKFLOW_STEPS.map((step, index) => {
+              const completed = index < workflowIndex;
+              const current = index === workflowIndex;
+              return (
+                <View key={step} style={styles.timelineRow}>
+                  <View
+                    style={[
+                      styles.timelineDot,
+                      completed && styles.timelineDotComplete,
+                      current && styles.timelineDotCurrent,
+                    ]}
+                  >
+                    <Text style={styles.timelineDotText}>
+                      {completed ? "✓" : current ? "•" : ""}
+                    </Text>
+                  </View>
+                  <View style={styles.flexOne}>
+                    <Text
+                      style={[
+                        styles.timelineLabel,
+                        (completed || current) && styles.timelineLabelActive,
+                      ]}
+                    >
+                      {humanFieldWorkflowStep(step)}
+                    </Text>
+                    {current && workflow.updatedAt ? (
+                      <Text style={styles.timelineTime}>
+                        {new Date(workflow.updatedAt).toLocaleString()}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+
+          {!terminalLoad && nextAction ? (
+            <View style={styles.actionBlock}>
+              <Text style={styles.actionEyebrow}>NEXT ACTION</Text>
+              <Text style={styles.actionTitle}>{nextAction.label}</Text>
+              <Text style={styles.actionHelper}>{nextAction.helper}</Text>
+              <Pressable
+                disabled={actionBusy}
+                onPress={() => void recordNextFieldAction()}
+                style={[styles.primaryAction, actionBusy && styles.primaryActionDisabled]}
+              >
+                {actionBusy ? <ActivityIndicator color="#ffffff" /> : null}
+                <Text style={styles.primaryActionText}>
+                  {actionBusy ? "Saving locally…" : nextAction.label}
+                </Text>
+              </Pressable>
+              <Text style={styles.localActionHint}>
+                Recorded to encrypted SQLCipher first. Internet is not required.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.completeBlock}>
+              <Text style={styles.completeTitle}>
+                {terminalLoad ? "This load is in a terminal state." : "Field journey complete."}
+              </Text>
+              <Text style={styles.completeBody}>
+                {terminalLoad
+                  ? `Canonical load status: ${humanStatus(assignment.load.status)}.`
+                  : "Waste/weight, delivery evidence and final compliance completion are handled by the next field-operation slices."}
+              </Text>
+            </View>
+          )}
+        </Section>
 
         <Section title="Route">
           <SiteCard
@@ -173,10 +354,7 @@ export default function MobileJobDetailScreen() {
         <Section title="Waste & quantity">
           <View style={styles.detailGrid}>
             <DetailTile label="EWC" value={assignment.load.ewcCode ?? "Not set"} />
-            <DetailTile
-              label="WEIGHT"
-              value={weight ?? "Not confirmed"}
-            />
+            <DetailTile label="WEIGHT" value={weight ?? "Not confirmed"} />
           </View>
           <DetailRow
             label="Waste description"
@@ -229,19 +407,11 @@ export default function MobileJobDetailScreen() {
         <View style={styles.localFirstCard}>
           <View style={styles.localFirstDot} />
           <View style={styles.flexOne}>
-            <Text style={styles.localFirstTitle}>Available from encrypted local data</Text>
+            <Text style={styles.localFirstTitle}>Local-first operational record</Text>
             <Text style={styles.localFirstBody}>
-              This job detail screen reads the authorised SQLCipher snapshot on this phone. Cloud connectivity is not required to view it.
+              Viewing and advancing this field journey uses the authorised SQLCipher record on this phone first. Each action has the same load ID and is queued for Cloud or trusted Bridge delivery.
             </Text>
           </View>
-        </View>
-
-        <View style={styles.nextActionCard}>
-          <Text style={styles.nextActionEyebrow}>NEXT FIELD BUILD</Text>
-          <Text style={styles.nextActionTitle}>Operational actions attach here next.</Text>
-          <Text style={styles.nextActionBody}>
-            Start job → en route → collection arrival → collected → in transit → destination arrival → delivered.
-          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -337,15 +507,40 @@ const styles = StyleSheet.create({
   eyebrow: { marginTop: 24, color: "#ea580c", fontSize: 10, fontWeight: "900", letterSpacing: 1.4 },
   title: { marginTop: 7, color: "#111827", fontSize: 36, fontWeight: "900", letterSpacing: -1.2 },
   subtitle: { marginTop: 4, color: "#64748b", fontSize: 14, fontWeight: "600" },
-  statusCard: { marginTop: 20, padding: 18, borderRadius: 18, backgroundColor: "#111827", flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  statusCard: { marginTop: 20, padding: 18, borderRadius: 18, backgroundColor: "#111827", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 16 },
   statusLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900", letterSpacing: 1 },
   statusValue: { marginTop: 5, color: "#ffffff", fontSize: 21, fontWeight: "800" },
+  canonicalStatus: { marginTop: 5, color: "#94a3b8", fontSize: 10, fontWeight: "700" },
   versionBadge: { alignItems: "flex-end" },
   versionLabel: { color: "#64748b", fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
   versionValue: { marginTop: 4, color: "#f97316", fontSize: 14, fontWeight: "900" },
+  errorCard: { marginTop: 12, padding: 13, borderRadius: 13, backgroundColor: "#fff1f2", borderWidth: 1, borderColor: "#fecdd3" },
+  errorText: { color: "#9f1239", fontSize: 12, lineHeight: 18, fontWeight: "700" },
+  messageCard: { marginTop: 12, padding: 13, borderRadius: 13, backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#bbf7d0" },
+  messageText: { color: "#166534", fontSize: 12, lineHeight: 18, fontWeight: "700" },
   section: { marginTop: 24 },
   sectionTitle: { marginBottom: 10, color: "#111827", fontSize: 18, fontWeight: "800" },
   sectionCard: { padding: 16, borderRadius: 18, backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#ece7df" },
+  timeline: { gap: 2 },
+  timelineRow: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 12 },
+  timelineDot: { width: 24, height: 24, borderRadius: 99, borderWidth: 2, borderColor: "#e2e8f0", backgroundColor: "#ffffff", alignItems: "center", justifyContent: "center" },
+  timelineDotComplete: { borderColor: "#111827", backgroundColor: "#111827" },
+  timelineDotCurrent: { borderColor: "#f97316", backgroundColor: "#fff7ed" },
+  timelineDotText: { color: "#ffffff", fontSize: 11, fontWeight: "900" },
+  timelineLabel: { color: "#94a3b8", fontSize: 12, fontWeight: "700" },
+  timelineLabelActive: { color: "#1e293b", fontWeight: "800" },
+  timelineTime: { marginTop: 2, color: "#94a3b8", fontSize: 9, fontWeight: "600" },
+  actionBlock: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" },
+  actionEyebrow: { color: "#ea580c", fontSize: 9, fontWeight: "900", letterSpacing: 1 },
+  actionTitle: { marginTop: 6, color: "#111827", fontSize: 20, fontWeight: "900" },
+  actionHelper: { marginTop: 5, color: "#64748b", fontSize: 12, lineHeight: 18 },
+  primaryAction: { marginTop: 14, minHeight: 52, borderRadius: 15, backgroundColor: "#111827", flexDirection: "row", gap: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 18 },
+  primaryActionDisabled: { opacity: 0.65 },
+  primaryActionText: { color: "#ffffff", fontSize: 14, fontWeight: "900" },
+  localActionHint: { marginTop: 8, color: "#94a3b8", fontSize: 9, lineHeight: 14, textAlign: "center", fontWeight: "700" },
+  completeBlock: { marginTop: 16, padding: 14, borderRadius: 14, backgroundColor: "#f8fafc" },
+  completeTitle: { color: "#334155", fontSize: 13, fontWeight: "800" },
+  completeBody: { marginTop: 5, color: "#64748b", fontSize: 11, lineHeight: 17 },
   siteCard: { padding: 15, borderRadius: 15, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#f1f5f9" },
   siteCardAccent: { backgroundColor: "#fff7ed", borderColor: "#fed7aa" },
   siteTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
@@ -371,8 +566,4 @@ const styles = StyleSheet.create({
   localFirstDot: { marginTop: 5, width: 9, height: 9, borderRadius: 99, backgroundColor: "#f97316" },
   localFirstTitle: { color: "#ffffff", fontSize: 13, fontWeight: "800" },
   localFirstBody: { marginTop: 5, color: "#cbd5e1", fontSize: 11, lineHeight: 17 },
-  nextActionCard: { marginTop: 12, padding: 17, borderRadius: 17, backgroundColor: "#ffedd5" },
-  nextActionEyebrow: { color: "#c2410c", fontSize: 9, fontWeight: "900", letterSpacing: 1 },
-  nextActionTitle: { marginTop: 7, color: "#7c2d12", fontSize: 15, fontWeight: "800" },
-  nextActionBody: { marginTop: 5, color: "#9a3412", fontSize: 11, lineHeight: 17 },
 });
