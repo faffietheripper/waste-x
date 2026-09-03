@@ -17,9 +17,17 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
   - [x] Offline empty/scope-safe states
 - [x] Assigned jobs list
 - [x] Upcoming jobs list
-- [ ] Job details
-- [ ] Site details
-- [x] Driver/vehicle summary in list/account views
+- [x] Job details
+  - [x] Load-centric detail route using the existing load ID
+  - [x] Job/load status, date, references, PO, ticket and notes
+  - [x] Waste/EWC/material and current weight summary
+  - [x] Detail route re-checks Mobile authorisation
+  - [x] Detail data reads from SQLCipher without requiring Cloud
+- [x] Site details
+  - [x] Origin/collection site
+  - [x] Destination/delivery site
+  - [x] Site type, address and postcode where available
+- [x] Driver/vehicle details
 - [ ] Start job
 - [ ] Mark en route
 - [ ] Arrive at collection
@@ -41,14 +49,15 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
 
 ## Build sequence
 
-1. **12.1 / 12.2 — Shell + My Day**
+1. **12.1 / 12.2 — Shell + My Day** ✅
    - Replace Step 11 diagnostics with the real field UI.
    - Read cached assignments from SQLCipher before Cloud reconciliation.
    - Keep unfinished past-dated work visible as carry-over work.
 
-2. **12.3 — Job + site details**
+2. **12.3 — Job + site details** ✅
    - One load-centric field screen using the existing job/load IDs.
    - Route, site addresses, waste/EWC, quantity/weight, driver, vehicle, references and notes.
+   - Open the same cached detail from My Day or Jobs while online or offline.
 
 3. **12.4 — Operational state machine**
    - Start → en route → collection arrival → collected → in transit → destination arrival → delivered.
