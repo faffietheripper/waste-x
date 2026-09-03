@@ -10,8 +10,11 @@ import type { MobileAssignmentV1 } from "@waste-x/contracts";
 import {
   formatAssignmentDate,
   formatWeight,
-  humanStatus,
 } from "@/field-ops/presentation";
+import {
+  getMobileFieldWorkflowState,
+  humanFieldWorkflowStep,
+} from "@/field-ops/workflow";
 
 export function WasteXHeader({
   title,
@@ -48,15 +51,17 @@ export function WasteXHeader({
 export function AssignmentCard({
   assignment,
   carryOver = false,
+  onPress,
 }: {
   assignment: MobileAssignmentV1;
   carryOver?: boolean;
+  onPress?: () => void;
 }) {
   const weight = formatWeight(assignment);
+  const workflow = getMobileFieldWorkflowState(assignment);
   const direction = assignment.job.direction === "incoming" ? "COLLECTION" : "DELIVERY";
-
-  return (
-    <View style={styles.assignmentCard}>
+  const content = (
+    <>
       <View style={styles.assignmentTopRow}>
         <View style={styles.flexOne}>
           <View style={styles.assignmentLabelRow}>
@@ -91,8 +96,8 @@ export function AssignmentCard({
 
       <View style={styles.assignmentFooter}>
         <View>
-          <Text style={styles.footerLabel}>STATUS</Text>
-          <Text style={styles.footerValue}>{humanStatus(assignment.load.status)}</Text>
+          <Text style={styles.footerLabel}>FIELD PROGRESS</Text>
+          <Text style={styles.footerValue}>{humanFieldWorkflowStep(workflow.step)}</Text>
         </View>
         <View>
           <Text style={styles.footerLabel}>VEHICLE</Text>
@@ -105,7 +110,18 @@ export function AssignmentCard({
           <Text style={styles.footerValue}>{weight ?? "—"}</Text>
         </View>
       </View>
-    </View>
+    </>
+  );
+
+  return onPress ? (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.assignmentCard, pressed && styles.assignmentCardPressed]}
+    >
+      {content}
+    </Pressable>
+  ) : (
+    <View style={styles.assignmentCard}>{content}</View>
   );
 }
 
@@ -249,6 +265,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#ece7df",
+  },
+  assignmentCardPressed: {
+    opacity: 0.82,
+    transform: [{ scale: 0.995 }],
   },
   assignmentTopRow: {
     flexDirection: "row",
