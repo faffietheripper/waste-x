@@ -112,6 +112,7 @@ function applyLocalProjection(
 
   if (eventType === "LOAD_ARRIVED") {
     next.load.status = "arrived";
+    next.load.movementAt = next.load.movementAt ?? new Date().toISOString();
   }
 
   if (eventType === "LOAD_COMPLETED") {
@@ -141,6 +142,7 @@ function applyLocalProjection(
     }
   }
 
+  next.load.entityVersion += 1;
   return next;
 }
 
@@ -180,6 +182,7 @@ export async function queueMobileJobLoadEvent(input: {
   ]);
   const recordedAt = new Date().toISOString();
   const occurredAt = input.occurredAt ?? recordedAt;
+  const baseVersion = assignment.load.entityVersion;
   const projected = applyLocalProjection(assignment, input.eventType, payload);
 
   await database.withTransactionAsync(async () => {
@@ -201,13 +204,14 @@ export async function queueMobileJobLoadEvent(input: {
          recorded_at,
          status,
          attempt_count
-       ) VALUES (?, ?, NULL, ?, ?, 'job_load', ?, ?, NULL, ?, ?, ?, ?, ?, 'PENDING', 0)`,
+       ) VALUES (?, ?, NULL, ?, ?, 'job_load', ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0)`,
       eventId,
       profile.organisationId,
       deviceId,
       profile.userId,
       input.loadId,
       input.eventType,
+      baseVersion,
       deviceSequence,
       JSON.stringify(payload),
       payloadHash,
@@ -217,9 +221,10 @@ export async function queueMobileJobLoadEvent(input: {
 
     await database.runAsync(
       `UPDATE local_mobile_assignment
-       SET load_status = ?, payload_json = ?, refreshed_at = ?
+       SET load_status = ?, entity_version = ?, payload_json = ?, refreshed_at = ?
        WHERE load_id = ?`,
       projected.load.status,
+      projected.load.entityVersion,
       JSON.stringify(projected),
       recordedAt,
       input.loadId,
@@ -229,6 +234,7 @@ export async function queueMobileJobLoadEvent(input: {
   return {
     eventId,
     deviceSequence,
+    baseVersion,
     assignment: projected,
   };
 }
@@ -317,7 +323,11 @@ export async function syncPendingMobileEvents(
   );
 
   if (rows.length === 0) {
-    return { transport: transport.name, uploaded: 0, results: [] as SyncPushResponseV1["results"] };
+    return {
+      transport: transport.name,
+      uploaded: 0,
+      results: [] as SyncPushResponseV1["results"],
+    };
   }
 
   const eventIds = rows.map((row) => row.event_id);
@@ -401,7 +411,7 @@ export async function getFirstSyncProofCandidate() {
     workingSet.assignments.find(
       (assignment) =>
         assignment.load.status === "planned" &&
-        assignment.job.direction === "incoming",
+        assignment.load.direction === "incoming",
     ) ?? null
   );
 }
