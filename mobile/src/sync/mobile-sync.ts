@@ -1,10 +1,15 @@
 import * as Crypto from "expo-crypto";
 
-import type {
-  MobileAssignmentV1,
-  SyncEventV1,
-  SyncPushRequestV1,
-  SyncPushResponseV1,
+import {
+  asDeviceId,
+  asOrganisationId,
+  asSiteId,
+  asSyncEventId,
+  asUserId,
+  type MobileAssignmentV1,
+  type SyncEventV1,
+  type SyncPushRequestV1,
+  type SyncPushResponseV1,
 } from "@waste-x/contracts";
 
 import {
@@ -242,11 +247,11 @@ export async function queueMobileJobLoadEvent(input: {
 function rowToEvent(row: QueueRow): SyncEventV1 {
   return {
     schemaVersion: 1,
-    eventId: row.event_id,
-    organisationId: row.organisation_id,
-    siteId: row.site_id,
-    deviceId: row.device_id,
-    actorUserId: row.actor_user_id,
+    eventId: asSyncEventId(row.event_id),
+    organisationId: asOrganisationId(row.organisation_id),
+    siteId: row.site_id ? asSiteId(row.site_id) : null,
+    deviceId: asDeviceId(row.device_id),
+    actorUserId: asUserId(row.actor_user_id),
     entityType: row.entity_type,
     entityId: row.entity_id,
     eventType: row.event_type,
@@ -341,7 +346,7 @@ export async function syncPendingMobileEvents(
 
   const batch: SyncPushRequestV1 = {
     protocolVersion: 1,
-    deviceId,
+    deviceId: asDeviceId(deviceId),
     batchId: await createUuidV7(),
     events: rows.map(rowToEvent),
   };
