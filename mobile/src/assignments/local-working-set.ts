@@ -194,8 +194,8 @@ export async function persistMobileAssignmentBootstrap(
 }
 
 export async function refreshMobileAssignmentWorkingSet() {
-  const response = await wasteXMobileApi.bootstrapMobile();
-  return persistMobileAssignmentBootstrap(response.bootstrap);
+  const bootstrap = await wasteXMobileApi.bootstrapMobile();
+  return persistMobileAssignmentBootstrap(bootstrap);
 }
 
 export async function clearMobileAssignmentWorkingSet() {
