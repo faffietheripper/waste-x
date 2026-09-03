@@ -1,5 +1,6 @@
 export * from "./auth";
 export * from "./bootstrap";
+export * from "./bridge-relay";
 export * from "./device";
 export * from "./evidence";
 export * from "./ids";
