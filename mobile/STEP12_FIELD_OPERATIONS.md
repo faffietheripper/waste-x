@@ -31,9 +31,9 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
 - [x] Start job
 - [x] Mark en route
 - [x] Arrive at collection
-- [ ] Confirm waste
-- [ ] Confirm quantity
-- [ ] Manual weight entry where required
+- [x] Confirm waste
+- [x] Confirm quantity
+- [x] Manual weight entry where required
 - [x] Mark collected
 - [x] Mark in transit
 - [x] Arrive at destination
@@ -67,10 +67,14 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
    - Bootstrap reconstructs field progress from Cloud event history so a successful refresh cannot reset progress to Assigned.
    - Online actions attempt immediate Cloud sync; offline actions remain queued without blocking field work.
 
-4. **12.5 — Waste, quantity and weight confirmation**
-   - Insert waste/quantity confirmation as the collection gate before finalising collection.
-   - Manual weight is the V1 primary path.
-   - Record weight source so later weighbridge/hardware integrations remain additive.
+4. **12.5 — Waste, quantity and weight confirmation** ✅ implementation / runtime assignment proof pending
+   - Collection arrival exposes an inline driver confirmation gate on the same job/load detail screen.
+   - Waste confirmation updates the real job-load waste description and records confirmation metadata on the immutable LOAD_DETAILS_UPDATED event.
+   - Quantity confirmation writes the canonical net weight + metric and records whether the value is actual or estimated.
+   - Manual weight accepts gross + tare, calculates net with operations-core validation, and records the canonical weight source as manual.
+   - Gross/tare/net, estimate flag and source are hydrated back through Mobile bootstrap.
+   - Bootstrap reconstructs collection confirmation ticks from APPLIED sync-event history, so Cloud refresh does not erase field confirmation state.
+   - Mobile and Cloud both refuse FIELD_COLLECTED until waste and quantity/manual-weight confirmation are present.
 
 5. **12.6 — Delivery notes, issues and terminal states**
    - Delivery notes, issue reporting, cancelled and completed workflows.
