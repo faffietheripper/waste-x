@@ -38,7 +38,7 @@ export default function MobileEntryScreen() {
         if (cancelled) return;
         setAuth(snapshot);
         if (snapshot.profile?.email) setEmail(snapshot.profile.email);
-        if (snapshot.authenticated) router.replace("/(tabs)");
+        if (snapshot.authenticated) router.replace("/(tabs)/my-day");
       })
       .catch((reason) => {
         if (!cancelled) {
@@ -70,7 +70,7 @@ export default function MobileEntryScreen() {
       const snapshot = await getMobileAuthSnapshot();
       setAuth(snapshot);
       setPassword("");
-      if (snapshot.authenticated) router.replace("/(tabs)");
+      if (snapshot.authenticated) router.replace("/(tabs)/my-day");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -84,7 +84,7 @@ export default function MobileEntryScreen() {
     try {
       const snapshot = await unlockMobileOffline();
       setAuth(snapshot);
-      if (snapshot.authenticated) router.replace("/(tabs)");
+      if (snapshot.authenticated) router.replace("/(tabs)/my-day");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
