@@ -34,6 +34,8 @@ export interface MobileAssignmentV1 {
     id: string;
     loadNumber: number;
     status: string;
+    direction: "incoming" | "outgoing";
+    entityVersion: number;
     movementAt: string | null;
     ewcCode: string | null;
     wasteDescription: string | null;
