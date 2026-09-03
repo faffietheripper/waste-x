@@ -61,6 +61,12 @@ class SyncBusinessRuleError extends Error {
   }
 }
 
+const collectionConfirmationSchema = z.enum([
+  "WASTE",
+  "QUANTITY",
+  "MANUAL_WEIGHT",
+]);
+
 const loadDetailsPayloadSchema = z.object({
   driverId: z.string().min(1).nullable().optional(),
   vehicleId: z.string().min(1).nullable().optional(),
@@ -72,6 +78,7 @@ const loadDetailsPayloadSchema = z.object({
   weightIsEstimate: z.boolean().optional(),
   ticketNumber: z.string().trim().nullable().optional(),
   notes: z.string().trim().nullable().optional(),
+  fieldConfirmation: collectionConfirmationSchema.optional(),
 });
 
 const rejectPayloadSchema = z.object({
@@ -278,6 +285,61 @@ async function validateIncomingPermit(
   if (!permittedEwc) throw new SyncBusinessRuleError("PERMIT_MISMATCH");
 }
 
+async function currentFieldWorkflowStep(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  context: ClientApiContext,
+  entityId: string,
+): Promise<FieldWorkflowStep> {
+  const previous = await tx.query.syncEventInbox.findFirst({
+    where: and(
+      eq(syncEventInbox.organisationId, context.organisationId),
+      eq(syncEventInbox.entityType, "job_load"),
+      eq(syncEventInbox.entityId, entityId),
+      eq(syncEventInbox.resultStatus, "APPLIED"),
+      inArray(syncEventInbox.eventType, FIELD_WORKFLOW_EVENT_TYPES),
+    ),
+    columns: { eventType: true },
+    orderBy: [desc(syncEventInbox.occurredAt), desc(syncEventInbox.receivedAt)],
+  });
+
+  if (!previous) return "ASSIGNED";
+  return fieldWorkflowStepForEvent(previous.eventType) ?? "ASSIGNED";
+}
+
+async function validateCollectionConfirmationHistory(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  context: ClientApiContext,
+  entityId: string,
+) {
+  const rows = await tx.query.syncEventInbox.findMany({
+    where: and(
+      eq(syncEventInbox.organisationId, context.organisationId),
+      eq(syncEventInbox.entityType, "job_load"),
+      eq(syncEventInbox.entityId, entityId),
+      eq(syncEventInbox.eventType, "LOAD_DETAILS_UPDATED"),
+      eq(syncEventInbox.resultStatus, "APPLIED"),
+    ),
+    columns: { payload: true },
+  });
+
+  let wasteConfirmed = false;
+  let quantityConfirmed = false;
+
+  for (const row of rows) {
+    if (!row.payload || typeof row.payload !== "object") continue;
+    const kind = (row.payload as { fieldConfirmation?: unknown }).fieldConfirmation;
+    if (kind === "WASTE") wasteConfirmed = true;
+    if (kind === "QUANTITY" || kind === "MANUAL_WEIGHT") quantityConfirmed = true;
+  }
+
+  if (!wasteConfirmed) {
+    throw new SyncBusinessRuleError("FIELD_WASTE_CONFIRMATION_REQUIRED");
+  }
+  if (!quantityConfirmed) {
+    throw new SyncBusinessRuleError("FIELD_QUANTITY_CONFIRMATION_REQUIRED");
+  }
+}
+
 async function validateFieldWorkflowTransition(
   tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
   context: ClientApiContext,
@@ -300,24 +362,13 @@ async function validateFieldWorkflowTransition(
     throw new SyncBusinessRuleError("FIELD_WORKFLOW_PAYLOAD_MISMATCH");
   }
 
-  const previous = await tx.query.syncEventInbox.findFirst({
-    where: and(
-      eq(syncEventInbox.organisationId, context.organisationId),
-      eq(syncEventInbox.entityType, "job_load"),
-      eq(syncEventInbox.entityId, event.entityId),
-      eq(syncEventInbox.resultStatus, "APPLIED"),
-      inArray(syncEventInbox.eventType, FIELD_WORKFLOW_EVENT_TYPES),
-    ),
-    columns: { eventType: true },
-    orderBy: [desc(syncEventInbox.occurredAt), desc(syncEventInbox.receivedAt)],
-  });
-
-  const currentStep = previous
-    ? fieldWorkflowStepForEvent(previous.eventType)
-    : "ASSIGNED";
-
-  if (!currentStep || currentStep !== transition.fromStep) {
+  const currentStep = await currentFieldWorkflowStep(tx, context, event.entityId);
+  if (currentStep !== transition.fromStep) {
     throw new SyncBusinessRuleError("FIELD_WORKFLOW_OUT_OF_ORDER");
+  }
+
+  if (event.eventType === "FIELD_COLLECTED") {
+    await validateCollectionConfirmationHistory(tx, context, event.entityId);
   }
 }
 
@@ -363,10 +414,6 @@ async function applyJobLoadEvent(
 
       await validateFieldWorkflowTransition(tx, context, event);
 
-      // Driver field progress is intentionally separate from the canonical
-      // waste/compliance status. Touching updatedAt makes the same job_load the
-      // change-feed entity while the immutable workflow event remains the
-      // authoritative progress record.
       await tx
         .update(jobLoads)
         .set({ updatedAt: now })
@@ -433,6 +480,40 @@ async function applyJobLoadEvent(
       }
 
       const data = parsed.data;
+      if (data.fieldConfirmation) {
+        const currentStep = await currentFieldWorkflowStep(tx, context, event.entityId);
+        if (currentStep !== "ARRIVED_COLLECTION") {
+          throw new SyncBusinessRuleError("COLLECTION_CONFIRMATION_OUT_OF_ORDER");
+        }
+        if (data.fieldConfirmation === "WASTE" && !data.wasteDescription?.trim()) {
+          throw new SyncBusinessRuleError("WASTE_DESCRIPTION_REQUIRED");
+        }
+        if (
+          data.fieldConfirmation === "QUANTITY" &&
+          (typeof data.netWeight !== "number" ||
+            !Number.isFinite(data.netWeight) ||
+            data.netWeight <= 0 ||
+            !data.weightMetric)
+        ) {
+          throw new SyncBusinessRuleError("NET_WEIGHT_REQUIRED");
+        }
+        if (data.fieldConfirmation === "MANUAL_WEIGHT") {
+          if (
+            typeof data.grossWeight !== "number" ||
+            typeof data.tareWeight !== "number" ||
+            !data.weightMetric
+          ) {
+            throw new SyncBusinessRuleError("MANUAL_WEIGHT_REQUIRED");
+          }
+          if (data.grossWeight < data.tareWeight) {
+            throw new SyncBusinessRuleError("GROSS_BELOW_TARE");
+          }
+          if (data.grossWeight - data.tareWeight <= 0) {
+            throw new SyncBusinessRuleError("NET_WEIGHT_REQUIRED");
+          }
+        }
+      }
+
       const driverId = data.driverId === undefined ? load.driverId : data.driverId;
       const vehicleId = data.vehicleId === undefined ? load.vehicleId : data.vehicleId;
 
@@ -654,8 +735,6 @@ export async function processSyncEvent(
     return result(event.eventId, "REJECTED", null, "AUTH_CONTEXT_MISMATCH");
   }
 
-  // A payload hash is part of the immutable event identity. Accept the common
-  // SHA-256 representation and reject accidental/corrupt payloads early.
   const calculatedPayloadHash = hashPayload(event.payload);
   if (
     /^[a-f0-9]{64}$/i.test(event.payloadHash) &&
