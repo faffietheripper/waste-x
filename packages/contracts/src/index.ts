@@ -3,5 +3,6 @@ export * from "./bootstrap";
 export * from "./device";
 export * from "./evidence";
 export * from "./ids";
+export * from "./mobile-bootstrap";
 export * from "./offline-auth";
 export * from "./sync";
