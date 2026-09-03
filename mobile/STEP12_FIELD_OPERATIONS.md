@@ -28,16 +28,16 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
   - [x] Destination/delivery site
   - [x] Site type, address and postcode where available
 - [x] Driver/vehicle details
-- [ ] Start job
-- [ ] Mark en route
-- [ ] Arrive at collection
+- [x] Start job
+- [x] Mark en route
+- [x] Arrive at collection
 - [ ] Confirm waste
 - [ ] Confirm quantity
 - [ ] Manual weight entry where required
-- [ ] Mark collected
-- [ ] Mark in transit
-- [ ] Arrive at destination
-- [ ] Confirm delivery
+- [x] Mark collected
+- [x] Mark in transit
+- [x] Arrive at destination
+- [x] Confirm delivery (field-progress event; delivery notes/evidence remain Step 12.6)
 - [ ] Delivery notes
 - [ ] Report issue
 - [x] Cancelled jobs list
@@ -59,16 +59,22 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
    - Route, site addresses, waste/EWC, quantity/weight, driver, vehicle, references and notes.
    - Open the same cached detail from My Day or Jobs while online or offline.
 
-3. **12.4 — Operational state machine**
-   - Start → en route → collection arrival → collected → in transit → destination arrival → delivered.
-   - Every action is a local transaction plus SyncEvent/outbox entry.
+3. **12.4 — Operational state machine** ✅ implementation / runtime assignment proof pending
+   - Assigned → started → en route → collection arrival → collected → in transit → destination arrival → delivered.
+   - Driver field progress is separate from canonical waste/compliance load status so receiving and DWT rules remain intact.
+   - Every action updates the encrypted local assignment and inserts a durable SyncEvent/outbox record in one local transaction.
+   - Cloud validates event order against the last APPLIED workflow event for the same job_load ID.
+   - Bootstrap reconstructs field progress from Cloud event history so a successful refresh cannot reset progress to Assigned.
+   - Online actions attempt immediate Cloud sync; offline actions remain queued without blocking field work.
 
 4. **12.5 — Waste, quantity and weight confirmation**
+   - Insert waste/quantity confirmation as the collection gate before finalising collection.
    - Manual weight is the V1 primary path.
    - Record weight source so later weighbridge/hardware integrations remain additive.
 
 5. **12.6 — Delivery notes, issues and terminal states**
    - Delivery notes, issue reporting, cancelled and completed workflows.
+   - Add evidence/compliance gates around final delivery confirmation where required.
 
 6. **12.7 — End-to-end certification**
    - Web assigns an existing load.
