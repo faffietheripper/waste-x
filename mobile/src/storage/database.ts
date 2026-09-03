@@ -3,7 +3,7 @@ import * as SQLite from "expo-sqlite";
 import { getOrCreateDatabaseKey } from "./secure";
 
 const DATABASE_NAME = "waste-x-mobile.db";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export type MobileDatabaseStatus = {
   ready: true;
@@ -111,6 +111,7 @@ export async function initialiseMobileDatabase(
       direction TEXT NOT NULL,
       load_number INTEGER NOT NULL,
       load_status TEXT NOT NULL,
+      entity_version INTEGER NOT NULL DEFAULT 0,
       driver_id TEXT NOT NULL,
       vehicle_id TEXT,
       ewc_code TEXT,
@@ -127,6 +128,18 @@ export async function initialiseMobileDatabase(
     CREATE INDEX IF NOT EXISTS local_mobile_assignment_driver_idx
       ON local_mobile_assignment(driver_id, job_date);
   `);
+
+  // Existing Step 11 installations already have local_mobile_assignment from
+  // schema v2/v3. SQLite CREATE TABLE IF NOT EXISTS does not add new columns,
+  // so migrate the sidecar version explicitly and idempotently.
+  const assignmentColumns = await database.getAllAsync<{ name: string }>(
+    "PRAGMA table_info(local_mobile_assignment)",
+  );
+  if (!assignmentColumns.some((column) => column.name === "entity_version")) {
+    await database.execAsync(
+      "ALTER TABLE local_mobile_assignment ADD COLUMN entity_version INTEGER NOT NULL DEFAULT 0;",
+    );
+  }
 
   const now = new Date().toISOString();
   await database.runAsync(
