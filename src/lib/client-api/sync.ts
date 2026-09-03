@@ -556,6 +556,11 @@ async function applyJobLoadEvent(
         netWeight = grossWeight - tareWeight;
       }
 
+      const weightChanged =
+        data.grossWeight !== undefined ||
+        data.tareWeight !== undefined ||
+        data.netWeight !== undefined;
+
       await tx
         .update(jobLoads)
         .set({
@@ -568,7 +573,7 @@ async function applyJobLoadEvent(
           netWeight: toDbDecimal(netWeight),
           weightMetric: data.weightMetric ?? load.weightMetric,
           weightIsEstimate: data.weightIsEstimate ?? load.weightIsEstimate,
-          weightSource: "manual",
+          weightSource: weightChanged ? "manual" : load.weightSource,
           ticketNumber:
             data.ticketNumber === undefined ? load.ticketNumber : data.ticketNumber,
           notes: data.notes === undefined ? load.notes : data.notes,
