@@ -3,6 +3,31 @@ export type MobileDriverScopeResolutionV1 =
   | "NO_DRIVER_MATCH"
   | "AMBIGUOUS_DRIVER_MATCH";
 
+export type MobileFieldWorkflowStepV1 =
+  | "ASSIGNED"
+  | "STARTED"
+  | "EN_ROUTE"
+  | "ARRIVED_COLLECTION"
+  | "COLLECTED"
+  | "IN_TRANSIT"
+  | "ARRIVED_DESTINATION"
+  | "DELIVERED";
+
+export type MobileFieldWorkflowEventTypeV1 =
+  | "FIELD_JOB_STARTED"
+  | "FIELD_EN_ROUTE"
+  | "FIELD_ARRIVED_COLLECTION"
+  | "FIELD_COLLECTED"
+  | "FIELD_IN_TRANSIT"
+  | "FIELD_ARRIVED_DESTINATION"
+  | "FIELD_DELIVERED";
+
+export interface MobileFieldWorkflowStateV1 {
+  step: MobileFieldWorkflowStepV1;
+  updatedAt: string | null;
+  lastEventType: MobileFieldWorkflowEventTypeV1 | null;
+}
+
 export interface MobileDriverIdentityV1 {
   id: string;
   name: string;
@@ -55,6 +80,12 @@ export interface MobileAssignmentV1 {
   } | null;
   origin: MobileAssignmentLocationV1 | null;
   destination: MobileAssignmentLocationV1 | null;
+  /**
+   * Driver-facing field progress is deliberately separate from the canonical
+   * waste/compliance load status. Older cached snapshots may not have this
+   * field, so Mobile must treat a missing value as ASSIGNED.
+   */
+  workflow?: MobileFieldWorkflowStateV1;
 }
 
 export interface MobileAssignmentBootstrapV1 {
