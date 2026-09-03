@@ -3,6 +3,8 @@ import * as SecureStore from "expo-secure-store";
 
 import type { MobileOfflineEntitlementV1 } from "@waste-x/contracts";
 
+import { createUuidV7, isUuidV7 } from "@/platform/ids";
+
 const DEVICE_ID_KEY = "waste-x-mobile-device-id-v1";
 const DATABASE_KEY = "waste-x-mobile-database-key-v1";
 const DEVICE_SECRET_KEY = "waste-x-mobile-device-secret-v1";
@@ -23,25 +25,6 @@ export type StoredMobileAuthProfile = {
   organisationId: string;
   displayName: string;
 };
-
-function isUuidV7(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-async function createUuidV7() {
-  const timestamp = BigInt(Date.now());
-  const random = await Crypto.getRandomBytesAsync(10);
-  const bytes = new Uint8Array(16);
-  for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = Number((timestamp >> BigInt((5 - index) * 8)) & 0xffn);
-  }
-  bytes[6] = 0x70 | (random[0]! & 0x0f);
-  bytes[7] = random[1]!;
-  bytes[8] = 0x80 | (random[2]! & 0x3f);
-  for (let index = 9; index < 16; index += 1) bytes[index] = random[index - 6]!;
-  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
-  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
-}
 
 export async function getOrCreateDeviceId() {
   const existing = await SecureStore.getItemAsync(DEVICE_ID_KEY, secureOptions);
@@ -76,13 +59,21 @@ export function getMobileSessionExpiry() {
 export async function getMobileAuthProfile(): Promise<StoredMobileAuthProfile | null> {
   const value = await SecureStore.getItemAsync(AUTH_PROFILE_KEY, secureOptions);
   if (!value) return null;
-  try { return JSON.parse(value) as StoredMobileAuthProfile; } catch { return null; }
+  try {
+    return JSON.parse(value) as StoredMobileAuthProfile;
+  } catch {
+    return null;
+  }
 }
 
 export async function getMobileOfflineEntitlement(): Promise<MobileOfflineEntitlementV1 | null> {
   const value = await SecureStore.getItemAsync(OFFLINE_ENTITLEMENT_KEY, secureOptions);
   if (!value) return null;
-  try { return JSON.parse(value) as MobileOfflineEntitlementV1; } catch { return null; }
+  try {
+    return JSON.parse(value) as MobileOfflineEntitlementV1;
+  } catch {
+    return null;
+  }
 }
 
 export async function storeMobileOfflineEntitlement(entitlement: MobileOfflineEntitlementV1) {
