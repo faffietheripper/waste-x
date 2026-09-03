@@ -20,6 +20,7 @@ import {
   getMobileAuthSnapshot,
   type MobileAuthSnapshot,
 } from "@/auth/mobile-auth";
+import { CollectionConfirmationPanel } from "@/field-ops/collection-confirmation";
 import {
   formatAssignmentDate,
   formatWeight,
@@ -29,6 +30,7 @@ import {
   getMobileFieldWorkflowState,
   getNextMobileFieldWorkflowAction,
   humanFieldWorkflowStep,
+  isMobileCollectionReady,
   MOBILE_FIELD_WORKFLOW_STEPS,
 } from "@/field-ops/workflow";
 import {
@@ -106,6 +108,11 @@ export default function MobileJobDetailScreen() {
     const workflow = getMobileFieldWorkflowState(assignment);
     const action = getNextMobileFieldWorkflowAction(workflow.step);
     if (!action) return;
+
+    if (action.eventType === "FIELD_COLLECTED" && !isMobileCollectionReady(assignment)) {
+      setError("Confirm the waste and quantity before marking this load collected.");
+      return;
+    }
 
     setActionBusy(true);
     setError(null);
@@ -206,6 +213,11 @@ export default function MobileJobDetailScreen() {
     assignment.load.status.toLowerCase(),
   );
   const workflowIndex = MOBILE_FIELD_WORKFLOW_STEPS.indexOf(workflow.step);
+  const collectionReady = isMobileCollectionReady(assignment);
+  const collectionGateActive = workflow.step === "ARRIVED_COLLECTION";
+  const nextActionDisabled =
+    actionBusy ||
+    (nextAction?.eventType === "FIELD_COLLECTED" && !collectionReady);
 
   return (
     <SafeAreaView style={styles.screen} edges={["top"]}>
@@ -302,19 +314,42 @@ export default function MobileJobDetailScreen() {
             })}
           </View>
 
+          {collectionGateActive ? (
+            <CollectionConfirmationPanel
+              assignment={assignment}
+              online={Boolean(auth?.onlineAuthenticated)}
+              onAssignmentChange={(updated) => {
+                setAssignment(updated);
+                setError(null);
+              }}
+              onSyncStatusChange={setSyncStatus}
+            />
+          ) : null}
+
           {!terminalLoad && nextAction ? (
             <View style={styles.actionBlock}>
               <Text style={styles.actionEyebrow}>NEXT ACTION</Text>
               <Text style={styles.actionTitle}>{nextAction.label}</Text>
-              <Text style={styles.actionHelper}>{nextAction.helper}</Text>
+              <Text style={styles.actionHelper}>
+                {nextAction.eventType === "FIELD_COLLECTED" && !collectionReady
+                  ? "Waste and quantity confirmation are required before collection can be recorded."
+                  : nextAction.helper}
+              </Text>
               <Pressable
-                disabled={actionBusy}
+                disabled={nextActionDisabled}
                 onPress={() => void recordNextFieldAction()}
-                style={[styles.primaryAction, actionBusy && styles.primaryActionDisabled]}
+                style={[
+                  styles.primaryAction,
+                  nextActionDisabled && styles.primaryActionDisabled,
+                ]}
               >
                 {actionBusy ? <ActivityIndicator color="#ffffff" /> : null}
                 <Text style={styles.primaryActionText}>
-                  {actionBusy ? "Saving locally…" : nextAction.label}
+                  {actionBusy
+                    ? "Saving locally…"
+                    : nextAction.eventType === "FIELD_COLLECTED" && !collectionReady
+                      ? "Confirm waste & quantity first"
+                      : nextAction.label}
                 </Text>
               </Pressable>
               <Text style={styles.localActionHint}>
@@ -329,7 +364,7 @@ export default function MobileJobDetailScreen() {
               <Text style={styles.completeBody}>
                 {terminalLoad
                   ? `Canonical load status: ${humanStatus(assignment.load.status)}.`
-                  : "Waste/weight, delivery evidence and final compliance completion are handled by the next field-operation slices."}
+                  : "Collection quantity is preserved on the same load. Delivery evidence and final compliance completion are handled by the next field-operation slice."}
               </Text>
             </View>
           )}
@@ -354,7 +389,7 @@ export default function MobileJobDetailScreen() {
         <Section title="Waste & quantity">
           <View style={styles.detailGrid}>
             <DetailTile label="EWC" value={assignment.load.ewcCode ?? "Not set"} />
-            <DetailTile label="WEIGHT" value={weight ?? "Not confirmed"} />
+            <DetailTile label="NET" value={weight ?? "Not confirmed"} />
           </View>
           <DetailRow
             label="Waste description"
@@ -363,7 +398,26 @@ export default function MobileJobDetailScreen() {
           {assignment.material ? (
             <DetailRow label="Material profile" value={assignment.material.name} />
           ) : null}
-          <DetailRow label="Weight basis" value={assignment.load.weightMetric} />
+          {assignment.load.grossWeight ? (
+            <DetailRow
+              label="Gross weight"
+              value={`${assignment.load.grossWeight} ${assignment.load.weightMetric}`}
+            />
+          ) : null}
+          {assignment.load.tareWeight ? (
+            <DetailRow
+              label="Tare weight"
+              value={`${assignment.load.tareWeight} ${assignment.load.weightMetric}`}
+            />
+          ) : null}
+          <DetailRow
+            label="Quantity basis"
+            value={`${assignment.load.weightMetric}${assignment.load.weightIsEstimate ? " · estimate" : " · actual"}`}
+          />
+          <DetailRow
+            label="Weight source"
+            value={assignment.load.weightSource ?? "Not recorded"}
+          />
           <DetailRow label="Ticket number" value={assignment.load.ticketNumber ?? "Not issued"} />
         </Section>
 
@@ -409,7 +463,7 @@ export default function MobileJobDetailScreen() {
           <View style={styles.flexOne}>
             <Text style={styles.localFirstTitle}>Local-first operational record</Text>
             <Text style={styles.localFirstBody}>
-              Viewing and advancing this field journey uses the authorised SQLCipher record on this phone first. Each action has the same load ID and is queued for Cloud or trusted Bridge delivery.
+              Viewing, confirming waste/quantity and advancing this journey all use the authorised SQLCipher record on this phone first. Every event keeps the same Waste X load ID for Cloud or trusted Bridge delivery.
             </Text>
           </View>
         </View>
@@ -535,7 +589,7 @@ const styles = StyleSheet.create({
   actionTitle: { marginTop: 6, color: "#111827", fontSize: 20, fontWeight: "900" },
   actionHelper: { marginTop: 5, color: "#64748b", fontSize: 12, lineHeight: 18 },
   primaryAction: { marginTop: 14, minHeight: 52, borderRadius: 15, backgroundColor: "#111827", flexDirection: "row", gap: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 18 },
-  primaryActionDisabled: { opacity: 0.65 },
+  primaryActionDisabled: { opacity: 0.45 },
   primaryActionText: { color: "#ffffff", fontSize: 14, fontWeight: "900" },
   localActionHint: { marginTop: 8, color: "#94a3b8", fontSize: 9, lineHeight: 14, textAlign: "center", fontWeight: "700" },
   completeBlock: { marginTop: 16, padding: 14, borderRadius: 14, backgroundColor: "#f8fafc" },
