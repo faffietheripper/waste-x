@@ -22,10 +22,21 @@ export type MobileFieldWorkflowEventTypeV1 =
   | "FIELD_ARRIVED_DESTINATION"
   | "FIELD_DELIVERED";
 
+export type MobileCollectionConfirmationKindV1 =
+  | "WASTE"
+  | "QUANTITY"
+  | "MANUAL_WEIGHT";
+
 export interface MobileFieldWorkflowStateV1 {
   step: MobileFieldWorkflowStepV1;
   updatedAt: string | null;
   lastEventType: MobileFieldWorkflowEventTypeV1 | null;
+}
+
+export interface MobileCollectionChecksV1 {
+  wasteConfirmedAt: string | null;
+  quantityConfirmedAt: string | null;
+  manualWeightRecordedAt: string | null;
 }
 
 export interface MobileDriverIdentityV1 {
@@ -64,8 +75,12 @@ export interface MobileAssignmentV1 {
     movementAt: string | null;
     ewcCode: string | null;
     wasteDescription: string | null;
+    grossWeight?: string | null;
+    tareWeight?: string | null;
     netWeight: string | null;
     weightMetric: "Grams" | "Kilograms" | "Tonnes";
+    weightIsEstimate?: boolean;
+    weightSource?: "manual" | "weighbridge" | "imported" | null;
     ticketNumber: string | null;
   };
   transport: {
@@ -86,6 +101,12 @@ export interface MobileAssignmentV1 {
    * field, so Mobile must treat a missing value as ASSIGNED.
    */
   workflow?: MobileFieldWorkflowStateV1;
+  /**
+   * Collection confirmations are hydrated from immutable LOAD_DETAILS_UPDATED
+   * event metadata. They are optional for backwards compatibility with older
+   * encrypted Mobile snapshots.
+   */
+  collectionChecks?: MobileCollectionChecksV1;
 }
 
 export interface MobileAssignmentBootstrapV1 {
