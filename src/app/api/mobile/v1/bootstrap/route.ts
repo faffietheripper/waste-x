@@ -11,7 +11,10 @@ import {
   sql,
 } from "drizzle-orm";
 
-import { clientDevices } from "@/db/client-sync-schema";
+import {
+  clientDevices,
+  syncEntityVersions,
+} from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
   counterpartySites,
@@ -200,6 +203,7 @@ export async function GET(request: Request) {
       )
       .orderBy(asc(jobs.jobDate), asc(jobLoads.loadNumber));
 
+    const loadIds = unique(assignmentRows.map((row) => row.loadId));
     const vehicleIds = unique(
       assignmentRows.map((row) => row.loadVehicleId ?? row.jobVehicleId),
     );
@@ -221,75 +225,98 @@ export async function GET(request: Request) {
       ]),
     );
 
-    const [vehicleRows, materialRows, ownSiteRows, counterpartySiteRows] =
-      await Promise.all([
-        vehicleIds.length
-          ? database
-              .select({
-                id: vehicles.id,
-                registrationNumber: vehicles.registrationNumber,
-              })
-              .from(vehicles)
-              .where(
-                and(
-                  eq(vehicles.organisationId, context.organisationId),
-                  inArray(vehicles.id, vehicleIds),
-                ),
-              )
-          : Promise.resolve([]),
-        materialIds.length
-          ? database
-              .select({
-                id: materialProfiles.id,
-                name: materialProfiles.name,
-              })
-              .from(materialProfiles)
-              .where(
-                and(
-                  eq(materialProfiles.organisationId, context.organisationId),
-                  inArray(materialProfiles.id, materialIds),
-                ),
-              )
-          : Promise.resolve([]),
-        ownSiteIds.length
-          ? database
-              .select({
-                id: sites.id,
-                name: sites.name,
-                fullAddress: sites.fullAddress,
-                postcode: sites.postcode,
-              })
-              .from(sites)
-              .where(
-                and(
-                  eq(sites.organisationId, context.organisationId),
-                  inArray(sites.id, ownSiteIds),
-                ),
-              )
-          : Promise.resolve([]),
-        counterpartySiteIds.length
-          ? database
-              .select({
-                id: counterpartySites.id,
-                name: counterpartySites.name,
-                fullAddress: counterpartySites.fullAddress,
-                postcode: counterpartySites.postcode,
-              })
-              .from(counterpartySites)
-              .where(
-                and(
-                  eq(counterpartySites.organisationId, context.organisationId),
-                  inArray(counterpartySites.id, counterpartySiteIds),
-                ),
-              )
-          : Promise.resolve([]),
-      ]);
+    const [
+      vehicleRows,
+      materialRows,
+      ownSiteRows,
+      counterpartySiteRows,
+      versionRows,
+    ] = await Promise.all([
+      vehicleIds.length
+        ? database
+            .select({
+              id: vehicles.id,
+              registrationNumber: vehicles.registrationNumber,
+            })
+            .from(vehicles)
+            .where(
+              and(
+                eq(vehicles.organisationId, context.organisationId),
+                inArray(vehicles.id, vehicleIds),
+              ),
+            )
+        : Promise.resolve([]),
+      materialIds.length
+        ? database
+            .select({
+              id: materialProfiles.id,
+              name: materialProfiles.name,
+            })
+            .from(materialProfiles)
+            .where(
+              and(
+                eq(materialProfiles.organisationId, context.organisationId),
+                inArray(materialProfiles.id, materialIds),
+              ),
+            )
+        : Promise.resolve([]),
+      ownSiteIds.length
+        ? database
+            .select({
+              id: sites.id,
+              name: sites.name,
+              fullAddress: sites.fullAddress,
+              postcode: sites.postcode,
+            })
+            .from(sites)
+            .where(
+              and(
+                eq(sites.organisationId, context.organisationId),
+                inArray(sites.id, ownSiteIds),
+              ),
+            )
+        : Promise.resolve([]),
+      counterpartySiteIds.length
+        ? database
+            .select({
+              id: counterpartySites.id,
+              name: counterpartySites.name,
+              fullAddress: counterpartySites.fullAddress,
+              postcode: counterpartySites.postcode,
+            })
+            .from(counterpartySites)
+            .where(
+              and(
+                eq(counterpartySites.organisationId, context.organisationId),
+                inArray(counterpartySites.id, counterpartySiteIds),
+              ),
+            )
+        : Promise.resolve([]),
+      loadIds.length
+        ? database
+            .select({
+              entityId: syncEntityVersions.entityId,
+              version: syncEntityVersions.version,
+            })
+            .from(syncEntityVersions)
+            .where(
+              and(
+                eq(syncEntityVersions.organisationId, context.organisationId),
+                eq(syncEntityVersions.entityType, "job_load"),
+                inArray(syncEntityVersions.entityId, loadIds),
+              ),
+            )
+        : Promise.resolve([]),
+    ]);
 
     const vehiclesById = new Map(vehicleRows.map((row) => [row.id, row]));
     const materialsById = new Map(materialRows.map((row) => [row.id, row]));
     const ownSitesById = new Map(ownSiteRows.map((row) => [row.id, row]));
     const counterpartySitesById = new Map(
       counterpartySiteRows.map((row) => [row.id, row]),
+    );
+    const versionsByLoadId = new Map(
+      versionRows.map((row) => [row.entityId, row.version]),
     );
 
     const assignments = assignmentRows.map((row) => {
@@ -364,6 +391,9 @@ export async function GET(request: Request) {
           id: row.loadId,
           loadNumber: row.loadNumber,
           status: row.loadStatus,
+          direction,
+          entityVersion: versionsByLoadId.get(row.loadId) ?? 0,
+          movementAt: row.movementAt?.toISOString() ?? null,
           ewcCode: row.ewcCode,
           wasteDescription: row.wasteDescription,
           netWeight: row.netWeight,
