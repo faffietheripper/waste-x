@@ -231,7 +231,7 @@ fn authorised(request: &Request, expected: &str) -> bool {
         && bool::from(supplied.as_bytes().ct_eq(expected.as_bytes()))
 }
 
-fn header_value<'a>(request: &'a Request, name: &str) -> &'a str {
+fn header_value<'a>(request: &'a Request, name: &'static str) -> &'a str {
     request
         .headers()
         .iter()
@@ -763,7 +763,7 @@ fn mobile_sync_push(mut request: Request, state: &BridgeState) {
     );
 }
 
-fn handle_request(mut request: Request, state: &BridgeState) {
+fn handle_request(request: Request, state: &BridgeState) {
     let method = request.method().clone();
     let path = request.url().split('?').next().unwrap_or(request.url()).to_string();
     let uptime_seconds = state.started_at.elapsed().as_secs();
