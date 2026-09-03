@@ -38,7 +38,9 @@ export const dynamic = "force-dynamic";
 const FORWARD_DAYS = 14 as const;
 
 function unique(values: Array<string | null | undefined>) {
-  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value))),
+  );
 }
 
 export async function GET(request: Request) {
@@ -83,7 +85,8 @@ export async function GET(request: Request) {
       );
     }
 
-    const driverMatches = await database
+    const normalizedEmail = user.email.toLowerCase().trim();
+    const matchedDrivers = await database
       .select({
         id: drivers.id,
         name: drivers.name,
@@ -96,44 +99,43 @@ export async function GET(request: Request) {
         and(
           eq(drivers.organisationId, context.organisationId),
           eq(drivers.isActive, true),
-          sql`lower(${drivers.email}) = ${user.email.toLowerCase()}`,
+          sql`lower(trim(${drivers.email})) = ${normalizedEmail}`,
         ),
       )
       .limit(2);
 
-    const horizonStart = new Date();
-    horizonStart.setUTCHours(0, 0, 0, 0);
-    const horizonEndExclusive = new Date(horizonStart);
-    horizonEndExclusive.setUTCDate(horizonEndExclusive.getUTCDate() + FORWARD_DAYS);
-    const horizonEnd = new Date(horizonEndExclusive.getTime() - 1);
+    const now = new Date();
+    const horizonStart = new Date(now);
+    horizonStart.setHours(0, 0, 0, 0);
+    const horizonEnd = new Date(horizonStart);
+    horizonEnd.setDate(horizonEnd.getDate() + FORWARD_DAYS);
+    horizonEnd.setHours(23, 59, 59, 999);
 
-    if (driverMatches.length !== 1) {
+    if (matchedDrivers.length !== 1) {
       return clientApiJson({
         ok: true,
-        bootstrap: {
-          schemaVersion: 1,
-          generatedAt: new Date().toISOString(),
-          workingSet: {
-            forwardDays: FORWARD_DAYS,
-            horizonStart: horizonStart.toISOString(),
-            horizonEnd: horizonEnd.toISOString(),
-          },
-          scope: {
-            resolution:
-              driverMatches.length === 0
-                ? "NO_DRIVER_MATCH"
-                : "AMBIGUOUS_DRIVER_MATCH",
-            userId: context.userId,
-            driver: null,
-          },
-          assignments: [],
+        schemaVersion: 1 as const,
+        generatedAt: now.toISOString(),
+        workingSet: {
+          forwardDays: FORWARD_DAYS,
+          horizonStart: horizonStart.toISOString(),
+          horizonEnd: horizonEnd.toISOString(),
         },
+        scope: {
+          resolution:
+            matchedDrivers.length === 0
+              ? ("NO_DRIVER_MATCH" as const)
+              : ("AMBIGUOUS_DRIVER_MATCH" as const),
+          userId: user.id,
+          driver: null,
+        },
+        assignments: [],
       });
     }
 
-    const driver = driverMatches[0]!;
+    const driver = matchedDrivers[0]!;
 
-    const rows = await database
+    const assignmentRows = await database
       .select({
         jobId: jobs.id,
         jobNumber: jobs.jobNumber,
@@ -154,59 +156,101 @@ export async function GET(request: Request) {
         loadNumber: jobLoads.loadNumber,
         loadStatus: jobLoads.status,
         loadDirection: jobLoads.direction,
-        loadMovementAt: jobLoads.movementAt,
+        movementAt: jobLoads.movementAt,
         loadDriverId: jobLoads.driverId,
         loadVehicleId: jobLoads.vehicleId,
         loadClientSiteId: jobLoads.clientSiteId,
         loadOwnSiteId: jobLoads.ownSiteId,
         loadThirdPartyDestinationSiteId: jobLoads.thirdPartyDestinationSiteId,
         loadMaterialProfileId: jobLoads.materialProfileId,
-        loadEwcCode: jobLoads.ewcCodeSnapshot,
-        loadWasteDescription: jobLoads.wasteDescriptionSnapshot,
-        loadNetWeight: jobLoads.netWeight,
-        loadWeightMetric: jobLoads.weightMetric,
-        loadTicketNumber: jobLoads.ticketNumber,
+        ewcCode: jobLoads.ewcCodeSnapshot,
+        wasteDescription: jobLoads.wasteDescriptionSnapshot,
+        netWeight: jobLoads.netWeight,
+        weightMetric: jobLoads.weightMetric,
+        ticketNumber: jobLoads.ticketNumber,
       })
       .from(jobLoads)
-      .innerJoin(jobs, eq(jobLoads.jobId, jobs.id))
+      .innerJoin(
+        jobs,
+        and(
+          eq(jobLoads.jobId, jobs.id),
+          eq(jobLoads.organisationId, jobs.organisationId),
+        ),
+      )
       .where(
         and(
-          eq(jobs.organisationId, context.organisationId),
           eq(jobLoads.organisationId, context.organisationId),
-          gte(jobs.jobDate, horizonStart),
-          lte(jobs.jobDate, horizonEnd),
-          ne(jobs.status, "cancelled"),
           ne(jobLoads.status, "cancelled"),
+          ne(jobs.status, "cancelled"),
           or(
             eq(jobLoads.driverId, driver.id),
             and(isNull(jobLoads.driverId), eq(jobs.driverId, driver.id)),
+          ),
+          or(
+            and(
+              gte(jobs.jobDate, horizonStart),
+              lte(jobs.jobDate, horizonEnd),
+            ),
+            and(
+              gte(jobLoads.movementAt, horizonStart),
+              lte(jobLoads.movementAt, horizonEnd),
+            ),
           ),
         ),
       )
       .orderBy(asc(jobs.jobDate), asc(jobLoads.loadNumber));
 
+    const vehicleIds = unique(
+      assignmentRows.map((row) => row.loadVehicleId ?? row.jobVehicleId),
+    );
+    const materialIds = unique(
+      assignmentRows.map(
+        (row) => row.loadMaterialProfileId ?? row.jobMaterialProfileId,
+      ),
+    );
     const ownSiteIds = unique(
-      rows.map((row) => row.loadOwnSiteId ?? row.jobOwnSiteId),
+      assignmentRows.flatMap((row) => [
+        row.loadOwnSiteId ?? row.jobOwnSiteId,
+      ]),
     );
     const counterpartySiteIds = unique(
-      rows.flatMap((row) => [
+      assignmentRows.flatMap((row) => [
         row.loadClientSiteId ?? row.jobClientSiteId,
         row.loadThirdPartyDestinationSiteId ??
           row.jobThirdPartyDestinationSiteId,
       ]),
     );
-    const vehicleIds = unique(
-      rows.map(
-        (row) =>
-          row.loadVehicleId ?? row.jobVehicleId ?? driver.defaultVehicleId,
-      ),
-    );
-    const materialIds = unique(
-      rows.map((row) => row.loadMaterialProfileId ?? row.jobMaterialProfileId),
-    );
 
-    const [ownSiteRows, counterpartySiteRows, vehicleRows, materialRows] =
+    const [vehicleRows, materialRows, ownSiteRows, counterpartySiteRows] =
       await Promise.all([
+        vehicleIds.length
+          ? database
+              .select({
+                id: vehicles.id,
+                registrationNumber: vehicles.registrationNumber,
+              })
+              .from(vehicles)
+              .where(
+                and(
+                  eq(vehicles.organisationId, context.organisationId),
+                  inArray(vehicles.id, vehicleIds),
+                ),
+              )
+          : Promise.resolve([]),
+        materialIds.length
+          ? database
+              .select({
+                id: materialProfiles.id,
+                name: materialProfiles.name,
+              })
+              .from(materialProfiles)
+              .where(
+                and(
+                  eq(materialProfiles.organisationId, context.organisationId),
+                  inArray(materialProfiles.id, materialIds),
+                ),
+              )
+          : Promise.resolve([]),
         ownSiteIds.length
           ? database
               .select({
@@ -239,84 +283,71 @@ export async function GET(request: Request) {
                 ),
               )
           : Promise.resolve([]),
-        vehicleIds.length
-          ? database
-              .select({
-                id: vehicles.id,
-                registrationNumber: vehicles.registrationNumber,
-              })
-              .from(vehicles)
-              .where(
-                and(
-                  eq(vehicles.organisationId, context.organisationId),
-                  inArray(vehicles.id, vehicleIds),
-                ),
-              )
-          : Promise.resolve([]),
-        materialIds.length
-          ? database
-              .select({ id: materialProfiles.id, name: materialProfiles.name })
-              .from(materialProfiles)
-              .where(
-                and(
-                  eq(materialProfiles.organisationId, context.organisationId),
-                  inArray(materialProfiles.id, materialIds),
-                ),
-              )
-          : Promise.resolve([]),
       ]);
 
-    const ownSiteById = new Map(ownSiteRows.map((site) => [site.id, site]));
-    const counterpartySiteById = new Map(
-      counterpartySiteRows.map((site) => [site.id, site]),
+    const vehiclesById = new Map(vehicleRows.map((row) => [row.id, row]));
+    const materialsById = new Map(materialRows.map((row) => [row.id, row]));
+    const ownSitesById = new Map(ownSiteRows.map((row) => [row.id, row]));
+    const counterpartySitesById = new Map(
+      counterpartySiteRows.map((row) => [row.id, row]),
     );
-    const vehicleById = new Map(vehicleRows.map((vehicle) => [vehicle.id, vehicle]));
-    const materialById = new Map(materialRows.map((material) => [material.id, material]));
 
-    const assignments = rows.map((row) => {
-      const direction = row.loadDirection ?? row.jobDirection;
+    const assignments = assignmentRows.map((row) => {
+      const effectiveDriverId = row.loadDriverId ?? row.jobDriverId;
+      const effectiveVehicleId = row.loadVehicleId ?? row.jobVehicleId;
+      const effectiveMaterialId =
+        row.loadMaterialProfileId ?? row.jobMaterialProfileId;
       const clientSiteId = row.loadClientSiteId ?? row.jobClientSiteId;
       const ownSiteId = row.loadOwnSiteId ?? row.jobOwnSiteId;
-      const destinationSiteId =
+      const thirdPartyDestinationSiteId =
         row.loadThirdPartyDestinationSiteId ??
         row.jobThirdPartyDestinationSiteId;
-      const vehicleId =
-        row.loadVehicleId ?? row.jobVehicleId ?? driver.defaultVehicleId;
-      const materialId =
-        row.loadMaterialProfileId ?? row.jobMaterialProfileId;
+      const direction = row.loadDirection ?? row.jobDirection;
 
-      const ownSite = ownSiteId ? ownSiteById.get(ownSiteId) ?? null : null;
+      const ownSite = ownSiteId ? ownSitesById.get(ownSiteId) ?? null : null;
       const clientSite = clientSiteId
-        ? counterpartySiteById.get(clientSiteId) ?? null
+        ? counterpartySitesById.get(clientSiteId) ?? null
         : null;
-      const destinationSite = destinationSiteId
-        ? counterpartySiteById.get(destinationSiteId) ?? null
+      const thirdPartyDestination = thirdPartyDestinationSiteId
+        ? counterpartySitesById.get(thirdPartyDestinationSiteId) ?? null
         : null;
-      const vehicle = vehicleId ? vehicleById.get(vehicleId) ?? null : null;
-      const material = materialId ? materialById.get(materialId) ?? null : null;
 
-      const toOwnSiteLocation = () =>
-        ownSite
-          ? {
-              kind: "OWN_SITE" as const,
-              id: ownSite.id,
-              name: ownSite.name,
-              fullAddress: ownSite.fullAddress,
-              postcode: ownSite.postcode,
+      const location = (
+        value:
+          | {
+              id: string;
+              name: string;
+              fullAddress: string | null;
+              postcode: string | null;
             }
-          : null;
-      const toCounterpartyLocation = (
-        site: (typeof counterpartySiteRows)[number] | null,
+          | null,
+        kind: "OWN_SITE" | "COUNTERPARTY_SITE",
       ) =>
-        site
+        value
           ? {
-              kind: "COUNTERPARTY_SITE" as const,
-              id: site.id,
-              name: site.name,
-              fullAddress: site.fullAddress,
-              postcode: site.postcode,
+              kind,
+              id: value.id,
+              name: value.name,
+              fullAddress: value.fullAddress,
+              postcode: value.postcode,
             }
           : null;
+
+      const origin =
+        direction === "outgoing"
+          ? location(ownSite, "OWN_SITE")
+          : location(clientSite, "COUNTERPARTY_SITE");
+      const destination =
+        direction === "outgoing"
+          ? location(thirdPartyDestination, "COUNTERPARTY_SITE")
+          : location(ownSite, "OWN_SITE");
+
+      const vehicle = effectiveVehicleId
+        ? vehiclesById.get(effectiveVehicleId) ?? null
+        : null;
+      const material = effectiveMaterialId
+        ? materialsById.get(effectiveMaterialId) ?? null
+        : null;
 
       return {
         job: {
@@ -324,7 +355,7 @@ export async function GET(request: Request) {
           jobNumber: row.jobNumber,
           jobDate: row.jobDate.toISOString(),
           status: row.jobStatus,
-          direction,
+          direction: row.jobDirection,
           customerReference: row.jobCustomerReference,
           purchaseOrder: row.jobPurchaseOrder,
           notes: row.jobNotes,
@@ -333,17 +364,16 @@ export async function GET(request: Request) {
           id: row.loadId,
           loadNumber: row.loadNumber,
           status: row.loadStatus,
-          ewcCode: row.loadEwcCode,
-          wasteDescription: row.loadWasteDescription,
-          netWeight: row.loadNetWeight,
-          weightMetric: row.loadWeightMetric,
-          ticketNumber: row.loadTicketNumber,
-          movementAt: row.loadMovementAt?.toISOString() ?? null,
+          ewcCode: row.ewcCode,
+          wasteDescription: row.wasteDescription,
+          netWeight: row.netWeight,
+          weightMetric: row.weightMetric,
+          ticketNumber: row.ticketNumber,
         },
         transport: {
-          driverId: driver.id,
+          driverId: effectiveDriverId ?? driver.id,
           driverName: driver.name,
-          vehicleId: vehicle?.id ?? null,
+          vehicleId: effectiveVehicleId,
           vehicleRegistration: vehicle?.registrationNumber ?? null,
         },
         material: material
@@ -352,34 +382,32 @@ export async function GET(request: Request) {
               name: material.name,
             }
           : null,
-        origin:
-          direction === "outgoing"
-            ? toOwnSiteLocation()
-            : toCounterpartyLocation(clientSite),
-        destination:
-          direction === "outgoing"
-            ? toCounterpartyLocation(destinationSite)
-            : toOwnSiteLocation(),
+        origin,
+        destination,
       };
     });
 
     return clientApiJson({
       ok: true,
-      bootstrap: {
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        workingSet: {
-          forwardDays: FORWARD_DAYS,
-          horizonStart: horizonStart.toISOString(),
-          horizonEnd: horizonEnd.toISOString(),
-        },
-        scope: {
-          resolution: "MATCHED",
-          userId: context.userId,
-          driver,
-        },
-        assignments,
+      schemaVersion: 1 as const,
+      generatedAt: now.toISOString(),
+      workingSet: {
+        forwardDays: FORWARD_DAYS,
+        horizonStart: horizonStart.toISOString(),
+        horizonEnd: horizonEnd.toISOString(),
       },
+      scope: {
+        resolution: "MATCHED" as const,
+        userId: user.id,
+        driver: {
+          id: driver.id,
+          name: driver.name,
+          email: driver.email,
+          telephone: driver.telephone,
+          defaultVehicleId: driver.defaultVehicleId,
+        },
+      },
+      assignments,
     });
   } catch (error) {
     return handleClientApiError(error);
