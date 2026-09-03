@@ -7,6 +7,7 @@ import {
   asSyncEventId,
   asUserId,
   type MobileAssignmentV1,
+  type MobileFieldWorkflowEventTypeV1,
   type SyncEventV1,
   type SyncPushRequestV1,
   type SyncPushResponseV1,
@@ -16,6 +17,12 @@ import {
   getLocalMobileAssignmentWorkingSet,
   refreshMobileAssignmentWorkingSet,
 } from "@/assignments/local-working-set";
+import {
+  applyMobileFieldWorkflowEvent,
+  getMobileFieldWorkflowState,
+  getNextMobileFieldWorkflowAction,
+  isMobileFieldWorkflowEventType,
+} from "@/field-ops/workflow";
 import { wasteXMobileApi } from "@/platform/api";
 import { createUuidV7 } from "@/platform/ids";
 import { openMobileDatabase } from "@/storage/database";
@@ -27,7 +34,8 @@ import {
 export type MobileJobLoadEventType =
   | "LOAD_ARRIVED"
   | "LOAD_DETAILS_UPDATED"
-  | "LOAD_COMPLETED";
+  | "LOAD_COMPLETED"
+  | MobileFieldWorkflowEventTypeV1;
 
 export type MobileSyncTransportName = "CLOUD" | "LOCAL_BRIDGE";
 
@@ -111,14 +119,19 @@ function applyLocalProjection(
   assignment: MobileAssignmentV1,
   eventType: MobileJobLoadEventType,
   payload: unknown,
+  occurredAt: string,
 ) {
-  const next: MobileAssignmentV1 = JSON.parse(
+  let next: MobileAssignmentV1 = JSON.parse(
     JSON.stringify(assignment),
   ) as MobileAssignmentV1;
 
+  if (isMobileFieldWorkflowEventType(eventType)) {
+    next = applyMobileFieldWorkflowEvent(next, eventType, occurredAt);
+  }
+
   if (eventType === "LOAD_ARRIVED") {
     next.load.status = "arrived";
-    next.load.movementAt = next.load.movementAt ?? new Date().toISOString();
+    next.load.movementAt = next.load.movementAt ?? occurredAt;
   }
 
   if (eventType === "LOAD_COMPLETED") {
@@ -180,7 +193,20 @@ export async function queueMobileJobLoadEvent(input: {
     throw new Error("This Mobile assignment has no authorised Driver scope.");
   }
 
-  const payload = input.payload ?? {};
+  let payload = input.payload ?? {};
+  if (isMobileFieldWorkflowEventType(input.eventType)) {
+    const current = getMobileFieldWorkflowState(assignment);
+    const action = getNextMobileFieldWorkflowAction(current.step);
+    if (!action || action.eventType !== input.eventType) {
+      throw new Error("This field action is not valid for the load's current workflow step.");
+    }
+    payload = {
+      ...(payload && typeof payload === "object" ? payload : {}),
+      fromStep: action.fromStep,
+      toStep: action.toStep,
+    };
+  }
+
   const [eventId, deviceSequence, payloadHash] = await Promise.all([
     createUuidV7(),
     nextDeviceSequence(),
@@ -189,7 +215,12 @@ export async function queueMobileJobLoadEvent(input: {
   const recordedAt = new Date().toISOString();
   const occurredAt = input.occurredAt ?? recordedAt;
   const baseVersion = assignment.load.entityVersion;
-  const projected = applyLocalProjection(assignment, input.eventType, payload);
+  const projected = applyLocalProjection(
+    assignment,
+    input.eventType,
+    payload,
+    occurredAt,
+  );
 
   await database.withTransactionAsync(async () => {
     await database.runAsync(
