@@ -98,6 +98,24 @@ export async function getLocalMobileAssignmentWorkingSet(): Promise<LocalMobileA
   };
 }
 
+export async function getLocalMobileAssignmentByLoadId(
+  loadId: string,
+): Promise<MobileAssignmentV1 | null> {
+  const trimmed = loadId.trim();
+  if (!trimmed) return null;
+
+  const database = await openMobileDatabase();
+  const row = await database.getFirstAsync<AssignmentRow>(
+    `SELECT payload_json
+     FROM local_mobile_assignment
+     WHERE load_id = ?
+     LIMIT 1`,
+    trimmed,
+  );
+
+  return parseJson<MobileAssignmentV1>(row?.payload_json ?? null);
+}
+
 export async function persistMobileAssignmentBootstrap(
   bootstrap: MobileAssignmentBootstrapV1,
 ): Promise<LocalMobileAssignmentWorkingSet> {
