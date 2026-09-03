@@ -211,8 +211,12 @@ export async function GET(request: Request) {
         loadMaterialProfileId: jobLoads.materialProfileId,
         ewcCode: jobLoads.ewcCodeSnapshot,
         wasteDescription: jobLoads.wasteDescriptionSnapshot,
+        grossWeight: jobLoads.grossWeight,
+        tareWeight: jobLoads.tareWeight,
         netWeight: jobLoads.netWeight,
         weightMetric: jobLoads.weightMetric,
+        weightIsEstimate: jobLoads.weightIsEstimate,
+        weightSource: jobLoads.weightSource,
         ticketNumber: jobLoads.ticketNumber,
       })
       .from(jobLoads)
@@ -275,6 +279,7 @@ export async function GET(request: Request) {
       counterpartySiteRows,
       versionRows,
       workflowRows,
+      confirmationRows,
     ] = await Promise.all([
       vehicleIds.length
         ? database
@@ -373,6 +378,25 @@ export async function GET(request: Request) {
             )
             .orderBy(asc(syncEventInbox.occurredAt), asc(syncEventInbox.receivedAt))
         : Promise.resolve([]),
+      loadIds.length
+        ? database
+            .select({
+              entityId: syncEventInbox.entityId,
+              payload: syncEventInbox.payload,
+              occurredAt: syncEventInbox.occurredAt,
+            })
+            .from(syncEventInbox)
+            .where(
+              and(
+                eq(syncEventInbox.organisationId, context.organisationId),
+                eq(syncEventInbox.entityType, "job_load"),
+                eq(syncEventInbox.eventType, "LOAD_DETAILS_UPDATED"),
+                eq(syncEventInbox.resultStatus, "APPLIED"),
+                inArray(syncEventInbox.entityId, loadIds),
+              ),
+            )
+            .orderBy(asc(syncEventInbox.occurredAt), asc(syncEventInbox.receivedAt))
+        : Promise.resolve([]),
     ]);
 
     const vehiclesById = new Map(vehicleRows.map((row) => [row.id, row]));
@@ -392,6 +416,14 @@ export async function GET(request: Request) {
         lastEventType: FieldWorkflowEventType;
       }
     >();
+    const collectionChecksByLoadId = new Map<
+      string,
+      {
+        wasteConfirmedAt: string | null;
+        quantityConfirmedAt: string | null;
+        manualWeightRecordedAt: string | null;
+      }
+    >();
 
     for (const row of workflowRows) {
       const step = fieldWorkflowStepForEvent(row.eventType);
@@ -401,6 +433,27 @@ export async function GET(request: Request) {
         updatedAt: row.occurredAt.toISOString(),
         lastEventType: row.eventType as FieldWorkflowEventType,
       });
+    }
+
+    for (const row of confirmationRows) {
+      if (!row.payload || typeof row.payload !== "object") continue;
+      const kind = (row.payload as { fieldConfirmation?: unknown }).fieldConfirmation;
+      if (kind !== "WASTE" && kind !== "QUANTITY" && kind !== "MANUAL_WEIGHT") {
+        continue;
+      }
+      const checks = collectionChecksByLoadId.get(row.entityId) ?? {
+        wasteConfirmedAt: null,
+        quantityConfirmedAt: null,
+        manualWeightRecordedAt: null,
+      };
+      const occurredAt = row.occurredAt.toISOString();
+      if (kind === "WASTE") checks.wasteConfirmedAt = occurredAt;
+      if (kind === "QUANTITY") checks.quantityConfirmedAt = occurredAt;
+      if (kind === "MANUAL_WEIGHT") {
+        checks.manualWeightRecordedAt = occurredAt;
+        checks.quantityConfirmedAt = occurredAt;
+      }
+      collectionChecksByLoadId.set(row.entityId, checks);
     }
 
     const assignments = assignmentRows.map((row) => {
@@ -464,6 +517,11 @@ export async function GET(request: Request) {
         updatedAt: row.movementAt?.toISOString() ?? null,
         lastEventType: null,
       };
+      const collectionChecks = collectionChecksByLoadId.get(row.loadId) ?? {
+        wasteConfirmedAt: null,
+        quantityConfirmedAt: null,
+        manualWeightRecordedAt: null,
+      };
 
       return {
         job: {
@@ -485,8 +543,12 @@ export async function GET(request: Request) {
           movementAt: row.movementAt?.toISOString() ?? null,
           ewcCode: row.ewcCode,
           wasteDescription: row.wasteDescription,
+          grossWeight: row.grossWeight,
+          tareWeight: row.tareWeight,
           netWeight: row.netWeight,
           weightMetric: row.weightMetric,
+          weightIsEstimate: row.weightIsEstimate,
+          weightSource: row.weightSource,
           ticketNumber: row.ticketNumber,
         },
         transport: {
@@ -504,6 +566,7 @@ export async function GET(request: Request) {
         origin,
         destination,
         workflow,
+        collectionChecks,
       };
     });
 
