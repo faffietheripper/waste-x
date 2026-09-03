@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
@@ -77,6 +77,72 @@ const loadDetailsPayloadSchema = z.object({
 const rejectPayloadSchema = z.object({
   reason: z.string().trim().min(3).max(2000),
 });
+
+const fieldWorkflowStepSchema = z.enum([
+  "ASSIGNED",
+  "STARTED",
+  "EN_ROUTE",
+  "ARRIVED_COLLECTION",
+  "COLLECTED",
+  "IN_TRANSIT",
+  "ARRIVED_DESTINATION",
+  "DELIVERED",
+]);
+
+const fieldWorkflowPayloadSchema = z.object({
+  fromStep: fieldWorkflowStepSchema,
+  toStep: fieldWorkflowStepSchema,
+});
+
+type FieldWorkflowStep = z.infer<typeof fieldWorkflowStepSchema>;
+
+type FieldWorkflowEventType =
+  | "FIELD_JOB_STARTED"
+  | "FIELD_EN_ROUTE"
+  | "FIELD_ARRIVED_COLLECTION"
+  | "FIELD_COLLECTED"
+  | "FIELD_IN_TRANSIT"
+  | "FIELD_ARRIVED_DESTINATION"
+  | "FIELD_DELIVERED";
+
+const FIELD_WORKFLOW_TRANSITIONS: Record<
+  FieldWorkflowEventType,
+  { fromStep: FieldWorkflowStep; toStep: FieldWorkflowStep }
+> = {
+  FIELD_JOB_STARTED: { fromStep: "ASSIGNED", toStep: "STARTED" },
+  FIELD_EN_ROUTE: { fromStep: "STARTED", toStep: "EN_ROUTE" },
+  FIELD_ARRIVED_COLLECTION: {
+    fromStep: "EN_ROUTE",
+    toStep: "ARRIVED_COLLECTION",
+  },
+  FIELD_COLLECTED: {
+    fromStep: "ARRIVED_COLLECTION",
+    toStep: "COLLECTED",
+  },
+  FIELD_IN_TRANSIT: { fromStep: "COLLECTED", toStep: "IN_TRANSIT" },
+  FIELD_ARRIVED_DESTINATION: {
+    fromStep: "IN_TRANSIT",
+    toStep: "ARRIVED_DESTINATION",
+  },
+  FIELD_DELIVERED: {
+    fromStep: "ARRIVED_DESTINATION",
+    toStep: "DELIVERED",
+  },
+};
+
+const FIELD_WORKFLOW_EVENT_TYPES = Object.keys(
+  FIELD_WORKFLOW_TRANSITIONS,
+) as FieldWorkflowEventType[];
+
+function isFieldWorkflowEventType(value: string): value is FieldWorkflowEventType {
+  return value in FIELD_WORKFLOW_TRANSITIONS;
+}
+
+function fieldWorkflowStepForEvent(eventType: string): FieldWorkflowStep | null {
+  return isFieldWorkflowEventType(eventType)
+    ? FIELD_WORKFLOW_TRANSITIONS[eventType].toStep
+    : null;
+}
 
 function toDbDecimal(value: number | null | undefined, scale = 3) {
   return value === undefined ? undefined : value === null ? null : value.toFixed(scale);
@@ -212,6 +278,49 @@ async function validateIncomingPermit(
   if (!permittedEwc) throw new SyncBusinessRuleError("PERMIT_MISMATCH");
 }
 
+async function validateFieldWorkflowTransition(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  context: ClientApiContext,
+  event: SyncEventInput,
+) {
+  if (!isFieldWorkflowEventType(event.eventType)) {
+    throw new SyncBusinessRuleError("UNSUPPORTED_FIELD_WORKFLOW_EVENT");
+  }
+
+  const parsed = fieldWorkflowPayloadSchema.safeParse(event.payload);
+  if (!parsed.success) {
+    throw new SyncBusinessRuleError("INVALID_FIELD_WORKFLOW_PAYLOAD");
+  }
+
+  const transition = FIELD_WORKFLOW_TRANSITIONS[event.eventType];
+  if (
+    parsed.data.fromStep !== transition.fromStep ||
+    parsed.data.toStep !== transition.toStep
+  ) {
+    throw new SyncBusinessRuleError("FIELD_WORKFLOW_PAYLOAD_MISMATCH");
+  }
+
+  const previous = await tx.query.syncEventInbox.findFirst({
+    where: and(
+      eq(syncEventInbox.organisationId, context.organisationId),
+      eq(syncEventInbox.entityType, "job_load"),
+      eq(syncEventInbox.entityId, event.entityId),
+      eq(syncEventInbox.resultStatus, "APPLIED"),
+      inArray(syncEventInbox.eventType, FIELD_WORKFLOW_EVENT_TYPES),
+    ),
+    columns: { eventType: true },
+    orderBy: [desc(syncEventInbox.occurredAt), desc(syncEventInbox.receivedAt)],
+  });
+
+  const currentStep = previous
+    ? fieldWorkflowStepForEvent(previous.eventType)
+    : "ASSIGNED";
+
+  if (!currentStep || currentStep !== transition.fromStep) {
+    throw new SyncBusinessRuleError("FIELD_WORKFLOW_OUT_OF_ORDER");
+  }
+}
+
 async function applyJobLoadEvent(
   tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
   context: ClientApiContext,
@@ -241,6 +350,35 @@ async function applyJobLoadEvent(
   const now = new Date();
 
   switch (event.eventType) {
+    case "FIELD_JOB_STARTED":
+    case "FIELD_EN_ROUTE":
+    case "FIELD_ARRIVED_COLLECTION":
+    case "FIELD_COLLECTED":
+    case "FIELD_IN_TRANSIT":
+    case "FIELD_ARRIVED_DESTINATION":
+    case "FIELD_DELIVERED": {
+      if (["completed", "rejected", "cancelled"].includes(load.status)) {
+        throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
+      }
+
+      await validateFieldWorkflowTransition(tx, context, event);
+
+      // Driver field progress is intentionally separate from the canonical
+      // waste/compliance status. Touching updatedAt makes the same job_load the
+      // change-feed entity while the immutable workflow event remains the
+      // authoritative progress record.
+      await tx
+        .update(jobLoads)
+        .set({ updatedAt: now })
+        .where(
+          and(
+            eq(jobLoads.id, load.id),
+            eq(jobLoads.organisationId, context.organisationId),
+          ),
+        );
+      break;
+    }
+
     case "LOAD_ARRIVED": {
       if (load.direction !== "incoming") {
         throw new SyncBusinessRuleError("INCOMING_ONLY_ACTION");
