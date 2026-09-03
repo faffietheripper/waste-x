@@ -34,6 +34,7 @@ export interface MobileAssignmentV1 {
     id: string;
     loadNumber: number;
     status: string;
+    movementAt: string | null;
     ewcCode: string | null;
     wasteDescription: string | null;
     netWeight: string | null;
