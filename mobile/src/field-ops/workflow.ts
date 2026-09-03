@@ -1,5 +1,6 @@
 import type {
   MobileAssignmentV1,
+  MobileCollectionChecksV1,
   MobileFieldWorkflowEventTypeV1,
   MobileFieldWorkflowStateV1,
   MobileFieldWorkflowStepV1,
@@ -43,7 +44,7 @@ const ACTIONS: Record<
     fromStep: "ARRIVED_COLLECTION",
     toStep: "COLLECTED",
     label: "Mark collected",
-    helper: "Confirm the waste has been collected. Waste/quantity checks are added in the next field slice.",
+    helper: "Confirm the waste and quantity before recording collection.",
   },
   COLLECTED: {
     eventType: "FIELD_IN_TRANSIT",
@@ -107,6 +108,23 @@ export function getMobileFieldWorkflowState(
     updatedAt: assignment.load.movementAt,
     lastEventType: null,
   };
+}
+
+export function getMobileCollectionChecks(
+  assignment: MobileAssignmentV1,
+): MobileCollectionChecksV1 {
+  return (
+    assignment.collectionChecks ?? {
+      wasteConfirmedAt: null,
+      quantityConfirmedAt: null,
+      manualWeightRecordedAt: null,
+    }
+  );
+}
+
+export function isMobileCollectionReady(assignment: MobileAssignmentV1) {
+  const checks = getMobileCollectionChecks(assignment);
+  return Boolean(checks.wasteConfirmedAt && checks.quantityConfirmedAt);
 }
 
 export function getNextMobileFieldWorkflowAction(
