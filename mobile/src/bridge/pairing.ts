@@ -34,7 +34,9 @@ function normaliseBaseUrl(value: string) {
   }
 
   if (url.username || url.password || url.search || url.hash) {
-    throw new Error("Waste X Bridge relay addresses cannot contain credentials, query strings or fragments.");
+    throw new Error(
+      "Waste X Bridge relay addresses cannot contain credentials, query strings or fragments.",
+    );
   }
 
   return trimmed;
@@ -131,6 +133,33 @@ export async function storeMobileBridgePairing(input: {
     secureOptions,
   );
 
+  return pairing;
+}
+
+export async function storeMobileBridgePairingPayload(payload: string) {
+  let pairing: MobileBridgePairingV1;
+  try {
+    pairing = parsePairing(payload.trim());
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Waste X Bridge pairing payload is invalid: ${error.message}`
+        : "Waste X Bridge pairing payload is invalid.",
+    );
+  }
+
+  const deviceId = await getOrCreateDeviceId();
+  if (pairing.pairedDeviceId !== deviceId) {
+    throw new Error(
+      "This Waste X Bridge pairing was issued for a different Mobile device.",
+    );
+  }
+
+  await SecureStore.setItemAsync(
+    BRIDGE_PAIRING_KEY,
+    JSON.stringify(pairing),
+    secureOptions,
+  );
   return pairing;
 }
 

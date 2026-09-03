@@ -41,6 +41,7 @@ pub fn run() {
             cloud_access::desktop_cloud_context,
             cloud_access::desktop_cloud_catalogue,
             bridge_client::desktop_bridge_status,
+            bridge_client::desktop_bridge_create_mobile_pairing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Waste X Desktop");

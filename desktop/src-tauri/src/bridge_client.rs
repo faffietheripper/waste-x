@@ -66,6 +66,27 @@ pub struct BridgeStatus {
     error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingRequest<'a> {
+    paired_device_id: &'a str,
+    base_url: Option<&'a str>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeMobilePairing {
+    protocol_version: u8,
+    bridge_id: String,
+    organisation_id: String,
+    site_id: Option<String>,
+    display_name: String,
+    base_url: String,
+    relay_secret: String,
+    paired_device_id: String,
+    paired_at: String,
+}
+
 impl BridgeStatus {
     fn unavailable(error: String) -> Self {
         Self {
@@ -95,6 +116,50 @@ fn bridge_token() -> Result<String, String> {
     entry
         .get_password()
         .map_err(|e| format!("Waste X Bridge has not created its local credential yet: {e}"))
+}
+
+fn bridge_client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .map_err(|e| format!("Could not initialise the Waste X Bridge client: {e}"))
+}
+
+#[tauri::command]
+pub async fn desktop_bridge_create_mobile_pairing(
+    paired_device_id: String,
+    base_url: Option<String>,
+) -> Result<BridgeMobilePairing, String> {
+    let paired_device_id = paired_device_id.trim().to_string();
+    if paired_device_id.is_empty() {
+        return Err("A Waste X Mobile device ID is required for pairing.".to_string());
+    }
+
+    let client = bridge_client()?;
+    let token = bridge_token()?;
+    let response = client
+        .post(format!("{BRIDGE_BASE_URL}/v1/mobile/pairing"))
+        .header("X-Waste-X-Bridge-Token", token)
+        .json(&PairingRequest {
+            paired_device_id: &paired_device_id,
+            base_url: base_url.as_deref(),
+        })
+        .send()
+        .await
+        .map_err(|e| format!("Could not ask Waste X Bridge to create a Mobile pairing: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "Waste X Bridge could not create the Mobile pairing (HTTP {status}): {detail}"
+        ));
+    }
+
+    response
+        .json::<BridgeMobilePairing>()
+        .await
+        .map_err(|e| format!("Waste X Bridge pairing response was unreadable: {e}"))
 }
 
 #[tauri::command]
