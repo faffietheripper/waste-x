@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import {
   Pressable,
   RefreshControl,
@@ -28,6 +29,7 @@ const FILTERS: Array<{ key: Filter; label: string }> = [
 ];
 
 export default function JobsScreen() {
+  const router = useRouter();
   const {
     auth,
     workingSet,
@@ -61,6 +63,10 @@ export default function JobsScreen() {
         : key === "completed"
           ? buckets.completed.length
           : buckets.cancelled.length;
+
+  const openAssignment = (loadId: string) => {
+    router.push({ pathname: "/job/[loadId]", params: { loadId } });
+  };
 
   return (
     <SafeAreaView style={fieldOpsStyles.screen} edges={["top"]}>
@@ -112,7 +118,15 @@ export default function JobsScreen() {
         <View style={styles.listBlock}>
           {visible.length > 0 ? (
             visible.map((assignment) => (
-              <AssignmentCard key={assignment.load.id} assignment={assignment} />
+              <Pressable
+                key={assignment.load.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${assignment.job.jobNumber}, load ${assignment.load.loadNumber}`}
+                onPress={() => openAssignment(assignment.load.id)}
+                style={({ pressed }) => pressed && styles.assignmentPressed}
+              >
+                <AssignmentCard assignment={assignment} />
+              </Pressable>
             ))
           ) : (
             <EmptyWorkState
@@ -131,6 +145,7 @@ export default function JobsScreen() {
 }
 
 const styles = StyleSheet.create({
+  assignmentPressed: { opacity: 0.72 },
   filters: {
     gap: 8,
     paddingBottom: 4,
