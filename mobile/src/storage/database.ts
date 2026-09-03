@@ -3,7 +3,7 @@ import * as SQLite from "expo-sqlite";
 import { getOrCreateDatabaseKey } from "./secure";
 
 const DATABASE_NAME = "waste-x-mobile.db";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export type MobileDatabaseStatus = {
   ready: true;
@@ -87,6 +87,9 @@ export async function initialiseMobileDatabase(
 
     CREATE INDEX IF NOT EXISTS local_sync_queue_status_idx
       ON local_sync_queue(status, device_sequence);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS local_sync_queue_device_sequence_unique
+      ON local_sync_queue(device_id, device_sequence);
 
     CREATE TABLE IF NOT EXISTS local_mobile_bootstrap_state (
       singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
