@@ -41,6 +41,7 @@ function ProtectedTabs() {
 
   return (
     <Tabs
+      initialRouteName="my-day"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: "#111827",
@@ -50,7 +51,7 @@ function ProtectedTabs() {
       }}
     >
       <Tabs.Screen
-        name="index"
+        name="my-day"
         options={{
           title: "My Day",
           tabBarIcon: ({ focused }) => <TabGlyph label="D" active={focused} />,
