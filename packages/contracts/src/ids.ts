@@ -12,3 +12,17 @@ export type JobLoadId = Brand<string, "JobLoadId">;
 export type TicketId = Brand<string, "TicketId">;
 export type EvidenceId = Brand<string, "EvidenceId">;
 export type SyncEventId = Brand<string, "SyncEventId">;
+
+// These helpers mark identifiers only at trusted persistence/API boundaries.
+// Runtime validation belongs to the schema/parser that accepted the value;
+// branding then prevents unrelated string IDs being mixed inside domain code.
+export const asOrganisationId = (value: string) => value as OrganisationId;
+export const asSiteId = (value: string) => value as SiteId;
+export const asUserId = (value: string) => value as UserId;
+export const asDeviceId = (value: string) => value as DeviceId;
+export const asHardwareDeviceId = (value: string) => value as HardwareDeviceId;
+export const asJobId = (value: string) => value as JobId;
+export const asJobLoadId = (value: string) => value as JobLoadId;
+export const asTicketId = (value: string) => value as TicketId;
+export const asEvidenceId = (value: string) => value as EvidenceId;
+export const asSyncEventId = (value: string) => value as SyncEventId;
