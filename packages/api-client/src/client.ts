@@ -109,7 +109,7 @@ export class WasteXApiClient {
   }
 
   bootstrapMobile() {
-    return this.request<{ ok: true; bootstrap: MobileAssignmentBootstrapV1 }>(
+    return this.request<MobileAssignmentBootstrapV1 & { ok: true }>(
       "/api/mobile/v1/bootstrap",
     );
   }
