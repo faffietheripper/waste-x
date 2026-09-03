@@ -3,7 +3,7 @@ import * as SQLite from "expo-sqlite";
 import { getOrCreateDatabaseKey } from "./secure";
 
 const DATABASE_NAME = "waste-x-mobile.db";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export type MobileDatabaseStatus = {
   ready: true;
@@ -11,16 +11,21 @@ export type MobileDatabaseStatus = {
   cipherVersion: string;
 };
 
+export async function openMobileDatabase() {
+  const key = await getOrCreateDatabaseKey();
+  const database = await SQLite.openDatabaseAsync(DATABASE_NAME);
+
+  // PRAGMA key must always be the first database operation after opening the
+  // connection. The key is generated as 32 random bytes and encoded as hex.
+  await database.execAsync(`PRAGMA key = "x'${key}'";`);
+  return database;
+}
+
 export async function initialiseMobileDatabase(
   deviceId: string,
   platform: "IOS" | "ANDROID",
 ): Promise<MobileDatabaseStatus> {
-  const key = await getOrCreateDatabaseKey();
-  const database = await SQLite.openDatabaseAsync(DATABASE_NAME);
-
-  // PRAGMA key must be the first database operation. The key is generated as
-  // 32 random bytes and encoded as hex, so it is safe to interpolate here.
-  await database.execAsync(`PRAGMA key = "x'${key}'";`);
+  const database = await openMobileDatabase();
 
   const cipher = await database.getFirstAsync<{ cipher_version: string }>(
     "PRAGMA cipher_version",
@@ -82,6 +87,42 @@ export async function initialiseMobileDatabase(
 
     CREATE INDEX IF NOT EXISTS local_sync_queue_status_idx
       ON local_sync_queue(status, device_sequence);
+
+    CREATE TABLE IF NOT EXISTS local_mobile_bootstrap_state (
+      singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+      scope_resolution TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      driver_json TEXT,
+      generated_at TEXT NOT NULL,
+      horizon_start TEXT NOT NULL,
+      horizon_end TEXT NOT NULL,
+      refreshed_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS local_mobile_assignment (
+      load_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      job_number TEXT NOT NULL,
+      job_date TEXT NOT NULL,
+      job_status TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      load_number INTEGER NOT NULL,
+      load_status TEXT NOT NULL,
+      driver_id TEXT NOT NULL,
+      vehicle_id TEXT,
+      ewc_code TEXT,
+      payload_json TEXT NOT NULL,
+      refreshed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS local_mobile_assignment_job_date_idx
+      ON local_mobile_assignment(job_date, load_number);
+
+    CREATE INDEX IF NOT EXISTS local_mobile_assignment_job_idx
+      ON local_mobile_assignment(job_id, load_number);
+
+    CREATE INDEX IF NOT EXISTS local_mobile_assignment_driver_idx
+      ON local_mobile_assignment(driver_id, job_date);
   `);
 
   const now = new Date().toISOString();
