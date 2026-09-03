@@ -14,6 +14,7 @@ import {
 import {
   clientDevices,
   syncEntityVersions,
+  syncEventInbox,
 } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
@@ -39,6 +40,48 @@ import {
 export const dynamic = "force-dynamic";
 
 const FORWARD_DAYS = 14 as const;
+
+const FIELD_WORKFLOW_EVENT_TYPES = [
+  "FIELD_JOB_STARTED",
+  "FIELD_EN_ROUTE",
+  "FIELD_ARRIVED_COLLECTION",
+  "FIELD_COLLECTED",
+  "FIELD_IN_TRANSIT",
+  "FIELD_ARRIVED_DESTINATION",
+  "FIELD_DELIVERED",
+] as const;
+
+type FieldWorkflowEventType = (typeof FIELD_WORKFLOW_EVENT_TYPES)[number];
+type FieldWorkflowStep =
+  | "ASSIGNED"
+  | "STARTED"
+  | "EN_ROUTE"
+  | "ARRIVED_COLLECTION"
+  | "COLLECTED"
+  | "IN_TRANSIT"
+  | "ARRIVED_DESTINATION"
+  | "DELIVERED";
+
+function fieldWorkflowStepForEvent(eventType: string): FieldWorkflowStep | null {
+  switch (eventType) {
+    case "FIELD_JOB_STARTED":
+      return "STARTED";
+    case "FIELD_EN_ROUTE":
+      return "EN_ROUTE";
+    case "FIELD_ARRIVED_COLLECTION":
+      return "ARRIVED_COLLECTION";
+    case "FIELD_COLLECTED":
+      return "COLLECTED";
+    case "FIELD_IN_TRANSIT":
+      return "IN_TRANSIT";
+    case "FIELD_ARRIVED_DESTINATION":
+      return "ARRIVED_DESTINATION";
+    case "FIELD_DELIVERED":
+      return "DELIVERED";
+    default:
+      return null;
+  }
+}
 
 function unique(values: Array<string | null | undefined>) {
   return Array.from(
@@ -231,6 +274,7 @@ export async function GET(request: Request) {
       ownSiteRows,
       counterpartySiteRows,
       versionRows,
+      workflowRows,
     ] = await Promise.all([
       vehicleIds.length
         ? database
@@ -307,6 +351,28 @@ export async function GET(request: Request) {
               ),
             )
         : Promise.resolve([]),
+      loadIds.length
+        ? database
+            .select({
+              entityId: syncEventInbox.entityId,
+              eventType: syncEventInbox.eventType,
+              occurredAt: syncEventInbox.occurredAt,
+            })
+            .from(syncEventInbox)
+            .where(
+              and(
+                eq(syncEventInbox.organisationId, context.organisationId),
+                eq(syncEventInbox.entityType, "job_load"),
+                eq(syncEventInbox.resultStatus, "APPLIED"),
+                inArray(syncEventInbox.entityId, loadIds),
+                inArray(
+                  syncEventInbox.eventType,
+                  FIELD_WORKFLOW_EVENT_TYPES as unknown as string[],
+                ),
+              ),
+            )
+            .orderBy(asc(syncEventInbox.occurredAt), asc(syncEventInbox.receivedAt))
+        : Promise.resolve([]),
     ]);
 
     const vehiclesById = new Map(vehicleRows.map((row) => [row.id, row]));
@@ -318,6 +384,24 @@ export async function GET(request: Request) {
     const versionsByLoadId = new Map(
       versionRows.map((row) => [row.entityId, row.version]),
     );
+    const workflowByLoadId = new Map<
+      string,
+      {
+        step: FieldWorkflowStep;
+        updatedAt: string;
+        lastEventType: FieldWorkflowEventType;
+      }
+    >();
+
+    for (const row of workflowRows) {
+      const step = fieldWorkflowStepForEvent(row.eventType);
+      if (!step) continue;
+      workflowByLoadId.set(row.entityId, {
+        step,
+        updatedAt: row.occurredAt.toISOString(),
+        lastEventType: row.eventType as FieldWorkflowEventType,
+      });
+    }
 
     const assignments = assignmentRows.map((row) => {
       const effectiveDriverId = row.loadDriverId ?? row.jobDriverId;
@@ -375,6 +459,11 @@ export async function GET(request: Request) {
       const material = effectiveMaterialId
         ? materialsById.get(effectiveMaterialId) ?? null
         : null;
+      const workflow = workflowByLoadId.get(row.loadId) ?? {
+        step: row.loadStatus === "completed" ? ("DELIVERED" as const) : ("ASSIGNED" as const),
+        updatedAt: row.movementAt?.toISOString() ?? null,
+        lastEventType: null,
+      };
 
       return {
         job: {
@@ -414,6 +503,7 @@ export async function GET(request: Request) {
           : null,
         origin,
         destination,
+        workflow,
       };
     });
 
