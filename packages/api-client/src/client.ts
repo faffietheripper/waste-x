@@ -114,6 +114,16 @@ export class WasteXApiClient {
     );
   }
 
+  pushMobileSync(body: SyncPushRequestV1) {
+    return this.request<SyncPushResponseV1 & { batchId: string; ok: true }>(
+      "/api/mobile/v1/sync/push",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
   logoutMobile() {
     return this.request<{ loggedOut: true }>("/api/mobile/v1/auth/logout", {
       method: "POST",
