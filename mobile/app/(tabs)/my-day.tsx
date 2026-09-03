@@ -1,5 +1,7 @@
 import { useMemo } from "react";
+import { useRouter } from "expo-router";
 import {
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -32,6 +34,7 @@ function todayKey() {
 }
 
 export default function MyDayScreen() {
+  const router = useRouter();
   const {
     auth,
     workingSet,
@@ -52,6 +55,10 @@ export default function MyDayScreen() {
     "there";
   const pending = syncStatus?.pending ?? 0;
   const nextUp = buckets.upcoming.slice(0, 2);
+
+  const openAssignment = (loadId: string) => {
+    router.push({ pathname: "/job/[loadId]", params: { loadId } });
+  };
 
   return (
     <SafeAreaView style={fieldOpsStyles.screen} edges={["top"]}>
@@ -84,11 +91,18 @@ export default function MyDayScreen() {
           <SectionHeading title="My Day" count={buckets.today.length} />
           {buckets.today.length > 0 ? (
             buckets.today.map((assignment) => (
-              <AssignmentCard
+              <Pressable
                 key={assignment.load.id}
-                assignment={assignment}
-                carryOver={assignmentDateKey(assignment.job.jobDate) < todayKey()}
-              />
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${assignment.job.jobNumber}, load ${assignment.load.loadNumber}`}
+                onPress={() => openAssignment(assignment.load.id)}
+                style={({ pressed }) => pressed && styles.assignmentPressed}
+              >
+                <AssignmentCard
+                  assignment={assignment}
+                  carryOver={assignmentDateKey(assignment.job.jobDate) < todayKey()}
+                />
+              </Pressable>
             ))
           ) : (
             <EmptyWorkState
@@ -106,7 +120,15 @@ export default function MyDayScreen() {
           <SectionHeading title="Next up" count={buckets.upcoming.length} />
           {nextUp.length > 0 ? (
             nextUp.map((assignment) => (
-              <AssignmentCard key={assignment.load.id} assignment={assignment} />
+              <Pressable
+                key={assignment.load.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${assignment.job.jobNumber}, load ${assignment.load.loadNumber}`}
+                onPress={() => openAssignment(assignment.load.id)}
+                style={({ pressed }) => pressed && styles.assignmentPressed}
+              >
+                <AssignmentCard assignment={assignment} />
+              </Pressable>
             ))
           ) : (
             <View style={styles.quietCard}>
@@ -153,6 +175,7 @@ function SummaryCard({
 
 const styles = StyleSheet.create({
   flexOne: { flex: 1 },
+  assignmentPressed: { opacity: 0.72 },
   summaryRow: {
     flexDirection: "row",
     gap: 9,
