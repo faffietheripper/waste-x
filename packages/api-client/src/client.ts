@@ -8,6 +8,7 @@ import type {
   EvidenceCompleteResponseV1,
   EvidenceUploadRequestV1,
   EvidenceUploadResponseV1,
+  MobileAssignmentBootstrapV1,
   MobileLoginRequestV1,
   MobileLoginResponseV1,
   MobileOfflineEntitlementResponseV1,
@@ -104,6 +105,12 @@ export class WasteXApiClient {
   offlineEntitlementMobile() {
     return this.request<MobileOfflineEntitlementResponseV1>(
       "/api/mobile/v1/auth/offline-entitlement",
+    );
+  }
+
+  bootstrapMobile() {
+    return this.request<{ ok: true; bootstrap: MobileAssignmentBootstrapV1 }>(
+      "/api/mobile/v1/bootstrap",
     );
   }
 
