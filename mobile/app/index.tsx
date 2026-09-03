@@ -28,11 +28,18 @@ import {
   bootMobileFoundation,
   type MobileFoundationStatus,
 } from "@/foundation/boot";
+import {
+  getMobileSyncStatus,
+  queueMobileJobLoadEvent,
+  syncPendingMobileEvents,
+  type MobileSyncStatus,
+} from "@/sync/mobile-sync";
 
 export default function FoundationScreen() {
   const [status, setStatus] = useState<MobileFoundationStatus | null>(null);
   const [auth, setAuth] = useState<MobileAuthSnapshot | null>(null);
   const [workingSet, setWorkingSet] = useState<LocalMobileAssignmentWorkingSet | null>(null);
+  const [syncStatus, setSyncStatus] = useState<MobileSyncStatus | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState(
@@ -55,6 +62,12 @@ export default function FoundationScreen() {
     return local;
   }
 
+  async function loadSyncStatus() {
+    const next = await getMobileSyncStatus();
+    setSyncStatus(next);
+    return next;
+  }
+
   async function refreshAssignments() {
     setBusy(true);
     setError(null);
@@ -62,6 +75,7 @@ export default function FoundationScreen() {
     try {
       const local = await refreshMobileAssignmentWorkingSet();
       setWorkingSet(local);
+      await loadSyncStatus();
       const resolution = local.scope?.resolution ?? "NO_DRIVER_MATCH";
       if (resolution === "MATCHED") {
         setMessage(
@@ -83,32 +97,71 @@ export default function FoundationScreen() {
     }
   }
 
+  async function queueArrival(loadId: string) {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await queueMobileJobLoadEvent({
+        loadId,
+        eventType: "LOAD_ARRIVED",
+      });
+      await Promise.all([loadLocalWorkingSet(), loadSyncStatus()]);
+      setMessage(
+        "Arrival recorded in SQLCipher first and queued in the Mobile outbox. Cloud has not been required yet.",
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncNow() {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await syncPendingMobileEvents();
+      await Promise.all([loadLocalWorkingSet(), loadSyncStatus()]);
+      setMessage(
+        result.uploaded === 0
+          ? "Mobile outbox is already clear."
+          : `Mobile sync sent ${result.uploaded} event${result.uploaded === 1 ? "" : "s"} through the Cloud transport.`,
+      );
+    } catch (reason) {
+      await loadSyncStatus();
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
       try {
         const foundation = await bootMobileFoundation();
-        const [authSnapshot, localWorkingSet] = await Promise.all([
+        const [authSnapshot, localWorkingSet, localSyncStatus] = await Promise.all([
           getMobileAuthSnapshot(),
           getLocalMobileAssignmentWorkingSet(),
+          getMobileSyncStatus(),
         ]);
 
         if (cancelled) return;
         setStatus(foundation);
         setAuth(authSnapshot);
         setWorkingSet(localWorkingSet);
+        setSyncStatus(localSyncStatus);
         if (authSnapshot.profile?.email) setEmail(authSnapshot.profile.email);
 
-        // Refresh only when Cloud authentication is genuinely available. A
-        // failed refresh never deletes the existing encrypted local snapshot.
         if (authSnapshot.onlineAuthenticated) {
           try {
             const refreshed = await refreshMobileAssignmentWorkingSet();
             if (!cancelled) setWorkingSet(refreshed);
           } catch {
-            // Existing local work remains available. Connectivity/auth detail is
-            // already represented by the auth snapshot and offline entitlement.
+            // Existing encrypted local work remains available.
           }
         }
       } catch (reason) {
@@ -148,6 +201,7 @@ export default function FoundationScreen() {
       if (authSnapshot.onlineAuthenticated) {
         const local = await refreshMobileAssignmentWorkingSet();
         setWorkingSet(local);
+        await loadSyncStatus();
         setMessage(
           `Signed in, refreshed 14-day offline authorisation and cached ${local.assignments.length} assigned load${local.assignments.length === 1 ? "" : "s"}.`,
         );
@@ -168,7 +222,7 @@ export default function FoundationScreen() {
     try {
       const snapshot = await unlockMobileOffline();
       setAuth(snapshot);
-      await loadLocalWorkingSet();
+      await Promise.all([loadLocalWorkingSet(), loadSyncStatus()]);
       setMessage("Offline operations unlocked with the encrypted local working set.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -182,9 +236,22 @@ export default function FoundationScreen() {
     setError(null);
     setMessage(null);
     try {
+      const currentSync = await getMobileSyncStatus();
+      if (currentSync.pending > 0 || currentSync.sending > 0) {
+        throw new Error(
+          "Waste X Mobile has unsynced operational events. Sync them before signing out so field work is not stranded on this phone.",
+        );
+      }
+
       await logoutMobile();
-      await Promise.all([refreshAuth(), loadLocalWorkingSet()]);
-      setMessage("Signed out and removed this device's offline authorisation and cached assignments.");
+      await Promise.all([
+        refreshAuth(),
+        loadLocalWorkingSet(),
+        loadSyncStatus(),
+      ]);
+      setMessage(
+        "Signed out and removed this device's offline authorisation and cached assignments.",
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -211,18 +278,18 @@ export default function FoundationScreen() {
         <Text style={styles.eyebrow}>WASTE X MOBILE · STEP 11</Text>
         <Text style={styles.title}>Field operations, local first.</Text>
         <Text style={styles.copy}>
-          Mobile now combines device-bound offline authorisation with an encrypted,
-          driver-scoped assignment working set.
+          Mobile now combines device-bound offline authorisation, an encrypted
+          driver-scoped working set and a durable local sync outbox.
         </Text>
 
-        {!status || !auth || !workingSet ? (
+        {!status || !auth || !workingSet || !syncStatus ? (
           <View style={styles.loadingCard}>
             <ActivityIndicator />
             <Text style={styles.muted}>Initialising secure Mobile foundation…</Text>
           </View>
         ) : null}
 
-        {status && auth && workingSet ? (
+        {status && auth && workingSet && syncStatus ? (
           <>
             <View style={styles.statusCard}>
               <View>
@@ -252,7 +319,7 @@ export default function FoundationScreen() {
               <View style={styles.workingSetHeader}>
                 <View style={styles.flexOne}>
                   <Text style={styles.sectionEyebrow}>ENCRYPTED WORKING SET</Text>
-                  <Text style={styles.sectionTitle}>Assigned work on this phone</Text>
+                  <Text style={styles.darkSectionTitle}>Assigned work on this phone</Text>
                 </View>
                 <View style={styles.countBadge}>
                   <Text style={styles.countValue}>{workingSet.assignments.length}</Text>
@@ -291,6 +358,17 @@ export default function FoundationScreen() {
                     <Text style={styles.assignmentRoute} numberOfLines={2}>
                       {assignment.origin?.name ?? "Origin pending"} → {assignment.destination?.name ?? "Destination pending"}
                     </Text>
+                    {assignment.job.direction === "incoming" &&
+                    assignment.load.status === "planned" &&
+                    (auth.onlineAuthenticated || auth.offlineUnlocked) ? (
+                      <Pressable
+                        disabled={busy}
+                        onPress={() => queueArrival(assignment.load.id)}
+                        style={styles.proofButton}
+                      >
+                        <Text style={styles.proofButtonText}>Record arrival locally</Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                   <Text style={styles.ewcText}>{assignment.load.ewcCode ?? "EWC —"}</Text>
                 </View>
@@ -306,12 +384,40 @@ export default function FoundationScreen() {
                 <Pressable
                   disabled={busy}
                   onPress={refreshAssignments}
-                  style={styles.secondaryButton}
+                  style={styles.darkSecondaryButton}
                 >
-                  <Text style={styles.secondaryButtonText}>
+                  <Text style={styles.darkSecondaryButtonText}>
                     {busy ? "Refreshing…" : "Refresh assigned work"}
                   </Text>
                 </Pressable>
+              ) : null}
+            </View>
+
+            <View style={styles.syncCard}>
+              <View style={styles.syncHeader}>
+                <View>
+                  <Text style={styles.syncEyebrow}>LOCAL SYNC OUTBOX</Text>
+                  <Text style={styles.sectionTitle}>Cloud transport</Text>
+                </View>
+                <Text style={styles.syncPending}>{syncStatus.pending} pending</Text>
+              </View>
+              <Text style={styles.syncMeta}>
+                Synced {syncStatus.synced} · Conflicts {syncStatus.conflicts} · Failed {syncStatus.failed}
+              </Text>
+              {syncStatus.lastError ? (
+                <Text style={styles.syncError}>{syncStatus.lastError}</Text>
+              ) : null}
+              {auth.onlineAuthenticated && syncStatus.pending > 0 ? (
+                <Pressable disabled={busy} onPress={syncNow} style={styles.primaryButton}>
+                  <Text style={styles.primaryButtonText}>
+                    {busy ? "Syncing…" : "Sync pending events"}
+                  </Text>
+                </Pressable>
+              ) : null}
+              {!auth.onlineAuthenticated && syncStatus.pending > 0 ? (
+                <Text style={styles.syncOfflineHint}>
+                  Events remain encrypted on this phone until Cloud or a trusted local Waste X Bridge transport becomes available.
+                </Text>
               ) : null}
             </View>
 
@@ -407,7 +513,7 @@ export default function FoundationScreen() {
             <View style={styles.nextCard}>
               <Text style={styles.sectionTitle}>Next in Step 11</Text>
               <Text style={styles.nextText}>
-                Prove this cached assignment set survives an app restart with Cloud completely unavailable, then wire one local load action into the sync outbox.
+                Prove one queued event reaches Cloud, then add the trusted local Bridge transport and finish the Waste X app icon / splash branding before Step 11 certification.
               </Text>
             </View>
           </>
@@ -453,6 +559,7 @@ const styles = StyleSheet.create({
   workingSetCard: { marginTop: 14, padding: 20, borderRadius: 18, backgroundColor: "#111827" },
   workingSetHeader: { flexDirection: "row", alignItems: "center", gap: 14 },
   sectionEyebrow: { color: "#fb923c", fontSize: 9, fontWeight: "800", letterSpacing: 1.3 },
+  darkSectionTitle: { marginTop: 3, color: "#fff", fontSize: 18, fontWeight: "800" },
   countBadge: { minWidth: 58, alignItems: "center", borderRadius: 14, backgroundColor: "#1f2937", paddingHorizontal: 10, paddingVertical: 9 },
   countValue: { color: "#fff", fontSize: 20, fontWeight: "800" },
   countLabel: { marginTop: 1, color: "#94a3b8", fontSize: 8, fontWeight: "800", letterSpacing: 1 },
@@ -465,13 +572,24 @@ const styles = StyleSheet.create({
   assignmentRoute: { marginTop: 5, color: "#cbd5e1", fontSize: 12, lineHeight: 17 },
   ewcText: { color: "#fb923c", fontSize: 10, fontWeight: "800" },
   moreText: { marginTop: 12, color: "#94a3b8", fontSize: 11 },
+  proofButton: { alignSelf: "flex-start", marginTop: 10, borderRadius: 10, backgroundColor: "#f97316", paddingHorizontal: 12, paddingVertical: 9 },
+  proofButtonText: { color: "#111827", fontSize: 11, fontWeight: "800" },
+  darkSecondaryButton: { marginTop: 14, borderRadius: 12, paddingVertical: 13, alignItems: "center", borderWidth: 1, borderColor: "#64748b" },
+  darkSecondaryButtonText: { color: "#cbd5e1", fontWeight: "800", fontSize: 14 },
+  syncCard: { marginTop: 14, padding: 20, borderRadius: 18, backgroundColor: "#fff" },
+  syncHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  syncEyebrow: { color: "#ea580c", fontSize: 9, fontWeight: "800", letterSpacing: 1.2 },
+  syncPending: { color: "#9a3412", fontSize: 12, fontWeight: "800" },
+  syncMeta: { marginTop: 10, color: "#64748b", fontSize: 12 },
+  syncError: { marginTop: 8, color: "#be123c", fontSize: 11, lineHeight: 17 },
+  syncOfflineHint: { marginTop: 10, color: "#475569", fontSize: 12, lineHeight: 18 },
   authCard: { marginTop: 14, padding: 20, borderRadius: 18, backgroundColor: "#fff" },
   sectionTitle: { color: "#111827", fontSize: 18, fontWeight: "800" },
   input: { marginTop: 12, borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, color: "#0f172a", backgroundColor: "#f8fafc", fontSize: 15 },
   primaryButton: { marginTop: 14, borderRadius: 12, paddingVertical: 14, alignItems: "center", backgroundColor: "#111827" },
   primaryButtonText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   secondaryButton: { marginTop: 14, borderRadius: 12, paddingVertical: 13, alignItems: "center", borderWidth: 1, borderColor: "#cbd5e1" },
-  secondaryButtonText: { color: "#cbd5e1", fontWeight: "800", fontSize: 14 },
+  secondaryButtonText: { color: "#334155", fontWeight: "800", fontSize: 14 },
   authSummary: { marginTop: 12, color: "#0f172a", fontSize: 16, fontWeight: "700" },
   authMeta: { marginTop: 5, color: "#64748b", fontSize: 13 },
   offlineHint: { marginTop: 10, color: "#166534", fontSize: 13, lineHeight: 19 },
