@@ -14,6 +14,7 @@ import {
   verifyStoredOfflineEntitlement,
   type OfflineEntitlementStatus,
 } from "@/auth/offline-auth";
+import { clearMobileAssignmentWorkingSet } from "@/assignments/local-working-set";
 import {
   clearMobileOfflineEntitlement,
   clearMobileSession,
@@ -88,18 +89,18 @@ export async function getMobileAuthSnapshot(): Promise<MobileAuthSnapshot> {
         error instanceof WasteXApiError &&
         (error.status === 401 || error.status === 403)
       ) {
-        // Cloud explicitly rejected the current session/device/user. Do not
-        // continue using a previously cached entitlement after learning that
-        // authorisation has been revoked or suspended.
+        // Cloud explicitly rejected the current session/device/user. Remove
+        // offline authority and that user's cached operational snapshot.
         await Promise.all([
           clearMobileSession(),
           clearMobileOfflineEntitlement(),
+          clearMobileAssignmentWorkingSet(),
         ]);
         lockOfflineOperations();
       } else {
         // A reachable server may still have a transient application error.
-        // Treat it as unavailable for this snapshot, but preserve the signed
-        // entitlement until Cloud explicitly rejects authorisation.
+        // Preserve the signed entitlement and cached working set until Cloud
+        // explicitly rejects authorisation.
         cloudReachable = false;
       }
     }
@@ -180,6 +181,7 @@ export async function logoutMobile() {
     await Promise.all([
       clearMobileSession(),
       clearMobileOfflineEntitlement(),
+      clearMobileAssignmentWorkingSet(),
     ]);
   }
 }
