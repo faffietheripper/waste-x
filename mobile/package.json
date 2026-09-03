@@ -6,7 +6,8 @@
   "scripts": {
     "start": "expo start --dev-client --localhost",
     "start:lan": "expo start --dev-client --lan",
-    "ios": "expo run:ios --no-bundler",
+    "ios": "node scripts/run-ios-simulator.cjs",
+    "ios:expo": "expo run:ios --no-bundler",
     "ios:auto": "expo run:ios",
     "android": "expo run:android",
     "prebuild": "expo prebuild",
