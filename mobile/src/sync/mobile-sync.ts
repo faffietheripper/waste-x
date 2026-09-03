@@ -38,6 +38,7 @@ export interface MobileSyncTransport {
 
 export type MobileSyncStatus = {
   pending: number;
+  relayed: number;
   sending: number;
   synced: number;
   conflicts: number;
@@ -272,6 +273,11 @@ export async function getMobileSyncStatus(): Promise<MobileSyncStatus> {
      GROUP BY status`,
   );
   const counts = new Map(rows.map((row) => [row.status, Number(row.count)]));
+  const relayedRow = await database.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count
+     FROM local_sync_queue
+     WHERE status = 'PENDING' AND last_relayed_at IS NOT NULL`,
+  );
   const errorRow = await database.getFirstAsync<{ last_error: string | null }>(
     `SELECT last_error
      FROM local_sync_queue
@@ -282,6 +288,7 @@ export async function getMobileSyncStatus(): Promise<MobileSyncStatus> {
 
   return {
     pending: counts.get("PENDING") ?? 0,
+    relayed: Number(relayedRow?.count ?? 0),
     sending: counts.get("SENDING") ?? 0,
     synced: counts.get("SYNCED") ?? 0,
     conflicts: counts.get("CONFLICT") ?? 0,
@@ -368,7 +375,28 @@ export async function syncPendingMobileEvents(
     throw error;
   }
 
+  const relayDelivery = transport.name === "LOCAL_BRIDGE";
+  const deliveredAt = new Date().toISOString();
+
   for (const result of response.results) {
+    if (
+      relayDelivery &&
+      (result.status === "APPLIED" || result.status === "DUPLICATE")
+    ) {
+      await database.runAsync(
+        `UPDATE local_sync_queue
+         SET status = 'PENDING',
+             attempt_count = attempt_count + 1,
+             last_error = NULL,
+             last_relayed_at = ?,
+             relay_bridge_id = COALESCE(relay_bridge_id, 'LOCAL_BRIDGE')
+         WHERE event_id = ?`,
+        deliveredAt,
+        result.eventId,
+      );
+      continue;
+    }
+
     const status =
       result.status === "APPLIED" || result.status === "DUPLICATE"
         ? "SYNCED"
@@ -388,13 +416,17 @@ export async function syncPendingMobileEvents(
       status,
       result.reasonCode ?? null,
       status,
-      new Date().toISOString(),
+      deliveredAt,
       result.eventId,
     );
   }
 
   const status = await getMobileSyncStatus();
-  if (status.pending === 0 && status.sending === 0) {
+  if (
+    transport.name === "CLOUD" &&
+    status.pending === 0 &&
+    status.sending === 0
+  ) {
     try {
       await refreshMobileAssignmentWorkingSet();
     } catch {
