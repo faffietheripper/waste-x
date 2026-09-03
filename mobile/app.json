@@ -28,7 +28,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-dev-client",
+      [
+        "expo-dev-client",
+        {
+          "launchMode": "most-recent",
+          "defaultLaunchURL": "http://localhost:8081"
+        }
+      ],
       [
         "expo-sqlite",
         {
