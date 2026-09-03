@@ -44,7 +44,7 @@ async function requirePairingContext() {
     throw new Error("The paired Waste X Bridge credential belongs to another Mobile device.");
   }
 
-  return { pairing, profile, deviceId };
+  return { pairing, deviceId };
 }
 
 function relayHeaders(relaySecret: string, deviceId: string) {
@@ -54,6 +54,43 @@ function relayHeaders(relaySecret: string, deviceId: string) {
     "X-Waste-X-Mobile-Relay-Secret": relaySecret,
     "X-Waste-X-Mobile-Device-Id": deviceId,
   };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isBridgeHealth(value: unknown): value is MobileBridgeHealthV1 {
+  if (!isObject(value)) return false;
+  return (
+    value.ok === true &&
+    value.protocolVersion === 1 &&
+    value.service === "waste-x-bridge-relay" &&
+    typeof value.bridgeId === "string" &&
+    typeof value.organisationId === "string" &&
+    (typeof value.siteId === "string" || value.siteId === null) &&
+    typeof value.displayName === "string" &&
+    typeof value.acceptsMobileSync === "boolean"
+  );
+}
+
+function isBridgeSyncResponse(
+  value: unknown,
+): value is MobileBridgeSyncPushResponseV1 {
+  if (!isObject(value)) return false;
+  return (
+    value.protocolVersion === 1 &&
+    value.transport === "LOCAL_BRIDGE" &&
+    typeof value.bridgeId === "string" &&
+    Array.isArray(value.results)
+  );
+}
+
+function errorDetail(value: unknown, fallback: string) {
+  if (!isObject(value)) return fallback;
+  if (typeof value.message === "string" && value.message) return value.message;
+  if (typeof value.error === "string" && value.error) return value.error;
+  return fallback;
 }
 
 export async function getLocalBridgeHealth() {
@@ -67,22 +104,22 @@ export async function getLocalBridgeHealth() {
     }),
   );
 
+  const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(`Waste X site Bridge health returned HTTP ${response.status}.`);
+    throw new Error(
+      `Waste X site Bridge health failed: ${errorDetail(body, `HTTP ${response.status}`)}.`,
+    );
   }
 
-  const health = (await response.json()) as MobileBridgeHealthV1;
   if (
-    !health.ok ||
-    health.protocolVersion !== 1 ||
-    health.service !== "waste-x-bridge-relay" ||
-    health.bridgeId !== pairing.bridgeId ||
-    health.organisationId !== pairing.organisationId
+    !isBridgeHealth(body) ||
+    body.bridgeId !== pairing.bridgeId ||
+    body.organisationId !== pairing.organisationId
   ) {
     throw new Error("Waste X Mobile rejected an unexpected site Bridge identity.");
   }
 
-  return health;
+  return body;
 }
 
 export const localBridgeMobileSyncTransport: MobileSyncTransport = {
@@ -103,28 +140,16 @@ export const localBridgeMobileSyncTransport: MobileSyncTransport = {
       }),
     );
 
-    const body = (await response.json().catch(() => null)) as
-      | MobileBridgeSyncPushResponseV1
-      | { error?: string; message?: string }
-      | null;
-
+    const body: unknown = await response.json().catch(() => null);
     if (!response.ok) {
-      const detail =
-        body && "message" in body && body.message
-          ? body.message
-          : body && "error" in body && body.error
-            ? body.error
-            : `HTTP ${response.status}`;
-      throw new Error(`Waste X site Bridge rejected the Mobile sync batch: ${detail}.`);
+      throw new Error(
+        `Waste X site Bridge rejected the Mobile sync batch: ${errorDetail(body, `HTTP ${response.status}`)}.`,
+      );
     }
 
     if (
-      !body ||
-      !("transport" in body) ||
-      body.transport !== "LOCAL_BRIDGE" ||
-      body.bridgeId !== pairing.bridgeId ||
-      body.protocolVersion !== 1 ||
-      !Array.isArray(body.results)
+      !isBridgeSyncResponse(body) ||
+      body.bridgeId !== pairing.bridgeId
     ) {
       throw new Error("Waste X Mobile received an invalid site Bridge sync response.");
     }
