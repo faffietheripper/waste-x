@@ -7,11 +7,13 @@ import {
   asSyncEventId,
   asUserId,
   type MobileAssignmentV1,
+  type MobileCollectionConfirmationKindV1,
   type MobileFieldWorkflowEventTypeV1,
   type SyncEventV1,
   type SyncPushRequestV1,
   type SyncPushResponseV1,
 } from "@waste-x/contracts";
+import { calculateNetWeight } from "@waste-x/operations-core";
 
 import {
   getLocalMobileAssignmentWorkingSet,
@@ -19,8 +21,10 @@ import {
 } from "@/assignments/local-working-set";
 import {
   applyMobileFieldWorkflowEvent,
+  getMobileCollectionChecks,
   getMobileFieldWorkflowState,
   getNextMobileFieldWorkflowAction,
+  isMobileCollectionReady,
   isMobileFieldWorkflowEventType,
 } from "@/field-ops/workflow";
 import { wasteXMobileApi } from "@/platform/api";
@@ -52,6 +56,20 @@ export type MobileSyncStatus = {
   conflicts: number;
   failed: number;
   lastError: string | null;
+};
+
+type MobileLoadDetailsPayload = {
+  driverId?: string | null;
+  vehicleId?: string | null;
+  wasteDescription?: string;
+  grossWeight?: number | null;
+  tareWeight?: number | null;
+  netWeight?: number | null;
+  weightMetric?: "Grams" | "Kilograms" | "Tonnes";
+  weightIsEstimate?: boolean;
+  ticketNumber?: string | null;
+  notes?: string | null;
+  fieldConfirmation?: MobileCollectionConfirmationKindV1;
 };
 
 type QueueRow = {
@@ -115,6 +133,55 @@ function parseAssignment(value: string): MobileAssignmentV1 {
   return JSON.parse(value) as MobileAssignmentV1;
 }
 
+function numberToDbString(value: number | null | undefined) {
+  return value === undefined ? undefined : value === null ? null : value.toFixed(3);
+}
+
+function validateCollectionDetails(
+  assignment: MobileAssignmentV1,
+  payload: MobileLoadDetailsPayload,
+) {
+  if (!payload.fieldConfirmation) return;
+
+  const workflow = getMobileFieldWorkflowState(assignment);
+  if (workflow.step !== "ARRIVED_COLLECTION") {
+    throw new Error("Waste and quantity can only be confirmed after arriving at collection.");
+  }
+
+  if (payload.fieldConfirmation === "WASTE") {
+    if (!payload.wasteDescription?.trim()) {
+      throw new Error("Confirm the waste description before continuing.");
+    }
+    return;
+  }
+
+  if (payload.fieldConfirmation === "QUANTITY") {
+    if (
+      typeof payload.netWeight !== "number" ||
+      !Number.isFinite(payload.netWeight) ||
+      payload.netWeight <= 0 ||
+      !payload.weightMetric
+    ) {
+      throw new Error("Enter a valid waste quantity greater than zero.");
+    }
+    return;
+  }
+
+  if (payload.fieldConfirmation === "MANUAL_WEIGHT") {
+    if (
+      typeof payload.grossWeight !== "number" ||
+      typeof payload.tareWeight !== "number" ||
+      !payload.weightMetric
+    ) {
+      throw new Error("Enter gross and tare weights before saving manual weight.");
+    }
+    const netWeight = calculateNetWeight(payload.grossWeight, payload.tareWeight);
+    if (netWeight <= 0) {
+      throw new Error("Net weight must be greater than zero.");
+    }
+  }
+}
+
 function applyLocalProjection(
   assignment: MobileAssignmentV1,
   eventType: MobileJobLoadEventType,
@@ -139,25 +206,59 @@ function applyLocalProjection(
   }
 
   if (eventType === "LOAD_DETAILS_UPDATED" && payload && typeof payload === "object") {
-    const details = payload as {
-      netWeight?: number | null;
-      weightMetric?: "Grams" | "Kilograms" | "Tonnes";
-      ticketNumber?: string | null;
-      wasteDescription?: string;
-    };
+    const details = payload as MobileLoadDetailsPayload;
 
+    if (details.grossWeight !== undefined) {
+      next.load.grossWeight = numberToDbString(details.grossWeight);
+    }
+    if (details.tareWeight !== undefined) {
+      next.load.tareWeight = numberToDbString(details.tareWeight);
+    }
     if (details.netWeight !== undefined) {
-      next.load.netWeight =
-        details.netWeight === null ? null : details.netWeight.toFixed(3);
+      next.load.netWeight = numberToDbString(details.netWeight) ?? null;
+    }
+    if (
+      typeof details.grossWeight === "number" &&
+      typeof details.tareWeight === "number"
+    ) {
+      next.load.netWeight = calculateNetWeight(
+        details.grossWeight,
+        details.tareWeight,
+      ).toFixed(3);
     }
     if (details.weightMetric !== undefined) {
       next.load.weightMetric = details.weightMetric;
+    }
+    if (details.weightIsEstimate !== undefined) {
+      next.load.weightIsEstimate = details.weightIsEstimate;
+    }
+    if (
+      details.grossWeight !== undefined ||
+      details.tareWeight !== undefined ||
+      details.netWeight !== undefined
+    ) {
+      next.load.weightSource = "manual";
     }
     if (details.ticketNumber !== undefined) {
       next.load.ticketNumber = details.ticketNumber;
     }
     if (details.wasteDescription !== undefined) {
       next.load.wasteDescription = details.wasteDescription;
+    }
+
+    if (details.fieldConfirmation) {
+      const checks = getMobileCollectionChecks(next);
+      next.collectionChecks = { ...checks };
+      if (details.fieldConfirmation === "WASTE") {
+        next.collectionChecks.wasteConfirmedAt = occurredAt;
+      }
+      if (details.fieldConfirmation === "QUANTITY") {
+        next.collectionChecks.quantityConfirmedAt = occurredAt;
+      }
+      if (details.fieldConfirmation === "MANUAL_WEIGHT") {
+        next.collectionChecks.manualWeightRecordedAt = occurredAt;
+        next.collectionChecks.quantityConfirmedAt = occurredAt;
+      }
     }
   }
 
@@ -194,11 +295,19 @@ export async function queueMobileJobLoadEvent(input: {
   }
 
   let payload = input.payload ?? {};
+
+  if (input.eventType === "LOAD_DETAILS_UPDATED" && payload && typeof payload === "object") {
+    validateCollectionDetails(assignment, payload as MobileLoadDetailsPayload);
+  }
+
   if (isMobileFieldWorkflowEventType(input.eventType)) {
     const current = getMobileFieldWorkflowState(assignment);
     const action = getNextMobileFieldWorkflowAction(current.step);
     if (!action || action.eventType !== input.eventType) {
       throw new Error("This field action is not valid for the load's current workflow step.");
+    }
+    if (input.eventType === "FIELD_COLLECTED" && !isMobileCollectionReady(assignment)) {
+      throw new Error("Confirm the waste and quantity before marking this load collected.");
     }
     payload = {
       ...(payload && typeof payload === "object" ? payload : {}),
