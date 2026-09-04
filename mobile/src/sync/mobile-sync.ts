@@ -26,6 +26,7 @@ import {
   getMobileCollectionChecks,
   getMobileFieldWorkflowState,
   getNextMobileFieldWorkflowAction,
+  isMobileAssignmentReadOnly,
   isMobileCollectionReady,
   isMobileFieldWorkflowEventType,
 } from "@/field-ops/workflow";
@@ -222,13 +223,6 @@ function validateFieldActivity(
   payload: unknown,
 ) {
   const workflow = getMobileFieldWorkflowState(assignment);
-  const terminalLoad = ["completed", "rejected", "cancelled"].includes(
-    assignment.load.status.toLowerCase(),
-  );
-
-  if (terminalLoad || workflow.step === "DELIVERED") {
-    throw new Error("This field job is complete and can no longer be changed.");
-  }
 
   if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
     const note = (payload as Partial<MobileDeliveryNotePayload> | null)?.note;
@@ -396,6 +390,9 @@ export async function queueMobileJobLoadEvent(input: {
   const assignment = parseAssignment(assignmentRow.payload_json);
   if (assignment.transport.driverId === "") {
     throw new Error("This Mobile assignment has no authorised Driver scope.");
+  }
+  if (isMobileAssignmentReadOnly(assignment)) {
+    throw new Error("This field job is read only and can no longer be changed.");
   }
 
   let payload = input.payload ?? {};
