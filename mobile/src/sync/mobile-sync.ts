@@ -8,6 +8,8 @@ import {
   asUserId,
   type MobileAssignmentV1,
   type MobileCollectionConfirmationKindV1,
+  type MobileFieldActivityEventTypeV1,
+  type MobileFieldIssueTypeV1,
   type MobileFieldWorkflowEventTypeV1,
   type SyncEventV1,
   type SyncPushRequestV1,
@@ -39,7 +41,8 @@ export type MobileJobLoadEventType =
   | "LOAD_ARRIVED"
   | "LOAD_DETAILS_UPDATED"
   | "LOAD_COMPLETED"
-  | MobileFieldWorkflowEventTypeV1;
+  | MobileFieldWorkflowEventTypeV1
+  | MobileFieldActivityEventTypeV1;
 
 export type MobileSyncTransportName = "CLOUD" | "LOCAL_BRIDGE";
 
@@ -72,6 +75,15 @@ type MobileLoadDetailsPayload = {
   fieldConfirmation?: MobileCollectionConfirmationKindV1;
 };
 
+type MobileDeliveryNotePayload = {
+  note: string;
+};
+
+type MobileIssuePayload = {
+  issueType: MobileFieldIssueTypeV1;
+  summary: string;
+};
+
 type QueueRow = {
   event_id: string;
   organisation_id: string;
@@ -94,10 +106,32 @@ type AssignmentRow = {
   payload_json: string;
 };
 
+const MOBILE_FIELD_ACTIVITY_EVENT_TYPES = new Set<MobileFieldActivityEventTypeV1>([
+  "FIELD_DELIVERY_NOTE_ADDED",
+  "FIELD_ISSUE_REPORTED",
+]);
+
+const MOBILE_FIELD_ISSUE_TYPES = new Set<MobileFieldIssueTypeV1>([
+  "DELAY",
+  "SITE_ACCESS",
+  "WASTE_MISMATCH",
+  "VEHICLE",
+  "SAFETY",
+  "OTHER",
+]);
+
 export const cloudMobileSyncTransport: MobileSyncTransport = {
   name: "CLOUD",
   push: (batch) => wasteXMobileApi.pushMobileSync(batch),
 };
+
+function isMobileFieldActivityEventType(
+  value: string,
+): value is MobileFieldActivityEventTypeV1 {
+  return MOBILE_FIELD_ACTIVITY_EVENT_TYPES.has(
+    value as MobileFieldActivityEventTypeV1,
+  );
+}
 
 async function nextDeviceSequence() {
   const database = await openMobileDatabase();
@@ -182,6 +216,50 @@ function validateCollectionDetails(
   }
 }
 
+function validateFieldActivity(
+  assignment: MobileAssignmentV1,
+  eventType: MobileFieldActivityEventTypeV1,
+  payload: unknown,
+) {
+  const workflow = getMobileFieldWorkflowState(assignment);
+  const terminalLoad = ["completed", "rejected", "cancelled"].includes(
+    assignment.load.status.toLowerCase(),
+  );
+
+  if (terminalLoad || workflow.step === "DELIVERED") {
+    throw new Error("This field job is complete and can no longer be changed.");
+  }
+
+  if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
+    const note = (payload as Partial<MobileDeliveryNotePayload> | null)?.note;
+    if (workflow.step !== "ARRIVED_DESTINATION") {
+      throw new Error("Delivery notes can be added after arriving at the destination.");
+    }
+    if (typeof note !== "string" || note.trim().length < 2) {
+      throw new Error("Enter a delivery note before saving.");
+    }
+    if (note.trim().length > 2000) {
+      throw new Error("Delivery notes must be 2,000 characters or fewer.");
+    }
+    return;
+  }
+
+  const issue = payload as Partial<MobileIssuePayload> | null;
+  if (
+    !issue ||
+    typeof issue.issueType !== "string" ||
+    !MOBILE_FIELD_ISSUE_TYPES.has(issue.issueType as MobileFieldIssueTypeV1)
+  ) {
+    throw new Error("Choose a valid issue type.");
+  }
+  if (typeof issue.summary !== "string" || issue.summary.trim().length < 3) {
+    throw new Error("Describe the issue before reporting it.");
+  }
+  if (issue.summary.trim().length > 2000) {
+    throw new Error("Issue descriptions must be 2,000 characters or fewer.");
+  }
+}
+
 function applyLocalProjection(
   assignment: MobileAssignmentV1,
   eventType: MobileJobLoadEventType,
@@ -262,6 +340,32 @@ function applyLocalProjection(
     }
   }
 
+  if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
+    const note = (payload as MobileDeliveryNotePayload).note.trim();
+    next.fieldActivity = [
+      ...(next.fieldActivity ?? []),
+      {
+        eventType,
+        occurredAt,
+        text: note,
+        issueType: null,
+      },
+    ];
+  }
+
+  if (eventType === "FIELD_ISSUE_REPORTED") {
+    const issue = payload as MobileIssuePayload;
+    next.fieldActivity = [
+      ...(next.fieldActivity ?? []),
+      {
+        eventType,
+        occurredAt,
+        text: issue.summary.trim(),
+        issueType: issue.issueType,
+      },
+    ];
+  }
+
   next.load.entityVersion += 1;
   return next;
 }
@@ -298,6 +402,10 @@ export async function queueMobileJobLoadEvent(input: {
 
   if (input.eventType === "LOAD_DETAILS_UPDATED" && payload && typeof payload === "object") {
     validateCollectionDetails(assignment, payload as MobileLoadDetailsPayload);
+  }
+
+  if (isMobileFieldActivityEventType(input.eventType)) {
+    validateFieldActivity(assignment, input.eventType, payload);
   }
 
   if (isMobileFieldWorkflowEventType(input.eventType)) {
