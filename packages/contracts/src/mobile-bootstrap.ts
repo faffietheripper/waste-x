@@ -27,6 +27,25 @@ export type MobileCollectionConfirmationKindV1 =
   | "QUANTITY"
   | "MANUAL_WEIGHT";
 
+export type MobileFieldActivityEventTypeV1 =
+  | "FIELD_DELIVERY_NOTE_ADDED"
+  | "FIELD_ISSUE_REPORTED";
+
+export type MobileFieldIssueTypeV1 =
+  | "DELAY"
+  | "SITE_ACCESS"
+  | "WASTE_MISMATCH"
+  | "VEHICLE"
+  | "SAFETY"
+  | "OTHER";
+
+export interface MobileFieldActivityV1 {
+  eventType: MobileFieldActivityEventTypeV1;
+  occurredAt: string;
+  text: string;
+  issueType: MobileFieldIssueTypeV1 | null;
+}
+
 export interface MobileFieldWorkflowStateV1 {
   step: MobileFieldWorkflowStepV1;
   updatedAt: string | null;
@@ -107,6 +126,12 @@ export interface MobileAssignmentV1 {
    * encrypted Mobile snapshots.
    */
   collectionChecks?: MobileCollectionChecksV1;
+  /**
+   * Delivery notes and field issues are immutable field events attached to the
+   * same job_load ID. Cloud bootstrap rehydrates these events so they remain
+   * visible after a successful sync/refresh.
+   */
+  fieldActivity?: MobileFieldActivityV1[];
 }
 
 export interface MobileAssignmentBootstrapV1 {
