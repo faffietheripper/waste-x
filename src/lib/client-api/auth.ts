@@ -265,22 +265,37 @@ export async function refreshClientSession({
   const expiresAt = new Date(now.getTime() + CLIENT_SESSION_TTL_MS);
   const refreshExpiresAt = new Date(now.getTime() + CLIENT_REFRESH_TTL_MS);
 
-  await Promise.all([
-    database
-      .update(clientSessions)
-      .set({
-        tokenHash: hashOpaqueSecret(nextSessionToken),
-        expiresAt,
-        refreshTokenHash: hashOpaqueSecret(nextRefreshToken),
-        refreshExpiresAt,
-        lastSeenAt: now,
-      })
-      .where(eq(clientSessions.id, session.id)),
-    database
-      .update(clientDevices)
-      .set({ lastSeenAt: now, updatedAt: now })
-      .where(eq(clientDevices.id, device.id)),
-  ]);
+  const rotated = await database
+    .update(clientSessions)
+    .set({
+      tokenHash: hashOpaqueSecret(nextSessionToken),
+      expiresAt,
+      refreshTokenHash: hashOpaqueSecret(nextRefreshToken),
+      refreshExpiresAt,
+      lastSeenAt: now,
+    })
+    .where(
+      and(
+        eq(clientSessions.id, session.id),
+        eq(clientSessions.refreshTokenHash, refreshTokenHash),
+        isNull(clientSessions.revokedAt),
+        gt(clientSessions.refreshExpiresAt, now),
+      ),
+    )
+    .returning({ id: clientSessions.id });
+
+  if (rotated.length !== 1) {
+    throw new ClientApiAuthError(
+      "AUTH_INVALID_REFRESH",
+      401,
+      "This Waste X Mobile refresh session has already been rotated.",
+    );
+  }
+
+  await database
+    .update(clientDevices)
+    .set({ lastSeenAt: now, updatedAt: now })
+    .where(eq(clientDevices.id, device.id));
 
   return {
     device,
