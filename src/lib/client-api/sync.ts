@@ -85,6 +85,24 @@ const rejectPayloadSchema = z.object({
   reason: z.string().trim().min(3).max(2000),
 });
 
+const fieldIssueTypeSchema = z.enum([
+  "DELAY",
+  "SITE_ACCESS",
+  "WASTE_MISMATCH",
+  "VEHICLE",
+  "SAFETY",
+  "OTHER",
+]);
+
+const fieldDeliveryNotePayloadSchema = z.object({
+  note: z.string().trim().min(2).max(2000),
+});
+
+const fieldIssuePayloadSchema = z.object({
+  issueType: fieldIssueTypeSchema,
+  summary: z.string().trim().min(3).max(2000),
+});
+
 const fieldWorkflowStepSchema = z.enum([
   "ASSIGNED",
   "STARTED",
@@ -401,6 +419,76 @@ async function applyJobLoadEvent(
   const now = new Date();
 
   switch (event.eventType) {
+    case "FIELD_DELIVERY_NOTE_ADDED": {
+      if (["completed", "rejected", "cancelled"].includes(load.status)) {
+        throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
+      }
+
+      const currentStep = await currentFieldWorkflowStep(tx, context, event.entityId);
+      if (currentStep !== "ARRIVED_DESTINATION") {
+        throw new SyncBusinessRuleError("DELIVERY_NOTE_OUT_OF_ORDER");
+      }
+
+      const parsed = fieldDeliveryNotePayloadSchema.safeParse(event.payload);
+      if (!parsed.success) {
+        throw new SyncBusinessRuleError("INVALID_DELIVERY_NOTE");
+      }
+
+      await tx
+        .update(jobLoads)
+        .set({
+          notes: appendOperationalNote(
+            load.notes,
+            "DELIVERY NOTE",
+            parsed.data.note,
+            new Date(event.occurredAt),
+          ),
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(jobLoads.id, load.id),
+            eq(jobLoads.organisationId, context.organisationId),
+          ),
+        );
+      break;
+    }
+
+    case "FIELD_ISSUE_REPORTED": {
+      if (["completed", "rejected", "cancelled"].includes(load.status)) {
+        throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
+      }
+
+      const currentStep = await currentFieldWorkflowStep(tx, context, event.entityId);
+      if (currentStep === "DELIVERED") {
+        throw new SyncBusinessRuleError("FIELD_JOB_ALREADY_DELIVERED");
+      }
+
+      const parsed = fieldIssuePayloadSchema.safeParse(event.payload);
+      if (!parsed.success) {
+        throw new SyncBusinessRuleError("INVALID_FIELD_ISSUE");
+      }
+
+      await tx
+        .update(jobLoads)
+        .set({
+          notes: appendOperationalNote(
+            load.notes,
+            `FIELD ISSUE · ${parsed.data.issueType.replaceAll("_", " ")}`,
+            parsed.data.summary,
+            new Date(event.occurredAt),
+          ),
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(jobLoads.id, load.id),
+            eq(jobLoads.organisationId, context.organisationId),
+          ),
+        );
+      break;
+    }
+
     case "FIELD_JOB_STARTED":
     case "FIELD_EN_ROUTE":
     case "FIELD_ARRIVED_COLLECTION":
