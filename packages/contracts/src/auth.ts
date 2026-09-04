@@ -58,6 +58,8 @@ export interface MobileProvisionResponseV1 {
     deviceSecret: string;
     sessionToken: string;
     sessionExpiresAt: string;
+    refreshToken: string;
+    refreshExpiresAt: string;
   };
   user: {
     id: string;
@@ -77,6 +79,33 @@ export interface MobileLoginRequestV1 {
 export interface MobileLoginResponseV1 {
   device: DeviceIdentity;
   session: {
+    token: string;
+    expiresAt: string;
+  };
+  refresh: {
+    token: string;
+    expiresAt: string;
+  };
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    organisationId: string;
+  };
+}
+
+export interface MobileRefreshRequestV1 {
+  deviceId: string;
+  refreshToken: string;
+}
+
+export interface MobileRefreshResponseV1 {
+  device: DeviceIdentity;
+  session: {
+    token: string;
+    expiresAt: string;
+  };
+  refresh: {
     token: string;
     expiresAt: string;
   };
