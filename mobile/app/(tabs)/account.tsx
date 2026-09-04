@@ -11,6 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
 import { logoutMobile } from "@/auth/mobile-auth";
+import { MobileCertificationPanel } from "@/field-ops/certification-panel";
 import {
   WasteXHeader,
   fieldOpsStyles,
@@ -138,6 +139,10 @@ export default function AccountScreen() {
             emphasis={(syncStatus?.conflicts ?? 0) > 0 ? "warning" : undefined}
           />
         </View>
+
+        {__DEV__ ? (
+          <MobileCertificationPanel online={Boolean(auth?.onlineAuthenticated)} />
+        ) : null}
 
         <Pressable disabled={busy} onPress={() => void refresh()} style={styles.secondaryButton}>
           <Text style={styles.secondaryButtonText}>
