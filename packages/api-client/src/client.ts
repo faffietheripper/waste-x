@@ -9,6 +9,7 @@ import type {
   EvidenceUploadRequestV1,
   EvidenceUploadResponseV1,
   MobileAssignmentBootstrapV1,
+  MobileFieldCertificationCloudV1,
   MobileLoginRequestV1,
   MobileLoginResponseV1,
   MobileOfflineEntitlementResponseV1,
@@ -111,6 +112,12 @@ export class WasteXApiClient {
   bootstrapMobile() {
     return this.request<MobileAssignmentBootstrapV1 & { ok: true }>(
       "/api/mobile/v1/bootstrap",
+    );
+  }
+
+  certifyMobileLoad(loadId: string) {
+    return this.request<MobileFieldCertificationCloudV1>(
+      `/api/mobile/v1/certification/${encodeURIComponent(loadId)}`,
     );
   }
 
