@@ -49,20 +49,28 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function metroIsReady() {
+function metroStatus(hostname) {
   return new Promise((resolve) => {
-    const request = http.get(`${METRO_URL}/status`, (response) => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => {
-        body += chunk;
-      });
-      response.on("end", () => {
-        resolve(
-          response.statusCode === 200 && body.includes("packager-status:running"),
-        );
-      });
-    });
+    const request = http.get(
+      {
+        hostname,
+        port: 8081,
+        path: "/status",
+        family: hostname === "127.0.0.1" ? 4 : 6,
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => {
+          resolve(
+            response.statusCode === 200 && body.includes("packager-status:running"),
+          );
+        });
+      },
+    );
 
     request.setTimeout(1200, () => {
       request.destroy();
@@ -70,6 +78,10 @@ function metroIsReady() {
     });
     request.on("error", () => resolve(false));
   });
+}
+
+function metroIsReady() {
+  return metroStatus("127.0.0.1");
 }
 
 function printMetroLog() {
@@ -91,10 +103,32 @@ function printMetroLog() {
   }
 }
 
+function printPortOwner() {
+  const result = spawnSync(
+    "lsof",
+    ["-nP", "-iTCP:8081", "-sTCP:LISTEN"],
+    { cwd: MOBILE_ROOT, encoding: "utf8" },
+  );
+  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  if (output) {
+    console.error("\nPort 8081 listeners:");
+    console.error(output);
+    console.error("");
+  }
+}
+
 async function ensureMetro() {
   if (await metroIsReady()) {
     console.log(`Waste X Metro is already running on ${METRO_URL}.`);
     return;
+  }
+
+  const ipv6Metro = await metroStatus("::1");
+  if (ipv6Metro) {
+    console.log(
+      "A Metro server is already bound to IPv6 localhost (::1:8081), but the iOS simulator needs IPv4 127.0.0.1:8081.",
+    );
+    console.log("Starting a Waste X IPv4 Metro listener alongside it…");
   }
 
   const expoBin = path.join(MOBILE_ROOT, "node_modules", ".bin", "expo");
@@ -104,18 +138,22 @@ async function ensureMetro() {
     process.exit(1);
   }
 
-  console.log(`Waste X Metro is not running. Starting it automatically on ${METRO_URL}…`);
+  console.log(`Waste X Metro is not running on IPv4. Starting it on ${METRO_URL}…`);
   fs.writeFileSync(METRO_LOG, "", "utf8");
   const logFd = fs.openSync(METRO_LOG, "a");
 
+  // `--localhost` resolves to ::1 first on some recent macOS versions. The
+  // simulator bundle URL is 127.0.0.1, so bind Metro to the IPv4/LAN listener
+  // instead and explicitly advertise 127.0.0.1 to React Native.
   const metro = spawn(
     expoBin,
-    ["start", "--dev-client", "--localhost", "--port", "8081"],
+    ["start", "--dev-client", "--lan", "--port", "8081"],
     {
       cwd: MOBILE_ROOT,
       env: {
         ...process.env,
         CI: "1",
+        REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
       },
       detached: true,
       stdio: ["ignore", logFd, logFd],
@@ -136,6 +174,7 @@ async function ensureMetro() {
     } catch {
       console.error("Waste X Metro exited before becoming ready.");
       printMetroLog();
+      printPortOwner();
       process.exit(1);
     }
 
@@ -144,6 +183,7 @@ async function ensureMetro() {
 
   console.error("Waste X Metro did not become ready within 45 seconds.");
   printMetroLog();
+  printPortOwner();
   process.exit(1);
 }
 
@@ -225,5 +265,6 @@ async function main() {
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   printMetroLog();
+  printPortOwner();
   process.exit(1);
 });
