@@ -52,7 +52,10 @@ export function greetingForNow(date = new Date()) {
 }
 
 export function isCompletedAssignment(assignment: MobileAssignmentV1) {
-  return COMPLETED_STATUSES.has(assignment.load.status.toLowerCase());
+  return (
+    COMPLETED_STATUSES.has(assignment.load.status.toLowerCase()) ||
+    assignment.workflow?.step === "DELIVERED"
+  );
 }
 
 export function isCancelledAssignment(assignment: MobileAssignmentV1) {
