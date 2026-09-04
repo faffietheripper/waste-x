@@ -37,9 +37,9 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
 - [x] Mark collected
 - [x] Mark in transit
 - [x] Arrive at destination
-- [x] Confirm delivery (field-progress event; delivery notes/evidence remain Step 12.6)
-- [ ] Delivery notes
-- [ ] Report issue
+- [x] Confirm delivery
+- [x] Delivery notes
+- [x] Report issue
 - [x] Cancelled jobs list
 - [x] Completed jobs list
 - [x] Offline operation foundation reused from Step 11
@@ -76,14 +76,21 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
    - Bootstrap reconstructs collection confirmation ticks from APPLIED sync-event history, so Cloud refresh does not erase field confirmation state.
    - Mobile and Cloud both refuse FIELD_COLLECTED until waste and quantity/manual-weight confirmation are present.
 
-5. **12.6 — Delivery notes, issues and terminal states**
-   - Delivery notes, issue reporting, cancelled and completed workflows.
-   - Add evidence/compliance gates around final delivery confirmation where required.
+5. **12.6 — Delivery notes, issues and terminal states** ✅ implementation / runtime assignment proof pending
+   - Delivery notes are immutable FIELD_DELIVERY_NOTE_ADDED events on the same job_load and are allowed after destination arrival before final field delivery.
+   - Field issues are immutable FIELD_ISSUE_REPORTED events with delay, site access, waste mismatch, vehicle, safety and other categories.
+   - Reporting an issue records the problem without silently cancelling the job.
+   - Cloud appends delivery notes/issues to the canonical job-load operational notes while keeping the structured immutable event history.
+   - Mobile bootstrap rehydrates structured delivery/issue activity from APPLIED events after sync or restart.
+   - Canonical terminal loads, cancelled/draft parent jobs and delivered field journeys are read only on Mobile and Cloud.
+   - Assigned cancelled jobs/loads remain in the 14-day Mobile working set so the Cancelled tab is backed by real Cloud data rather than an unreachable UI state.
+   - A field journey at DELIVERED is treated as completed driver work in Mobile while canonical waste/compliance status remains separately visible.
 
 6. **12.7 — End-to-end certification**
-   - Web assigns an existing load.
-   - Mobile receives/caches it.
+   - Create or uniquely link a real Driver to the signed-in Mobile account.
+   - Web assigns an existing job/load to that Driver and vehicle.
+   - Mobile receives/caches the same job/load IDs.
    - Phone works offline and survives restart.
-   - Field actions queue locally.
+   - Run the full field journey, collection confirmations, delivery note and issue path with actions queued locally.
    - Reconnect through Cloud or trusted Bridge transport.
-   - Web/Desktop show the same record with no duplicate event identity.
+   - Confirm Web/Desktop show the same record, notes, weights and terminal field state with no duplicate event identity.
