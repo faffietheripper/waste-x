@@ -42,7 +42,7 @@ export default function AccountScreen() {
       return;
     }
     if (!reconnectPassword) {
-      setActionError("Enter your Waste X password to reconnect this phone to Cloud.");
+      setActionError("Enter your Waste X password to enable automatic Cloud reconnection.");
       return;
     }
 
@@ -147,6 +147,11 @@ export default function AccountScreen() {
             emphasis={auth?.onlineAuthenticated ? "good" : "warning"}
           />
           <InfoRow
+            label="Automatic reconnect"
+            value={auth?.refreshAvailable ? "Ready" : "One-time setup required"}
+            emphasis={auth?.refreshAvailable ? "good" : "warning"}
+          />
+          <InfoRow
             label="Offline authorisation"
             value={
               auth?.offline.valid
@@ -170,12 +175,22 @@ export default function AccountScreen() {
           />
         </View>
 
-        {auth?.provisioned && !auth.onlineAuthenticated ? (
-          <View style={styles.reconnectCard}>
-            <Text style={styles.reconnectEyebrow}>CLOUD SESSION</Text>
-            <Text style={styles.reconnectTitle}>Reconnect to Waste X Cloud</Text>
+        {auth?.provisioned && !auth.onlineAuthenticated && auth.refreshAvailable ? (
+          <View style={styles.autoReconnectCard}>
+            <Text style={styles.reconnectEyebrow}>AUTOMATIC RECONNECT</Text>
+            <Text style={styles.reconnectTitle}>Waiting for Waste X Cloud</Text>
             <Text style={styles.reconnectCopy}>
-              Offline work stays available on this phone. Enter your normal Waste X password to renew the Cloud session and refresh assigned jobs.
+              No action is required. Waste X keeps local work available and retries Cloud automatically while the app is open and whenever it returns to the foreground.
+            </Text>
+          </View>
+        ) : null}
+
+        {auth?.provisioned && !auth.onlineAuthenticated && !auth.refreshAvailable ? (
+          <View style={styles.reconnectCard}>
+            <Text style={styles.reconnectEyebrow}>ONE-TIME UPGRADE</Text>
+            <Text style={styles.reconnectTitle}>Enable automatic Cloud reconnection</Text>
+            <Text style={styles.reconnectCopy}>
+              This phone was registered before automatic session renewal was added. Enter your normal Waste X password once. After this, Waste X will renew Cloud sessions automatically without asking again during normal operation.
             </Text>
             <Text style={styles.reconnectEmail}>{auth.profile?.email ?? "—"}</Text>
             <TextInput
@@ -196,7 +211,7 @@ export default function AccountScreen() {
               style={styles.reconnectButton}
             >
               <Text style={styles.reconnectButtonText}>
-                {reconnectBusy ? "Reconnecting…" : "Reconnect Cloud"}
+                {reconnectBusy ? "Enabling…" : "Enable automatic reconnect"}
               </Text>
             </Pressable>
           </View>
@@ -334,6 +349,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff7ed",
     borderWidth: 1,
     borderColor: "#fed7aa",
+  },
+  autoReconnectCard: {
+    marginTop: 18,
+    padding: 17,
+    borderRadius: 18,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
   },
   reconnectEyebrow: {
     color: "#ea580c",
