@@ -6,6 +6,7 @@ import * as carbonSchema from "./carbon-schema";
 import * as clientSyncSchema from "./client-sync-schema";
 import * as commercialSchema from "./commercial-schema";
 import * as coreSchema from "./schema";
+import * as mobileFieldSchema from "./mobile-field-schema";
 import * as returnsSchema from "./returns-schema";
 
 /*
@@ -20,6 +21,7 @@ const schema = {
   ...returnsSchema,
   ...carbonSchema,
   ...clientSyncSchema,
+  ...mobileFieldSchema,
 };
 
 declare global {
