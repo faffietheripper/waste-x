@@ -30,7 +30,7 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
     try {
       const [workingSet, nextSnapshot] = await Promise.all([
         getLocalMobileAssignmentWorkingSet(),
-        getMobileCertificationSnapshot(),
+        getMobileCertificationSnapshot(online),
       ]);
       setAssignments(workingSet.assignments);
       setSnapshot(nextSnapshot);
@@ -106,6 +106,14 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
         </View>
       ) : null}
 
+      {snapshot?.cloudError && online ? (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>
+            Cloud proof unavailable: {snapshot.cloudError}
+          </Text>
+        </View>
+      ) : null}
+
       {!run ? (
         <View style={styles.setupBlock}>
           <Text style={styles.subheading}>Choose a real cached assignment</Text>
@@ -147,12 +155,14 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
           <View style={styles.checks}>
             <Check label="Driver scope matched" pass={Boolean(snapshot?.driverMatched)} />
             <Check label="Real assignment cached" pass={Boolean(snapshot?.assignmentCached)} />
-            <Check label="Same job/load identity" pass={Boolean(snapshot?.sameRecordIdentity)} />
+            <Check label="Same local job/load identity" pass={Boolean(snapshot?.sameRecordIdentity)} />
             <Check label="Workflow started" pass={Boolean(snapshot?.workflowStarted)} />
             <Check label="Waste + quantity confirmed" pass={Boolean(snapshot?.collectionConfirmed)} />
             <Check label="Offline checkpoint recorded" pass={Boolean(snapshot?.offlineCheckpointRecorded)} />
             <Check label="Encrypted record survived restart" pass={Boolean(snapshot?.localRecordSurvivedRestart)} />
             <Check label="Cloud queue fully drained" pass={Boolean(snapshot?.cloudQueueDrained)} />
+            <Check label="Cloud exact job/load identity" pass={Boolean(snapshot?.cloudIdentityMatches)} />
+            <Check label="Cloud field state matches Mobile" pass={Boolean(snapshot?.cloudFieldStateMatches)} />
             <Check label="No conflicts / failures" pass={Boolean(snapshot?.noConflictOrFailure)} />
             <Check label="Field journey delivered" pass={Boolean(snapshot?.fieldDelivered)} />
           </View>
@@ -162,6 +172,11 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
             <Text style={styles.queueText}>
               {snapshot?.queue.pending ?? 0} pending · {snapshot?.queue.synced ?? 0} synced · {snapshot?.queue.conflicts ?? 0} conflicts · {snapshot?.queue.failed ?? 0} failed
             </Text>
+            {snapshot?.cloud ? (
+              <Text style={styles.cloudText}>
+                Cloud v{snapshot.cloud.entityVersion} · {snapshot.cloud.fieldWorkflow?.step ?? "no field mirror"} · {snapshot.cloud.load.id}
+              </Text>
+            ) : null}
           </View>
 
           <Pressable
@@ -184,7 +199,7 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
           <View style={styles.instructions}>
             <Text style={styles.instructionsTitle}>Certification sequence</Text>
             <Text style={styles.instructionsText}>
-              1. Advance this real job normally. 2. Turn connectivity off. 3. Perform at least one field action. 4. Record the offline checkpoint here. 5. Fully close and reopen Waste X Mobile. 6. Reconnect and let the queue drain. 7. Finish the journey to Delivered, then refresh this panel.
+              1. Advance this real job normally. 2. Turn connectivity off. 3. Perform at least one field action. 4. Record the offline checkpoint here. 5. Fully close and reopen Waste X Mobile. 6. Reconnect and let the queue drain. 7. Finish the journey to Delivered. 8. Refresh this proof while online so Cloud identity and field state are checked.
             </Text>
           </View>
 
@@ -257,6 +272,7 @@ const styles = StyleSheet.create({
   queueCard: { marginTop: 12, padding: 11, borderRadius: 12, backgroundColor: "#ffffff" },
   queueTitle: { color: "#334155", fontSize: 10, fontWeight: "900" },
   queueText: { marginTop: 3, color: "#64748b", fontSize: 9, lineHeight: 14 },
+  cloudText: { marginTop: 5, color: "#0f766e", fontSize: 8, lineHeight: 13, fontWeight: "700" },
   primaryButton: { marginTop: 12, minHeight: 46, paddingHorizontal: 14, borderRadius: 13, backgroundColor: "#111827", alignItems: "center", justifyContent: "center" },
   disabledButton: { opacity: 0.5 },
   primaryButtonText: { color: "#ffffff", fontSize: 11, fontWeight: "900", textAlign: "center" },
