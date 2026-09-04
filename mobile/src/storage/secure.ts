@@ -140,12 +140,18 @@ export async function storeMobileSession(input: {
   ]);
 }
 
-export async function clearMobileSession() {
+export async function clearMobileOnlineCredentials() {
   await Promise.all([
     SecureStore.deleteItemAsync(SESSION_TOKEN_KEY, secureOptions),
     SecureStore.deleteItemAsync(SESSION_EXPIRY_KEY, secureOptions),
     SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY, secureOptions),
     SecureStore.deleteItemAsync(REFRESH_EXPIRY_KEY, secureOptions),
+  ]);
+}
+
+export async function clearMobileSession() {
+  await Promise.all([
+    clearMobileOnlineCredentials(),
     SecureStore.deleteItemAsync(AUTH_PROFILE_KEY, secureOptions),
   ]);
 }
