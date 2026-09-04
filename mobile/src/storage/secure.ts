@@ -10,6 +10,8 @@ const DATABASE_KEY = "waste-x-mobile-database-key-v1";
 const DEVICE_SECRET_KEY = "waste-x-mobile-device-secret-v1";
 const SESSION_TOKEN_KEY = "waste-x-mobile-session-token-v1";
 const SESSION_EXPIRY_KEY = "waste-x-mobile-session-expiry-v1";
+const REFRESH_TOKEN_KEY = "waste-x-mobile-refresh-token-v1";
+const REFRESH_EXPIRY_KEY = "waste-x-mobile-refresh-expiry-v1";
 const AUTH_PROFILE_KEY = "waste-x-mobile-auth-profile-v1";
 const OFFLINE_ENTITLEMENT_KEY = "waste-x-mobile-offline-entitlement-v1";
 const MAX_OBSERVED_TIME_KEY = "waste-x-mobile-max-observed-time-v1";
@@ -54,6 +56,12 @@ export function getMobileSessionToken() {
 }
 export function getMobileSessionExpiry() {
   return SecureStore.getItemAsync(SESSION_EXPIRY_KEY, secureOptions);
+}
+export function getMobileRefreshToken() {
+  return SecureStore.getItemAsync(REFRESH_TOKEN_KEY, secureOptions);
+}
+export function getMobileRefreshExpiry() {
+  return SecureStore.getItemAsync(REFRESH_EXPIRY_KEY, secureOptions);
 }
 
 export async function getMobileAuthProfile(): Promise<StoredMobileAuthProfile | null> {
@@ -102,12 +110,16 @@ export async function storeMobileProvisioning(input: {
   deviceSecret: string;
   sessionToken: string;
   sessionExpiresAt: string;
+  refreshToken: string;
+  refreshExpiresAt: string;
   profile: StoredMobileAuthProfile;
 }) {
   await Promise.all([
     SecureStore.setItemAsync(DEVICE_SECRET_KEY, input.deviceSecret, secureOptions),
     SecureStore.setItemAsync(SESSION_TOKEN_KEY, input.sessionToken, secureOptions),
     SecureStore.setItemAsync(SESSION_EXPIRY_KEY, input.sessionExpiresAt, secureOptions),
+    SecureStore.setItemAsync(REFRESH_TOKEN_KEY, input.refreshToken, secureOptions),
+    SecureStore.setItemAsync(REFRESH_EXPIRY_KEY, input.refreshExpiresAt, secureOptions),
     SecureStore.setItemAsync(AUTH_PROFILE_KEY, JSON.stringify(input.profile), secureOptions),
   ]);
 }
@@ -115,11 +127,15 @@ export async function storeMobileProvisioning(input: {
 export async function storeMobileSession(input: {
   sessionToken: string;
   sessionExpiresAt: string;
+  refreshToken: string;
+  refreshExpiresAt: string;
   profile: StoredMobileAuthProfile;
 }) {
   await Promise.all([
     SecureStore.setItemAsync(SESSION_TOKEN_KEY, input.sessionToken, secureOptions),
     SecureStore.setItemAsync(SESSION_EXPIRY_KEY, input.sessionExpiresAt, secureOptions),
+    SecureStore.setItemAsync(REFRESH_TOKEN_KEY, input.refreshToken, secureOptions),
+    SecureStore.setItemAsync(REFRESH_EXPIRY_KEY, input.refreshExpiresAt, secureOptions),
     SecureStore.setItemAsync(AUTH_PROFILE_KEY, JSON.stringify(input.profile), secureOptions),
   ]);
 }
@@ -128,6 +144,8 @@ export async function clearMobileSession() {
   await Promise.all([
     SecureStore.deleteItemAsync(SESSION_TOKEN_KEY, secureOptions),
     SecureStore.deleteItemAsync(SESSION_EXPIRY_KEY, secureOptions),
+    SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY, secureOptions),
+    SecureStore.deleteItemAsync(REFRESH_EXPIRY_KEY, secureOptions),
     SecureStore.deleteItemAsync(AUTH_PROFILE_KEY, secureOptions),
   ]);
 }
