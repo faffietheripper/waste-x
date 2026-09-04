@@ -4,6 +4,7 @@ import { WasteXApiError } from "@waste-x/api-client";
 import type {
   MobileLoginResponseV1,
   MobileProvisionResponseV1,
+  MobileRefreshResponseV1,
 } from "@waste-x/contracts";
 
 import { wasteXMobileApi } from "@/platform/api";
@@ -17,9 +18,12 @@ import {
 import { clearMobileAssignmentWorkingSet } from "@/assignments/local-working-set";
 import {
   clearMobileOfflineEntitlement,
+  clearMobileOnlineCredentials,
   clearMobileSession,
   getMobileAuthProfile,
   getMobileDeviceSecret,
+  getMobileRefreshExpiry,
+  getMobileRefreshToken,
   getMobileSessionExpiry,
   getMobileSessionToken,
   getOrCreateDeviceId,
@@ -30,6 +34,10 @@ import {
   type StoredMobileAuthProfile,
 } from "@/storage/secure";
 
+const SESSION_RENEWAL_WINDOW_MS = 5 * 60 * 1000;
+
+let refreshInFlight: Promise<MobileRefreshResponseV1> | null = null;
+
 export type MobileAuthSnapshot = {
   provisioned: boolean;
   authenticated: boolean;
@@ -39,13 +47,19 @@ export type MobileAuthSnapshot = {
   offline: OfflineEntitlementStatus;
   profile: StoredMobileAuthProfile | null;
   sessionExpiresAt: string | null;
+  refreshAvailable: boolean;
 };
 
 function platform(): "IOS" | "ANDROID" {
   return Platform.OS === "android" ? "ANDROID" : "IOS";
 }
 
-function profileFromResponse(response: MobileProvisionResponseV1 | MobileLoginResponseV1): StoredMobileAuthProfile {
+function profileFromResponse(
+  response:
+    | MobileProvisionResponseV1
+    | MobileLoginResponseV1
+    | MobileRefreshResponseV1,
+): StoredMobileAuthProfile {
   return {
     userId: response.user.id,
     email: response.user.email,
@@ -55,26 +69,134 @@ function profileFromResponse(response: MobileProvisionResponseV1 | MobileLoginRe
   };
 }
 
+function isCloudUnreachable(error: unknown) {
+  return error instanceof WasteXApiError && error.code === "CLOUD_UNREACHABLE";
+}
+
+function isRefreshExpired(error: unknown) {
+  return error instanceof WasteXApiError && error.code === "AUTH_INVALID_REFRESH";
+}
+
+function isHardAuthorisationRejection(error: unknown) {
+  if (!(error instanceof WasteXApiError)) return false;
+  return (
+    error.status === 403 ||
+    error.code === "DEVICE_UNAVAILABLE" ||
+    error.code === "DEVICE_SECRET_REQUIRED" ||
+    error.code === "ACCOUNT_UNAVAILABLE" ||
+    error.code === "ORGANISATION_UNAVAILABLE"
+  );
+}
+
+async function clearRevokedMobileState() {
+  await Promise.all([
+    clearMobileSession(),
+    clearMobileOfflineEntitlement(),
+    clearMobileAssignmentWorkingSet(),
+  ]);
+  lockOfflineOperations();
+}
+
 async function refreshOfflineEntitlement() {
   const response = await wasteXMobileApi.offlineEntitlementMobile();
   await storeMobileOfflineEntitlement(response.offlineEntitlement);
   return response.offlineEntitlement;
 }
 
+async function rotateCloudSession(refreshToken: string) {
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const deviceId = await getOrCreateDeviceId();
+    const response = await wasteXMobileApi.refreshMobile({
+      deviceId,
+      refreshToken,
+    });
+
+    await storeMobileSession({
+      sessionToken: response.session.token,
+      sessionExpiresAt: response.session.expiresAt,
+      refreshToken: response.refresh.token,
+      refreshExpiresAt: response.refresh.expiresAt,
+      profile: profileFromResponse(response),
+    });
+    await observeTrustedTime();
+    return response;
+  })();
+
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+}
+
 export async function getMobileAuthSnapshot(): Promise<MobileAuthSnapshot> {
-  const [deviceSecret, token, expiry, profile] = await Promise.all([
+  let [
+    deviceSecret,
+    token,
+    expiry,
+    refreshToken,
+    refreshExpiry,
+    profile,
+  ] = await Promise.all([
     getMobileDeviceSecret(),
     getMobileSessionToken(),
     getMobileSessionExpiry(),
+    getMobileRefreshToken(),
+    getMobileRefreshExpiry(),
     getMobileAuthProfile(),
   ]);
+
+  let cloudReachable = false;
+  let onlineAuthenticated = false;
+  const now = Date.now();
+
+  const refreshIsCurrent = () =>
+    Boolean(
+      refreshToken &&
+        refreshExpiry &&
+        Date.parse(refreshExpiry) > Date.now() &&
+        profile,
+    );
+
+  const sessionNeedsRenewal = () =>
+    !token ||
+    !expiry ||
+    !profile ||
+    Date.parse(expiry) <= Date.now() + SESSION_RENEWAL_WINDOW_MS;
+
+  if (deviceSecret && refreshIsCurrent() && sessionNeedsRenewal()) {
+    try {
+      const refreshed = await rotateCloudSession(refreshToken!);
+      token = refreshed.session.token;
+      expiry = refreshed.session.expiresAt;
+      refreshToken = refreshed.refresh.token;
+      refreshExpiry = refreshed.refresh.expiresAt;
+      profile = profileFromResponse(refreshed);
+    } catch (error) {
+      if (isCloudUnreachable(error)) {
+        cloudReachable = false;
+      } else if (isRefreshExpired(error)) {
+        await clearMobileOnlineCredentials();
+        token = null;
+        expiry = null;
+        refreshToken = null;
+        refreshExpiry = null;
+      } else if (isHardAuthorisationRejection(error)) {
+        await clearRevokedMobileState();
+        token = null;
+        expiry = null;
+        refreshToken = null;
+        refreshExpiry = null;
+        profile = null;
+      }
+    }
+  }
 
   const localSessionCurrent = Boolean(
     token && expiry && Date.parse(expiry) > Date.now() && profile,
   );
-
-  let cloudReachable = false;
-  let onlineAuthenticated = false;
 
   if (localSessionCurrent && deviceSecret) {
     try {
@@ -83,24 +205,49 @@ export async function getMobileAuthSnapshot(): Promise<MobileAuthSnapshot> {
       cloudReachable = true;
       onlineAuthenticated = true;
     } catch (error) {
-      if (error instanceof WasteXApiError && error.code === "CLOUD_UNREACHABLE") {
+      if (isCloudUnreachable(error)) {
         cloudReachable = false;
       } else if (
         error instanceof WasteXApiError &&
         (error.status === 401 || error.status === 403)
       ) {
-        // Cloud explicitly rejected the current session/device/user. Remove
-        // offline authority and that user's cached operational snapshot.
-        await Promise.all([
-          clearMobileSession(),
-          clearMobileOfflineEntitlement(),
-          clearMobileAssignmentWorkingSet(),
-        ]);
-        lockOfflineOperations();
+        if (refreshIsCurrent()) {
+          try {
+            const refreshed = await rotateCloudSession(refreshToken!);
+            token = refreshed.session.token;
+            expiry = refreshed.session.expiresAt;
+            refreshToken = refreshed.refresh.token;
+            refreshExpiry = refreshed.refresh.expiresAt;
+            profile = profileFromResponse(refreshed);
+            await refreshOfflineEntitlement();
+            await observeTrustedTime();
+            cloudReachable = true;
+            onlineAuthenticated = true;
+          } catch (refreshError) {
+            if (isCloudUnreachable(refreshError)) {
+              cloudReachable = false;
+            } else if (isRefreshExpired(refreshError)) {
+              await clearMobileOnlineCredentials();
+              token = null;
+              expiry = null;
+              refreshToken = null;
+              refreshExpiry = null;
+            } else if (isHardAuthorisationRejection(refreshError)) {
+              await clearRevokedMobileState();
+              token = null;
+              expiry = null;
+              refreshToken = null;
+              refreshExpiry = null;
+              profile = null;
+            }
+          }
+        } else {
+          await clearRevokedMobileState();
+          token = null;
+          expiry = null;
+          profile = null;
+        }
       } else {
-        // A reachable server may still have a transient application error.
-        // Preserve the signed entitlement and cached working set until Cloud
-        // explicitly rejects authorisation.
         cloudReachable = false;
       }
     }
@@ -118,10 +265,15 @@ export async function getMobileAuthSnapshot(): Promise<MobileAuthSnapshot> {
     offline,
     profile,
     sessionExpiresAt: expiry,
+    refreshAvailable: refreshIsCurrent(),
   };
 }
 
-export async function provisionMobile(input: { email: string; password: string; displayName: string }) {
+export async function provisionMobile(input: {
+  email: string;
+  password: string;
+  displayName: string;
+}) {
   const deviceId = await getOrCreateDeviceId();
   const response = await wasteXMobileApi.provisionMobile({
     deviceId,
@@ -135,6 +287,8 @@ export async function provisionMobile(input: { email: string; password: string; 
     deviceSecret: response.credentials.deviceSecret,
     sessionToken: response.credentials.sessionToken,
     sessionExpiresAt: response.credentials.sessionExpiresAt,
+    refreshToken: response.credentials.refreshToken,
+    refreshExpiresAt: response.credentials.refreshExpiresAt,
     profile: profileFromResponse(response),
   });
   await observeTrustedTime();
@@ -159,6 +313,8 @@ export async function loginMobile(input: { email: string; password: string }) {
   await storeMobileSession({
     sessionToken: response.session.token,
     sessionExpiresAt: response.session.expiresAt,
+    refreshToken: response.refresh.token,
+    refreshExpiresAt: response.refresh.expiresAt,
     profile: profileFromResponse(response),
   });
   await observeTrustedTime();
