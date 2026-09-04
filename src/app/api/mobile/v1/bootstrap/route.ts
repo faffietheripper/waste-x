@@ -6,6 +6,7 @@ import {
   inArray,
   isNull,
   lte,
+  ne,
   or,
   sql,
 } from "drizzle-orm";
@@ -252,6 +253,7 @@ export async function GET(request: Request) {
       .where(
         and(
           eq(jobLoads.organisationId, context.organisationId),
+          ne(jobs.status, "draft"),
           or(
             eq(jobLoads.driverId, driver.id),
             and(isNull(jobLoads.driverId), eq(jobs.driverId, driver.id)),
