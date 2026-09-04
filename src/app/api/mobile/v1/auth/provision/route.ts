@@ -141,6 +141,8 @@ export async function POST(request: Request) {
           deviceSecret,
           sessionToken: session.sessionToken,
           sessionExpiresAt: session.expiresAt.toISOString(),
+          refreshToken: session.refreshToken,
+          refreshExpiresAt: session.refreshExpiresAt.toISOString(),
         },
         user: {
           id: user.id,
