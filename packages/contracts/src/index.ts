@@ -5,5 +5,6 @@ export * from "./device";
 export * from "./evidence";
 export * from "./ids";
 export * from "./mobile-bootstrap";
+export * from "./mobile-certification";
 export * from "./offline-auth";
 export * from "./sync";
