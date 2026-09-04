@@ -9,6 +9,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -47,8 +48,11 @@ export function FieldOpsProvider({ children }: PropsWithChildren) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reconciling = useRef(false);
 
   const reconcile = useCallback(async (showRefresh = false) => {
+    if (reconciling.current) return;
+    reconciling.current = true;
     if (showRefresh) setRefreshing(true);
     try {
       setError(null);
@@ -96,6 +100,7 @@ export function FieldOpsProvider({ children }: PropsWithChildren) {
       if (fallbackWorkingSet) setWorkingSet(fallbackWorkingSet);
       if (fallbackSyncStatus) setSyncStatus(fallbackSyncStatus);
     } finally {
+      reconciling.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -113,6 +118,21 @@ export function FieldOpsProvider({ children }: PropsWithChildren) {
 
     return () => subscription.remove();
   }, [reconcile]);
+
+  useEffect(() => {
+    if (!auth) return;
+
+    // While Cloud is unavailable, retry quickly enough that a driver does not
+    // need to press anything when connectivity returns. While connected, keep
+    // a low-frequency heartbeat so the short-lived access session is renewed
+    // before expiry even if the app remains open all shift.
+    const retryMs = auth.onlineAuthenticated ? 5 * 60 * 1000 : 15 * 1000;
+    const timer = setInterval(() => {
+      if (AppState.currentState === "active") void reconcile(false);
+    }, retryMs);
+
+    return () => clearInterval(timer);
+  }, [auth?.onlineAuthenticated, reconcile]);
 
   const value = useMemo<FieldOpsContextValue>(
     () => ({
