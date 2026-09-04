@@ -1,10 +1,14 @@
-import type { MobileAssignmentV1 } from "@waste-x/contracts";
+import type {
+  MobileAssignmentV1,
+  MobileFieldCertificationCloudV1,
+} from "@waste-x/contracts";
 
 import {
   getLocalMobileAssignmentByLoadId,
   getLocalMobileAssignmentWorkingSet,
 } from "@/assignments/local-working-set";
 import { getMobileCollectionChecks, getMobileFieldWorkflowState } from "@/field-ops/workflow";
+import { wasteXMobileApi } from "@/platform/api";
 import { openMobileDatabase } from "@/storage/database";
 
 const CERTIFICATION_KEY = "mobile_field_certification_v1";
@@ -39,6 +43,8 @@ export type MobileCertificationSnapshot = {
   run: MobileCertificationRun | null;
   assignment: MobileAssignmentV1 | null;
   queue: MobileCertificationQueueSummary;
+  cloud: MobileFieldCertificationCloudV1 | null;
+  cloudError: string | null;
   driverMatched: boolean;
   assignmentCached: boolean;
   sameRecordIdentity: boolean;
@@ -48,6 +54,8 @@ export type MobileCertificationSnapshot = {
   offlineCheckpointRecorded: boolean;
   localRecordSurvivedRestart: boolean;
   cloudQueueDrained: boolean;
+  cloudIdentityMatches: boolean;
+  cloudFieldStateMatches: boolean;
   noConflictOrFailure: boolean;
   fullyCertified: boolean;
 };
@@ -123,7 +131,7 @@ export async function startMobileFieldCertification(assignment: MobileAssignment
     offlineCheckpoint: null,
   };
   await writeRun(run);
-  return getMobileCertificationSnapshot();
+  return getMobileCertificationSnapshot(false);
 }
 
 export async function recordMobileOfflineCertificationCheckpoint(online: boolean) {
@@ -143,6 +151,9 @@ export async function recordMobileOfflineCertificationCheckpoint(online: boolean
   if (queue.pending + queue.sending <= 0) {
     throw new Error("Perform at least one field action while offline so Waste X has a queued event to certify.");
   }
+  if (assignment.load.entityVersion <= run.initialEntityVersion) {
+    throw new Error("Advance the selected field job after starting certification before recording the offline checkpoint.");
+  }
 
   const updated: MobileCertificationRun = {
     ...run,
@@ -154,7 +165,7 @@ export async function recordMobileOfflineCertificationCheckpoint(online: boolean
     },
   };
   await writeRun(updated);
-  return getMobileCertificationSnapshot();
+  return getMobileCertificationSnapshot(false);
 }
 
 export async function clearMobileFieldCertification() {
@@ -183,7 +194,9 @@ async function getQueueSummary(loadId: string): Promise<MobileCertificationQueue
   };
 }
 
-export async function getMobileCertificationSnapshot(): Promise<MobileCertificationSnapshot> {
+export async function getMobileCertificationSnapshot(
+  checkCloud = false,
+): Promise<MobileCertificationSnapshot> {
   const [run, workingSet] = await Promise.all([
     getMobileCertificationRun(),
     getLocalMobileAssignmentWorkingSet(),
@@ -203,6 +216,16 @@ export async function getMobileCertificationSnapshot(): Promise<MobileCertificat
         failed: 0,
         eventTypes: [],
       };
+
+  let cloud: MobileFieldCertificationCloudV1 | null = null;
+  let cloudError: string | null = null;
+  if (run && checkCloud) {
+    try {
+      cloud = await wasteXMobileApi.certifyMobileLoad(run.loadId);
+    } catch (reason) {
+      cloudError = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
 
   const driverMatched =
     workingSet.scope?.resolution === "MATCHED" && Boolean(workingSet.scope.driver);
@@ -234,6 +257,18 @@ export async function getMobileCertificationSnapshot(): Promise<MobileCertificat
       queue.pending === 0 &&
       queue.sending === 0,
   );
+  const cloudIdentityMatches = Boolean(
+    run &&
+      assignment &&
+      cloud &&
+      cloud.job.id === run.jobId &&
+      cloud.load.id === run.loadId &&
+      cloud.job.id === assignment.job.id &&
+      cloud.load.id === assignment.load.id,
+  );
+  const cloudFieldStateMatches = Boolean(
+    workflow && cloud?.fieldWorkflow && cloud.fieldWorkflow.step === workflow.step,
+  );
   const noConflictOrFailure = queue.conflicts === 0 && queue.failed === 0;
 
   const fullyCertified = Boolean(
@@ -247,6 +282,8 @@ export async function getMobileCertificationSnapshot(): Promise<MobileCertificat
       offlineCheckpointRecorded &&
       localRecordSurvivedRestart &&
       cloudQueueDrained &&
+      cloudIdentityMatches &&
+      cloudFieldStateMatches &&
       noConflictOrFailure,
   );
 
@@ -254,6 +291,8 @@ export async function getMobileCertificationSnapshot(): Promise<MobileCertificat
     run,
     assignment,
     queue,
+    cloud,
+    cloudError,
     driverMatched,
     assignmentCached,
     sameRecordIdentity,
@@ -263,6 +302,8 @@ export async function getMobileCertificationSnapshot(): Promise<MobileCertificat
     offlineCheckpointRecorded,
     localRecordSurvivedRestart,
     cloudQueueDrained,
+    cloudIdentityMatches,
+    cloudFieldStateMatches,
     noConflictOrFailure,
     fullyCertified,
   };
