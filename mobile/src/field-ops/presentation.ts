@@ -59,7 +59,10 @@ export function isCompletedAssignment(assignment: MobileAssignmentV1) {
 }
 
 export function isCancelledAssignment(assignment: MobileAssignmentV1) {
-  return CANCELLED_STATUSES.has(assignment.load.status.toLowerCase());
+  return (
+    CANCELLED_STATUSES.has(assignment.load.status.toLowerCase()) ||
+    CANCELLED_STATUSES.has(assignment.job.status.toLowerCase())
+  );
 }
 
 export type MobileAssignmentBuckets = {
