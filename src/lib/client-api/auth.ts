@@ -8,6 +8,7 @@ import { clientDevices, clientSessions } from "@/db/client-sync-schema";
 import { organisations, users } from "@/db/schema";
 
 const CLIENT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const CLIENT_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type ClientApiContext = {
   sessionId: string;
@@ -115,9 +116,11 @@ export async function createClientSession({
   organisationId: string;
 }) {
   const sessionToken = randomOpaqueSecret();
+  const refreshToken = randomOpaqueSecret();
   const sessionId = crypto.randomUUID();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + CLIENT_SESSION_TTL_MS);
+  const refreshExpiresAt = new Date(now.getTime() + CLIENT_REFRESH_TTL_MS);
 
   await database.insert(clientSessions).values({
     id: sessionId,
@@ -126,6 +129,8 @@ export async function createClientSession({
     organisationId,
     tokenHash: hashOpaqueSecret(sessionToken),
     expiresAt,
+    refreshTokenHash: hashOpaqueSecret(refreshToken),
+    refreshExpiresAt,
     lastSeenAt: now,
     createdAt: now,
   });
@@ -134,6 +139,156 @@ export async function createClientSession({
     sessionId,
     sessionToken,
     expiresAt,
+    refreshToken,
+    refreshExpiresAt,
+  };
+}
+
+export async function refreshClientSession({
+  deviceId,
+  refreshToken,
+  deviceSecret,
+}: {
+  deviceId: string;
+  refreshToken: string;
+  deviceSecret: string;
+}) {
+  const now = new Date();
+  const refreshTokenHash = hashOpaqueSecret(refreshToken);
+  const deviceSecretHash = hashOpaqueSecret(deviceSecret);
+
+  const session = await database.query.clientSessions.findFirst({
+    where: and(
+      eq(clientSessions.deviceId, deviceId),
+      eq(clientSessions.refreshTokenHash, refreshTokenHash),
+      isNull(clientSessions.revokedAt),
+      gt(clientSessions.refreshExpiresAt, now),
+    ),
+    columns: {
+      id: true,
+      deviceId: true,
+      userId: true,
+      organisationId: true,
+    },
+  });
+
+  if (!session) {
+    throw new ClientApiAuthError(
+      "AUTH_INVALID_REFRESH",
+      401,
+      "This Waste X Mobile refresh session is invalid or expired.",
+    );
+  }
+
+  const device = await database.query.clientDevices.findFirst({
+    where: and(
+      eq(clientDevices.id, session.deviceId),
+      eq(clientDevices.secretHash, deviceSecretHash),
+      eq(clientDevices.organisationId, session.organisationId),
+      eq(clientDevices.deviceType, "MOBILE"),
+      eq(clientDevices.status, "ACTIVE"),
+    ),
+    columns: {
+      id: true,
+      organisationId: true,
+      defaultSiteId: true,
+      displayName: true,
+      deviceType: true,
+      platform: true,
+      status: true,
+      createdAt: true,
+    },
+  });
+
+  if (!device) {
+    throw new ClientApiAuthError(
+      "DEVICE_UNAVAILABLE",
+      401,
+      "This Waste X Mobile installation is not authorised.",
+    );
+  }
+
+  const user = await database.query.users.findFirst({
+    where: and(
+      eq(users.id, session.userId),
+      eq(users.organisationId, session.organisationId),
+    ),
+    columns: {
+      id: true,
+      email: true,
+      role: true,
+      organisationId: true,
+      isActive: true,
+      isSuspended: true,
+      status: true,
+    },
+  });
+
+  if (
+    !user ||
+    !user.organisationId ||
+    !user.isActive ||
+    user.isSuspended ||
+    user.status === "SUSPENDED"
+  ) {
+    throw new ClientApiAuthError(
+      "ACCOUNT_UNAVAILABLE",
+      403,
+      "This Waste X account is unavailable.",
+    );
+  }
+
+  const organisation = await database.query.organisations.findFirst({
+    where: eq(organisations.id, session.organisationId),
+    columns: {
+      id: true,
+      isSuspended: true,
+      status: true,
+    },
+  });
+
+  if (
+    !organisation ||
+    organisation.isSuspended ||
+    organisation.status === "SUSPENDED" ||
+    organisation.status === "REJECTED"
+  ) {
+    throw new ClientApiAuthError(
+      "ORGANISATION_UNAVAILABLE",
+      403,
+      "This Waste X organisation is unavailable.",
+    );
+  }
+
+  const nextSessionToken = randomOpaqueSecret();
+  const nextRefreshToken = randomOpaqueSecret();
+  const expiresAt = new Date(now.getTime() + CLIENT_SESSION_TTL_MS);
+  const refreshExpiresAt = new Date(now.getTime() + CLIENT_REFRESH_TTL_MS);
+
+  await Promise.all([
+    database
+      .update(clientSessions)
+      .set({
+        tokenHash: hashOpaqueSecret(nextSessionToken),
+        expiresAt,
+        refreshTokenHash: hashOpaqueSecret(nextRefreshToken),
+        refreshExpiresAt,
+        lastSeenAt: now,
+      })
+      .where(eq(clientSessions.id, session.id)),
+    database
+      .update(clientDevices)
+      .set({ lastSeenAt: now, updatedAt: now })
+      .where(eq(clientDevices.id, device.id)),
+  ]);
+
+  return {
+    device,
+    user,
+    sessionToken: nextSessionToken,
+    expiresAt,
+    refreshToken: nextRefreshToken,
+    refreshExpiresAt,
   };
 }
 
