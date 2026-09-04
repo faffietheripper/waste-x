@@ -31,6 +31,7 @@ import {
   getMobileFieldWorkflowState,
   getNextMobileFieldWorkflowAction,
   humanFieldWorkflowStep,
+  isMobileAssignmentReadOnly,
   isMobileCollectionReady,
   MOBILE_FIELD_WORKFLOW_STEPS,
 } from "@/field-ops/workflow";
@@ -105,6 +106,10 @@ export default function MobileJobDetailScreen() {
 
   async function recordNextFieldAction() {
     if (!assignment) return;
+    if (isMobileAssignmentReadOnly(assignment)) {
+      setError("This field job is read only and can no longer be changed.");
+      return;
+    }
 
     const workflow = getMobileFieldWorkflowState(assignment);
     const action = getNextMobileFieldWorkflowAction(workflow.step);
@@ -210,13 +215,20 @@ export default function MobileJobDetailScreen() {
   const pending = syncStatus?.pending ?? 0;
   const workflow = getMobileFieldWorkflowState(assignment);
   const nextAction = getNextMobileFieldWorkflowAction(workflow.step);
-  const terminalLoad = ["completed", "rejected", "cancelled"].includes(
+  const readOnly = isMobileAssignmentReadOnly(assignment);
+  const canonicalTerminal = ["completed", "rejected", "cancelled", "canceled"].includes(
     assignment.load.status.toLowerCase(),
   );
+  const parentJobClosed = ["draft", "cancelled", "canceled"].includes(
+    assignment.job.status.toLowerCase(),
+  );
+  const fieldDelivered = workflow.step === "DELIVERED";
   const workflowIndex = MOBILE_FIELD_WORKFLOW_STEPS.indexOf(workflow.step);
   const collectionReady = isMobileCollectionReady(assignment);
-  const collectionGateActive = workflow.step === "ARRIVED_COLLECTION";
+  const collectionGateActive =
+    !readOnly && workflow.step === "ARRIVED_COLLECTION";
   const nextActionDisabled =
+    readOnly ||
     actionBusy ||
     (nextAction?.eventType === "FIELD_COLLECTED" && !collectionReady);
 
@@ -327,7 +339,7 @@ export default function MobileJobDetailScreen() {
             />
           ) : null}
 
-          {!terminalLoad && nextAction ? (
+          {!readOnly && nextAction ? (
             <View style={styles.actionBlock}>
               <Text style={styles.actionEyebrow}>NEXT ACTION</Text>
               <Text style={styles.actionTitle}>{nextAction.label}</Text>
@@ -360,12 +372,22 @@ export default function MobileJobDetailScreen() {
           ) : (
             <View style={styles.completeBlock}>
               <Text style={styles.completeTitle}>
-                {terminalLoad ? "This load is in a terminal state." : "Field journey complete."}
+                {parentJobClosed
+                  ? "This job is read only."
+                  : canonicalTerminal
+                    ? "This load is in a terminal state."
+                    : fieldDelivered
+                      ? "Field journey complete."
+                      : "No field action is available."}
               </Text>
               <Text style={styles.completeBody}>
-                {terminalLoad
-                  ? `Canonical load status: ${humanStatus(assignment.load.status)}.`
-                  : "The driver journey is delivered. Existing delivery notes and issues remain visible below while final Waste X compliance completion stays separate."}
+                {parentJobClosed
+                  ? `Job status: ${humanStatus(assignment.job.status)}. No further Mobile actions can be recorded.`
+                  : canonicalTerminal
+                    ? `Canonical load status: ${humanStatus(assignment.load.status)}.`
+                    : fieldDelivered
+                      ? "The driver journey is delivered. Existing delivery notes and issues remain visible below while final Waste X compliance completion stays separate."
+                      : "Waste X has no valid next field transition for this load."}
               </Text>
             </View>
           )}
