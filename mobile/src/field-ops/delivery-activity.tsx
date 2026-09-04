@@ -17,6 +17,7 @@ import { getLocalMobileAssignmentByLoadId } from "@/assignments/local-working-se
 import {
   getMobileFieldWorkflowState,
   humanFieldWorkflowStep,
+  isMobileAssignmentReadOnly,
 } from "@/field-ops/workflow";
 import {
   getMobileSyncStatus,
@@ -58,11 +59,14 @@ export function DeliveryActivityPanel({
   const [error, setError] = useState<string | null>(null);
 
   const workflow = getMobileFieldWorkflowState(assignment);
-  const terminalLoad = ["completed", "rejected", "cancelled"].includes(
+  const readOnly = isMobileAssignmentReadOnly(assignment);
+  const terminalLoad = ["completed", "rejected", "cancelled", "canceled"].includes(
     assignment.load.status.toLowerCase(),
   );
-  const fieldDelivered = workflow.step === "DELIVERED";
-  const canChange = !terminalLoad && !fieldDelivered;
+  const parentJobClosed = ["draft", "cancelled", "canceled"].includes(
+    assignment.job.status.toLowerCase(),
+  );
+  const canChange = !readOnly;
   const canAddDeliveryNote =
     canChange && workflow.step === "ARRIVED_DESTINATION";
   const activity = [...(assignment.fieldActivity ?? [])].sort((left, right) =>
@@ -301,9 +305,11 @@ export function DeliveryActivityPanel({
         <View style={styles.closedCard}>
           <Text style={styles.closedTitle}>Field record closed.</Text>
           <Text style={styles.closedBody}>
-            {terminalLoad
-              ? `Canonical load status: ${assignment.load.status}.`
-              : "This driver journey has been delivered. Existing activity remains visible above."}
+            {parentJobClosed
+              ? `Job status: ${assignment.job.status}.`
+              : terminalLoad
+                ? `Canonical load status: ${assignment.load.status}.`
+                : "This driver journey has been delivered. Existing activity remains visible above."}
           </Text>
         </View>
       )}
