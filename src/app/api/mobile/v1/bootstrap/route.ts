@@ -51,7 +51,23 @@ const FIELD_WORKFLOW_EVENT_TYPES = [
   "FIELD_DELIVERED",
 ] as const;
 
+const FIELD_ACTIVITY_EVENT_TYPES = [
+  "FIELD_DELIVERY_NOTE_ADDED",
+  "FIELD_ISSUE_REPORTED",
+] as const;
+
+const FIELD_ISSUE_TYPES = [
+  "DELAY",
+  "SITE_ACCESS",
+  "WASTE_MISMATCH",
+  "VEHICLE",
+  "SAFETY",
+  "OTHER",
+] as const;
+
 type FieldWorkflowEventType = (typeof FIELD_WORKFLOW_EVENT_TYPES)[number];
+type FieldActivityEventType = (typeof FIELD_ACTIVITY_EVENT_TYPES)[number];
+type FieldIssueType = (typeof FIELD_ISSUE_TYPES)[number];
 type FieldWorkflowStep =
   | "ASSIGNED"
   | "STARTED"
@@ -81,6 +97,13 @@ function fieldWorkflowStepForEvent(eventType: string): FieldWorkflowStep | null 
     default:
       return null;
   }
+}
+
+function isFieldIssueType(value: unknown): value is FieldIssueType {
+  return (
+    typeof value === "string" &&
+    (FIELD_ISSUE_TYPES as readonly string[]).includes(value)
+  );
 }
 
 function unique(values: Array<string | null | undefined>) {
@@ -280,6 +303,7 @@ export async function GET(request: Request) {
       versionRows,
       workflowRows,
       confirmationRows,
+      activityRows,
     ] = await Promise.all([
       vehicleIds.length
         ? database
@@ -397,6 +421,29 @@ export async function GET(request: Request) {
             )
             .orderBy(asc(syncEventInbox.occurredAt), asc(syncEventInbox.receivedAt))
         : Promise.resolve([]),
+      loadIds.length
+        ? database
+            .select({
+              entityId: syncEventInbox.entityId,
+              eventType: syncEventInbox.eventType,
+              payload: syncEventInbox.payload,
+              occurredAt: syncEventInbox.occurredAt,
+            })
+            .from(syncEventInbox)
+            .where(
+              and(
+                eq(syncEventInbox.organisationId, context.organisationId),
+                eq(syncEventInbox.entityType, "job_load"),
+                eq(syncEventInbox.resultStatus, "APPLIED"),
+                inArray(syncEventInbox.entityId, loadIds),
+                inArray(
+                  syncEventInbox.eventType,
+                  FIELD_ACTIVITY_EVENT_TYPES as unknown as string[],
+                ),
+              ),
+            )
+            .orderBy(asc(syncEventInbox.occurredAt), asc(syncEventInbox.receivedAt))
+        : Promise.resolve([]),
     ]);
 
     const vehiclesById = new Map(vehicleRows.map((row) => [row.id, row]));
@@ -423,6 +470,15 @@ export async function GET(request: Request) {
         quantityConfirmedAt: string | null;
         manualWeightRecordedAt: string | null;
       }
+    >();
+    const fieldActivityByLoadId = new Map<
+      string,
+      Array<{
+        eventType: FieldActivityEventType;
+        occurredAt: string;
+        text: string;
+        issueType: FieldIssueType | null;
+      }>
     >();
 
     for (const row of workflowRows) {
@@ -456,6 +512,46 @@ export async function GET(request: Request) {
       collectionChecksByLoadId.set(row.entityId, checks);
     }
 
+    for (const row of activityRows) {
+      if (!row.payload || typeof row.payload !== "object") continue;
+      const occurredAt = row.occurredAt.toISOString();
+      const activity = fieldActivityByLoadId.get(row.entityId) ?? [];
+
+      if (row.eventType === "FIELD_DELIVERY_NOTE_ADDED") {
+        const note = (row.payload as { note?: unknown }).note;
+        if (typeof note !== "string" || !note.trim()) continue;
+        activity.push({
+          eventType: "FIELD_DELIVERY_NOTE_ADDED",
+          occurredAt,
+          text: note.trim(),
+          issueType: null,
+        });
+        fieldActivityByLoadId.set(row.entityId, activity);
+        continue;
+      }
+
+      if (row.eventType === "FIELD_ISSUE_REPORTED") {
+        const payload = row.payload as {
+          issueType?: unknown;
+          summary?: unknown;
+        };
+        if (
+          !isFieldIssueType(payload.issueType) ||
+          typeof payload.summary !== "string" ||
+          !payload.summary.trim()
+        ) {
+          continue;
+        }
+        activity.push({
+          eventType: "FIELD_ISSUE_REPORTED",
+          occurredAt,
+          text: payload.summary.trim(),
+          issueType: payload.issueType,
+        });
+        fieldActivityByLoadId.set(row.entityId, activity);
+      }
+    }
+
     const assignments = assignmentRows.map((row) => {
       const effectiveDriverId = row.loadDriverId ?? row.jobDriverId;
       const effectiveVehicleId = row.loadVehicleId ?? row.jobVehicleId;
@@ -465,7 +561,7 @@ export async function GET(request: Request) {
       const ownSiteId = row.loadOwnSiteId ?? row.jobOwnSiteId;
       const thirdPartyDestinationSiteId =
         row.loadThirdPartyDestinationSiteId ??
-        row.jobThirdPartyDestinationSiteId;
+          row.jobThirdPartyDestinationSiteId;
       const direction = row.loadDirection ?? row.jobDirection;
 
       const ownSite = ownSiteId ? ownSitesById.get(ownSiteId) ?? null : null;
@@ -522,6 +618,7 @@ export async function GET(request: Request) {
         quantityConfirmedAt: null,
         manualWeightRecordedAt: null,
       };
+      const fieldActivity = fieldActivityByLoadId.get(row.loadId) ?? [];
 
       return {
         job: {
@@ -567,6 +664,7 @@ export async function GET(request: Request) {
         destination,
         workflow,
         collectionChecks,
+        fieldActivity,
       };
     });
 
