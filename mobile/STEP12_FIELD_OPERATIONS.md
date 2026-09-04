@@ -45,6 +45,12 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
 - [x] Offline operation foundation reused from Step 11
 - [x] Operational outbox foundation reused from Step 11
 - [x] Opportunistic automatic sync when an authenticated Mobile field workspace reconciles with Cloud
+- [x] Development E2E certification harness
+  - [x] Pins one real Job/Load identity in encrypted local metadata
+  - [x] Requires offline queued-event checkpoint
+  - [x] Detects a real app-process restart before granting restart proof
+  - [x] Authenticated Cloud probe verifies exact Job/Load identity
+  - [x] Cloud field-state mirror is checked against Mobile field progress
 - [ ] Full Web/Desktop update proof from the same job/load record
 
 ## Build sequence
@@ -86,11 +92,14 @@ Mobile reads its authorised SQLCipher working set first and writes operational a
    - Assigned cancelled jobs/loads remain in the 14-day Mobile working set so the Cancelled tab is backed by real Cloud data rather than an unreachable UI state.
    - A field journey at DELIVERED is treated as completed driver work in Mobile while canonical waste/compliance status remains separately visible.
 
-6. **12.7 — End-to-end certification**
+6. **12.7 — End-to-end certification** 🚧 harness implemented / real run pending
    - Create or uniquely link a real Driver to the signed-in Mobile account.
-   - Web assigns an existing job/load to that Driver and vehicle.
+   - Web assigns a normal job/load to that Driver and vehicle.
    - Mobile receives/caches the same job/load IDs.
-   - Phone works offline and survives restart.
+   - Phone works offline and survives a real process restart.
    - Run the full field journey, collection confirmations, delivery note and issue path with actions queued locally.
    - Reconnect through Cloud or trusted Bridge transport.
-   - Confirm Web/Desktop show the same record, notes, weights and terminal field state with no duplicate event identity.
+   - `bb_job_load_field_state` keeps current driver progress separate from compliance status while mirroring that state into the normal job_load change-feed payload for Desktop.
+   - Development Account UI verifies local identity, restart persistence, queue drain, Cloud identity and Cloud field-state parity.
+   - Final pass still requires Web/Desktop same-record verification using the real certification Job/Load.
+   - Full runbook: `mobile/STEP12_E2E_CERTIFICATION.md`.
