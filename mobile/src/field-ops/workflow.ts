@@ -65,7 +65,7 @@ const ACTIONS: Record<
     fromStep: "ARRIVED_DESTINATION",
     toStep: "DELIVERED",
     label: "Confirm delivery",
-    helper: "Record field delivery. Delivery evidence/notes are added in the next field slice.",
+    helper: "Add any delivery note you need, then record the driver journey as delivered.",
   },
 };
 
@@ -81,6 +81,19 @@ const EVENT_TO_STEP: Record<
   FIELD_ARRIVED_DESTINATION: "ARRIVED_DESTINATION",
   FIELD_DELIVERED: "DELIVERED",
 };
+
+const TERMINAL_LOAD_STATUSES = new Set([
+  "completed",
+  "rejected",
+  "cancelled",
+  "canceled",
+]);
+
+const NON_OPERATIONAL_JOB_STATUSES = new Set([
+  "draft",
+  "cancelled",
+  "canceled",
+]);
 
 export const MOBILE_FIELD_WORKFLOW_EVENT_TYPES = Object.keys(
   EVENT_TO_STEP,
@@ -108,6 +121,14 @@ export function getMobileFieldWorkflowState(
     updatedAt: assignment.load.movementAt,
     lastEventType: null,
   };
+}
+
+export function isMobileAssignmentReadOnly(assignment: MobileAssignmentV1) {
+  return (
+    TERMINAL_LOAD_STATUSES.has(assignment.load.status.toLowerCase()) ||
+    NON_OPERATIONAL_JOB_STATUSES.has(assignment.job.status.toLowerCase()) ||
+    getMobileFieldWorkflowState(assignment).step === "DELIVERED"
+  );
 }
 
 export function getMobileCollectionChecks(
@@ -138,6 +159,10 @@ export function applyMobileFieldWorkflowEvent(
   eventType: MobileFieldWorkflowEventTypeV1,
   occurredAt: string,
 ) {
+  if (isMobileAssignmentReadOnly(assignment)) {
+    throw new Error("This field job is read only and can no longer be changed.");
+  }
+
   const current = getMobileFieldWorkflowState(assignment);
   const action = getNextMobileFieldWorkflowAction(current.step);
 
