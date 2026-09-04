@@ -1,7 +1,12 @@
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 
-import { clientDevices } from "@/db/client-sync-schema";
+import { clientDevices, syncChangeFeed } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
+import {
+  jobLoadFieldStates,
+  type JobLoadFieldEventType,
+  type JobLoadFieldStep,
+} from "@/db/mobile-field-schema";
 import { drivers, jobLoads, jobs, users } from "@/db/schema";
 import {
   ClientApiAuthError,
@@ -36,6 +41,20 @@ const MOBILE_EVENT_TYPES = new Set([
   "FIELD_DELIVERY_NOTE_ADDED",
   "FIELD_ISSUE_REPORTED",
 ]);
+
+const FIELD_EVENT_STEPS: Record<JobLoadFieldEventType, JobLoadFieldStep> = {
+  FIELD_JOB_STARTED: "STARTED",
+  FIELD_EN_ROUTE: "EN_ROUTE",
+  FIELD_ARRIVED_COLLECTION: "ARRIVED_COLLECTION",
+  FIELD_COLLECTED: "COLLECTED",
+  FIELD_IN_TRANSIT: "IN_TRANSIT",
+  FIELD_ARRIVED_DESTINATION: "ARRIVED_DESTINATION",
+  FIELD_DELIVERED: "DELIVERED",
+};
+
+function isFieldWorkflowEvent(value: string): value is JobLoadFieldEventType {
+  return value in FIELD_EVENT_STEPS;
+}
 
 async function resolveMobileDriver(context: {
   userId: string;
@@ -111,6 +130,98 @@ async function isAssignedLoad(
     .limit(1);
 
   return Boolean(assignment);
+}
+
+async function ensureFieldStateMirror({
+  organisationId,
+  entityId,
+  eventType,
+  occurredAt,
+  entityVersion,
+}: {
+  organisationId: string;
+  entityId: string;
+  eventType: string;
+  occurredAt: string;
+  entityVersion: number | null;
+}) {
+  if (!isFieldWorkflowEvent(eventType) || entityVersion === null) return;
+
+  const step = FIELD_EVENT_STEPS[eventType];
+  const occurred = new Date(occurredAt);
+
+  await database.transaction(async (tx) => {
+    const existing = await tx.query.jobLoadFieldStates.findFirst({
+      where: and(
+        eq(jobLoadFieldStates.jobLoadId, entityId),
+        eq(jobLoadFieldStates.organisationId, organisationId),
+      ),
+    });
+
+    if (
+      existing?.step === step &&
+      existing.lastEventType === eventType &&
+      existing.occurredAt?.toISOString() === occurred.toISOString()
+    ) {
+      return;
+    }
+
+    const load = await tx.query.jobLoads.findFirst({
+      where: and(
+        eq(jobLoads.id, entityId),
+        eq(jobLoads.organisationId, organisationId),
+      ),
+    });
+    if (!load) throw new Error("MOBILE_FIELD_MIRROR_LOAD_NOT_FOUND");
+
+    const parentJob = await tx.query.jobs.findFirst({
+      where: and(
+        eq(jobs.id, load.jobId),
+        eq(jobs.organisationId, organisationId),
+      ),
+      columns: { ownSiteId: true },
+    });
+
+    const now = new Date();
+    await tx
+      .insert(jobLoadFieldStates)
+      .values({
+        jobLoadId: entityId,
+        organisationId,
+        step,
+        lastEventType: eventType,
+        occurredAt: occurred,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: jobLoadFieldStates.jobLoadId,
+        set: {
+          organisationId,
+          step,
+          lastEventType: eventType,
+          occurredAt: occurred,
+          updatedAt: now,
+        },
+      });
+
+    await tx.insert(syncChangeFeed).values({
+      organisationId,
+      siteId: load.ownSiteId ?? parentJob?.ownSiteId ?? null,
+      entityType: "job_load",
+      entityId,
+      entityVersion,
+      changeType: "UPSERT",
+      payload: {
+        ...load,
+        fieldWorkflow: {
+          step,
+          updatedAt: occurredAt,
+          lastEventType: eventType,
+        },
+      },
+      changedAt: now,
+    });
+  });
 }
 
 async function runPostApplyHooks({
@@ -265,6 +376,34 @@ export async function POST(request: Request) {
       const preflightResult = await preflightSyncEvent(context, event);
       const eventResult =
         preflightResult ?? (await processSyncEvent(context, event));
+
+      if (
+        (eventResult.status === "APPLIED" || eventResult.status === "DUPLICATE") &&
+        isFieldWorkflowEvent(event.eventType)
+      ) {
+        try {
+          await ensureFieldStateMirror({
+            organisationId: context.organisationId,
+            entityId: event.entityId,
+            eventType: event.eventType,
+            occurredAt: event.occurredAt,
+            entityVersion: eventResult.entityVersion,
+          });
+        } catch (error) {
+          console.error("[MOBILE_SYNC] Field-state mirror pending", {
+            eventId: event.eventId,
+            error,
+          });
+          results.push({
+            eventId: event.eventId,
+            status: "RETRYABLE_ERROR" as const,
+            entityVersion: eventResult.entityVersion,
+            reasonCode: "FIELD_STATE_MIRROR_PENDING",
+          });
+          continue;
+        }
+      }
+
       results.push(eventResult);
 
       if (eventResult.status === "APPLIED") {
