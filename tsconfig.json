@@ -23,13 +23,13 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     ".next/types/**/*.ts",
     "src/components/landingpage/FullHomePage.tsx",
     "src/components/app/ActivityNav.tsx",
     "src/components/app/BidForm.jsx",
     "src/components/app/NotificationsClient.tsx"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "desktop", "mobile", "packages"]
 }

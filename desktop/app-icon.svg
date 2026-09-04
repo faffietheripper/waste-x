@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Waste X Desktop</title>
+  <desc id="desc">Waste X monogram app icon</desc>
+  <rect width="512" height="512" rx="112" fill="#0f172a"/>
+  <path d="M104 146h72l48 162 40-132h56l40 132 48-162h72L396 366h-72l-32-108-32 108h-72L104 146Z" fill="#f8fafc"/>
+  <path d="M342 154h58l-48 66 52 74h-60l-24-38-24 38h-60l52-74-48-66h58l22 34 22-34Z" fill="#22c55e"/>
+</svg>

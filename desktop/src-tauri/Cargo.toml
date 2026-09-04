@@ -1,0 +1,32 @@
+[package]
+name = "waste-x-desktop"
+version = "0.1.0"
+description = "Waste X Desktop"
+authors = ["Waste X"]
+edition = "2021"
+default-run = "waste-x-desktop"
+
+[lib]
+name = "waste_x_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+argon2 = "0.5.3"
+base64 = "0.22.1"
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
+rand = "0.8.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+tauri = { version = "2.11.5", features = [] }
+tiny_http = "0.12.0"
+uuid = { version = "1.18.1", features = ["v7"] }

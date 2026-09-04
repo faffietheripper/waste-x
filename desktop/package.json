@@ -1,0 +1,33 @@
+{
+  "name": "@waste-x/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "check": "tsc -b --pretty false",
+    "tauri": "tauri",
+    "icons": "tauri icon app-icon.png",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "npm run icons && tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@waste-x/api-client": "file:../packages/api-client",
+    "@waste-x/contracts": "file:../packages/contracts",
+    "@waste-x/operations-core": "file:../packages/operations-core",
+    "@waste-x/validation": "file:../packages/validation",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^5.8.3",
+    "vite": "^8.1.0"
+  }
+}
