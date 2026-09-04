@@ -98,6 +98,10 @@ export async function POST(request: Request) {
         token: session.sessionToken,
         expiresAt: session.expiresAt.toISOString(),
       },
+      refresh: {
+        token: session.refreshToken,
+        expiresAt: session.refreshExpiresAt.toISOString(),
+      },
       user: {
         id: user.id,
         email: user.email,
