@@ -5,12 +5,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
-import { logoutMobile } from "@/auth/mobile-auth";
+import { loginMobile, logoutMobile } from "@/auth/mobile-auth";
 import { MobileCertificationPanel } from "@/field-ops/certification-panel";
 import {
   WasteXHeader,
@@ -30,7 +31,36 @@ export default function AccountScreen() {
     refresh,
   } = useFieldOps();
   const [busy, setBusy] = useState(false);
+  const [reconnectBusy, setReconnectBusy] = useState(false);
+  const [reconnectPassword, setReconnectPassword] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+
+  async function reconnectCloud() {
+    const email = auth?.profile?.email?.trim();
+    if (!email) {
+      setActionError("Waste X could not resolve the email for this registered Mobile user.");
+      return;
+    }
+    if (!reconnectPassword) {
+      setActionError("Enter your Waste X password to reconnect this phone to Cloud.");
+      return;
+    }
+
+    setReconnectBusy(true);
+    setActionError(null);
+    try {
+      await loginMobile({
+        email,
+        password: reconnectPassword,
+      });
+      setReconnectPassword("");
+      await refresh();
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setReconnectBusy(false);
+    }
+  }
 
   async function signOut() {
     setBusy(true);
@@ -140,17 +170,49 @@ export default function AccountScreen() {
           />
         </View>
 
+        {auth?.provisioned && !auth.onlineAuthenticated ? (
+          <View style={styles.reconnectCard}>
+            <Text style={styles.reconnectEyebrow}>CLOUD SESSION</Text>
+            <Text style={styles.reconnectTitle}>Reconnect to Waste X Cloud</Text>
+            <Text style={styles.reconnectCopy}>
+              Offline work stays available on this phone. Enter your normal Waste X password to renew the Cloud session and refresh assigned jobs.
+            </Text>
+            <Text style={styles.reconnectEmail}>{auth.profile?.email ?? "—"}</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!reconnectBusy}
+              onChangeText={setReconnectPassword}
+              onSubmitEditing={() => void reconnectCloud()}
+              placeholder="Waste X password"
+              placeholderTextColor="#94a3b8"
+              secureTextEntry
+              style={styles.reconnectInput}
+              value={reconnectPassword}
+            />
+            <Pressable
+              disabled={reconnectBusy}
+              onPress={() => void reconnectCloud()}
+              style={styles.reconnectButton}
+            >
+              <Text style={styles.reconnectButtonText}>
+                {reconnectBusy ? "Reconnecting…" : "Reconnect Cloud"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         {__DEV__ ? (
           <MobileCertificationPanel online={Boolean(auth?.onlineAuthenticated)} />
         ) : null}
 
-        <Pressable disabled={busy} onPress={() => void refresh()} style={styles.secondaryButton}>
+        <Pressable disabled={busy || reconnectBusy} onPress={() => void refresh()} style={styles.secondaryButton}>
           <Text style={styles.secondaryButtonText}>
             {refreshing ? "Refreshing…" : "Refresh field workspace"}
           </Text>
         </Pressable>
 
-        <Pressable disabled={busy} onPress={signOut} style={styles.signOutButton}>
+        <Pressable disabled={busy || reconnectBusy} onPress={signOut} style={styles.signOutButton}>
           <Text style={styles.signOutText}>{busy ? "Signing out…" : "Sign out"}</Text>
         </Pressable>
 
@@ -265,6 +327,62 @@ const styles = StyleSheet.create({
   },
   infoGood: { color: "#15803d" },
   infoWarning: { color: "#c2410c" },
+  reconnectCard: {
+    marginTop: 18,
+    padding: 17,
+    borderRadius: 18,
+    backgroundColor: "#fff7ed",
+    borderWidth: 1,
+    borderColor: "#fed7aa",
+  },
+  reconnectEyebrow: {
+    color: "#ea580c",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+  reconnectTitle: {
+    marginTop: 7,
+    color: "#111827",
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  reconnectCopy: {
+    marginTop: 7,
+    color: "#64748b",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  reconnectEmail: {
+    marginTop: 12,
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  reconnectInput: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#fdba74",
+    borderRadius: 13,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    backgroundColor: "#ffffff",
+    color: "#111827",
+    fontSize: 14,
+  },
+  reconnectButton: {
+    marginTop: 10,
+    minHeight: 46,
+    borderRadius: 13,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  reconnectButtonText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
   secondaryButton: {
     marginTop: 18,
     minHeight: 48,
