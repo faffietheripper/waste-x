@@ -72,16 +72,24 @@ export const clientSessions = pgTable(
       .references(() => organisations.id, { onDelete: "cascade" }),
     tokenHash: text("tokenHash").notNull(),
     expiresAt: timestamp("expiresAt", { mode: "date" }).notNull(),
+    refreshTokenHash: text("refreshTokenHash"),
+    refreshExpiresAt: timestamp("refreshExpiresAt", { mode: "date" }),
     lastSeenAt: timestamp("lastSeenAt", { mode: "date" }),
     revokedAt: timestamp("revokedAt", { mode: "date" }),
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
   },
   (table) => ({
     tokenUnique: uniqueIndex("client_session_token_unique").on(table.tokenHash),
+    refreshTokenUnique: uniqueIndex("client_session_refresh_token_unique").on(
+      table.refreshTokenHash,
+    ),
     deviceIdx: index("client_session_device_idx").on(table.deviceId),
     userIdx: index("client_session_user_idx").on(table.userId),
     orgIdx: index("client_session_org_idx").on(table.organisationId),
     expiryIdx: index("client_session_expiry_idx").on(table.expiresAt),
+    refreshExpiryIdx: index("client_session_refresh_expiry_idx").on(
+      table.refreshExpiresAt,
+    ),
   }),
 );
 
