@@ -33,6 +33,8 @@ const MOBILE_EVENT_TYPES = new Set([
   "FIELD_IN_TRANSIT",
   "FIELD_ARRIVED_DESTINATION",
   "FIELD_DELIVERED",
+  "FIELD_DELIVERY_NOTE_ADDED",
+  "FIELD_ISSUE_REPORTED",
 ]);
 
 async function resolveMobileDriver(context: {
