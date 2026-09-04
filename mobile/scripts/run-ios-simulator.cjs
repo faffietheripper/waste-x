@@ -1,6 +1,7 @@
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 
 const MOBILE_ROOT = path.resolve(__dirname, "..");
@@ -14,6 +15,8 @@ const APP_PATH = path.join(
   "WasteX.app",
 );
 const BUNDLE_ID = "com.wastex.mobile";
+const METRO_URL = "http://127.0.0.1:8081";
+const METRO_LOG = path.join(os.tmpdir(), "waste-x-mobile-metro.log");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -42,16 +45,22 @@ function capture(command, args) {
   return result.stdout;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function metroIsReady() {
   return new Promise((resolve) => {
-    const request = http.get("http://127.0.0.1:8081/status", (response) => {
+    const request = http.get(`${METRO_URL}/status`, (response) => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => {
         body += chunk;
       });
       response.on("end", () => {
-        resolve(response.statusCode === 200 && body.includes("packager-status:running"));
+        resolve(
+          response.statusCode === 200 && body.includes("packager-status:running"),
+        );
       });
     });
 
@@ -61,6 +70,81 @@ function metroIsReady() {
     });
     request.on("error", () => resolve(false));
   });
+}
+
+function printMetroLog() {
+  console.error(`\nMetro log: ${METRO_LOG}`);
+  try {
+    const contents = fs.readFileSync(METRO_LOG, "utf8").trim();
+    if (!contents) {
+      console.error("Metro exited without writing a log.");
+      return;
+    }
+    const lines = contents.split(/\r?\n/);
+    console.error("\n--- Metro log (last 80 lines) ---");
+    console.error(lines.slice(-80).join("\n"));
+    console.error("--- end Metro log ---\n");
+  } catch (error) {
+    console.error(
+      `Could not read Metro log: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function ensureMetro() {
+  if (await metroIsReady()) {
+    console.log(`Waste X Metro is already running on ${METRO_URL}.`);
+    return;
+  }
+
+  const expoBin = path.join(MOBILE_ROOT, "node_modules", ".bin", "expo");
+  if (!fs.existsSync(expoBin)) {
+    console.error("Waste X Mobile dependencies are not installed.");
+    console.error("Run `npm run mobile:install` from the Waste X repo root.");
+    process.exit(1);
+  }
+
+  console.log(`Waste X Metro is not running. Starting it automatically on ${METRO_URL}…`);
+  fs.writeFileSync(METRO_LOG, "", "utf8");
+  const logFd = fs.openSync(METRO_LOG, "a");
+
+  const metro = spawn(
+    expoBin,
+    ["start", "--dev-client", "--localhost", "--port", "8081"],
+    {
+      cwd: MOBILE_ROOT,
+      env: {
+        ...process.env,
+        CI: "1",
+      },
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+    },
+  );
+
+  fs.closeSync(logFd);
+  metro.unref();
+
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (await metroIsReady()) {
+      console.log(`Waste X Metro is ready on ${METRO_URL} (pid ${metro.pid}).`);
+      return;
+    }
+
+    try {
+      process.kill(metro.pid, 0);
+    } catch {
+      console.error("Waste X Metro exited before becoming ready.");
+      printMetroLog();
+      process.exit(1);
+    }
+
+    await sleep(500);
+  }
+
+  console.error("Waste X Metro did not become ready within 45 seconds.");
+  printMetroLog();
+  process.exit(1);
 }
 
 function selectSimulator() {
@@ -91,17 +175,14 @@ function selectSimulator() {
 
 async function main() {
   if (!fs.existsSync(WORKSPACE)) {
+    console.error("Waste X iOS workspace is missing.");
     console.error(
-      "Waste X iOS workspace is missing. Run `cd mobile && npx expo prebuild --clean` first.",
+      "Do not clean/rebuild the simulator state. Restore/generate the native workspace only if it is genuinely absent.",
     );
     process.exit(1);
   }
 
-  if (!(await metroIsReady())) {
-    console.error("\nWaste X Metro is not running on http://localhost:8081.");
-    console.error("Start it in another terminal with: npm run mobile:start\n");
-    process.exit(1);
-  }
+  await ensureMetro();
 
   const simulator = selectSimulator();
   console.log(`Using ${simulator.name} (${simulator.udid})`);
@@ -138,10 +219,11 @@ async function main() {
     BUNDLE_ID,
   ]);
 
-  console.log("\nWaste X launched successfully. Metro remains on http://localhost:8081.\n");
+  console.log(`\nWaste X launched successfully. Metro is available on ${METRO_URL}.\n`);
 }
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
+  printMetroLog();
   process.exit(1);
 });
