@@ -21,6 +21,7 @@ import {
   type MobileAuthSnapshot,
 } from "@/auth/mobile-auth";
 import { CollectionConfirmationPanel } from "@/field-ops/collection-confirmation";
+import { DeliveryActivityPanel } from "@/field-ops/delivery-activity";
 import {
   formatAssignmentDate,
   formatWeight,
@@ -364,10 +365,22 @@ export default function MobileJobDetailScreen() {
               <Text style={styles.completeBody}>
                 {terminalLoad
                   ? `Canonical load status: ${humanStatus(assignment.load.status)}.`
-                  : "Collection quantity is preserved on the same load. Delivery evidence and final compliance completion are handled by the next field-operation slice."}
+                  : "The driver journey is delivered. Existing delivery notes and issues remain visible below while final Waste X compliance completion stays separate."}
               </Text>
             </View>
           )}
+        </Section>
+
+        <Section title="Delivery & issues">
+          <DeliveryActivityPanel
+            assignment={assignment}
+            online={Boolean(auth?.onlineAuthenticated)}
+            onAssignmentChange={(updated) => {
+              setAssignment(updated);
+              setError(null);
+            }}
+            onSyncStatusChange={setSyncStatus}
+          />
         </Section>
 
         <Section title="Route">
@@ -463,7 +476,7 @@ export default function MobileJobDetailScreen() {
           <View style={styles.flexOne}>
             <Text style={styles.localFirstTitle}>Local-first operational record</Text>
             <Text style={styles.localFirstBody}>
-              Viewing, confirming waste/quantity and advancing this journey all use the authorised SQLCipher record on this phone first. Every event keeps the same Waste X load ID for Cloud or trusted Bridge delivery.
+              Viewing, confirming waste/quantity, recording delivery notes/issues and advancing this journey all use the authorised SQLCipher record on this phone first. Every event keeps the same Waste X load ID for Cloud or trusted Bridge delivery.
             </Text>
           </View>
         </View>
