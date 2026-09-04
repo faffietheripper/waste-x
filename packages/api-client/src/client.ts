@@ -15,6 +15,8 @@ import type {
   MobileOfflineEntitlementResponseV1,
   MobileProvisionRequestV1,
   MobileProvisionResponseV1,
+  MobileRefreshRequestV1,
+  MobileRefreshResponseV1,
   SyncPullRequestV1,
   SyncPullResponseV1,
   SyncPushRequestV1,
@@ -103,6 +105,15 @@ export class WasteXApiClient {
     );
   }
 
+  refreshMobile(body: MobileRefreshRequestV1) {
+    return this.request<MobileRefreshResponseV1>(
+      "/api/mobile/v1/auth/refresh",
+      { method: "POST", body: JSON.stringify(body) },
+      false,
+      true,
+    );
+  }
+
   offlineEntitlementMobile() {
     return this.request<MobileOfflineEntitlementResponseV1>(
       "/api/mobile/v1/auth/offline-entitlement",
@@ -183,13 +194,16 @@ export class WasteXApiClient {
     path: string,
     init: RequestInit = {},
     authenticated = true,
+    deviceOnly = false,
   ): Promise<T> {
-    const [token, deviceSecret] = authenticated
-      ? await Promise.all([
-          this.getAccessToken?.() ?? Promise.resolve(null),
-          this.getDeviceSecret?.() ?? Promise.resolve(null),
-        ])
-      : [null, null];
+    const [token, deviceSecret] = await Promise.all([
+      authenticated
+        ? this.getAccessToken?.() ?? Promise.resolve(null)
+        : Promise.resolve(null),
+      authenticated || deviceOnly
+        ? this.getDeviceSecret?.() ?? Promise.resolve(null)
+        : Promise.resolve(null),
+    ]);
 
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
