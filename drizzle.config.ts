@@ -18,8 +18,9 @@ export default defineConfig({
     "./src/db/commercial-schema.ts",
     "./src/db/returns-schema.ts",
     "./src/db/carbon-schema.ts",
+    "./src/db/mobile-field-schema.ts",
   ],
-  
+
   dialect: "postgresql",
   out: "./drizzle/migrations",
   dbCredentials: {
