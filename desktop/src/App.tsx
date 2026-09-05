@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { TicketPanel } from "./TicketPanel";
+
 type LocalDbStatus = {
   ready: boolean;
   encrypted: boolean;
@@ -160,7 +162,6 @@ type EditState = {
   tareWeight: string;
   netWeight: string;
   weightMetric: string;
-  ticketNumber: string;
   notes: string;
 };
 
@@ -173,7 +174,6 @@ function editStateFor(load: DailyLoad): EditState {
     tareWeight: load.tareWeight ?? "",
     netWeight: load.netWeight ?? "",
     weightMetric: load.weightMetric || "Tonnes",
-    ticketNumber: load.ticketNumber ?? "",
     notes: load.notes ?? "",
   };
 }
@@ -409,7 +409,7 @@ export function App() {
         netWeight: numberOrNull(edit.netWeight),
         weightMetric: edit.weightMetric,
         weightIsEstimate: false,
-        ticketNumber: edit.ticketNumber || null,
+        ticketNumber: selectedLoad.ticketNumber,
         notes: edit.notes || null,
       },
     }), "Load details saved locally and queued for Cloud sync.");
@@ -567,7 +567,7 @@ export function App() {
                   <div className="load-title"><strong>{load.jobNumber || "Job"} · Load {load.loadNumber ?? "—"}</strong><span className={`status-pill status-${load.status}`}>{load.status}</span></div>
                   <span>{load.direction} · {load.jobDate ?? "No date"} · {load.ewcCode ?? "No EWC"}</span>
                   <span>{load.wasteDescription || "Waste description required"}</span>
-                  <span className="load-foot">Net {load.netWeight ?? "—"} {load.weightMetric} {load.pendingEvents > 0 ? `· ${load.pendingEvents} local change${load.pendingEvents === 1 ? "" : "s"}` : ""}</span>
+                  <span className="load-foot">Net {load.netWeight ?? "—"} {load.weightMetric}{load.ticketNumber ? ` · Ticket ${load.ticketNumber}` : " · Ticket pending"}{load.pendingEvents > 0 ? ` · ${load.pendingEvents} local change${load.pendingEvents === 1 ? "" : "s"}` : ""}</span>
                 </button>
               ))}
               {!operations?.loads.length ? <div className="empty-state">No operational loads are cached on this Desktop.</div> : null}
@@ -585,15 +585,30 @@ export function App() {
                     <label><span>Tare</span><input inputMode="decimal" value={edit.tareWeight} onChange={(e) => setEdit({ ...edit, tareWeight: e.target.value })} /></label>
                     <label><span>Net</span><input inputMode="decimal" value={edit.netWeight} onChange={(e) => setEdit({ ...edit, netWeight: e.target.value })} /></label>
                     <label><span>Metric</span><select value={edit.weightMetric} onChange={(e) => setEdit({ ...edit, weightMetric: e.target.value })}><option>Tonnes</option><option>Kilograms</option><option>Grams</option></select></label>
-                    <label className="wide"><span>Ticket number</span><input value={edit.ticketNumber} onChange={(e) => setEdit({ ...edit, ticketNumber: e.target.value })} /></label>
+                    <label className="wide"><span>Ticket authority</span><input disabled value={selectedLoad.ticketNumber ?? "Issued by management/site after Driver delivery"} /></label>
                     <label className="wide"><span>Notes</span><textarea rows={3} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
                     <button disabled={busy || ["completed", "rejected", "cancelled"].includes(selectedLoad.status)}>Save locally</button>
                   </form>
+
+                  <TicketPanel
+                    loadId={selectedLoad.id}
+                    disabled={busy}
+                    onChanged={refreshLocalState}
+                  />
+
                   <div className="action-row">
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" ? <button disabled={busy} onClick={() => loadAction("desktop_mark_load_arrived", "Arrival recorded locally and queued for sync.")}>Mark Arrived</button> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button disabled={busy} onClick={() => loadAction("desktop_accept_load", "Load accepted locally and queued for sync.")}>Accept</button> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button className="danger-button" disabled={busy} onClick={rejectLoad}>Reject</button> : null}
-                    {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? <button disabled={busy} onClick={() => loadAction("desktop_complete_load", "Load completed locally and queued for sync.")}>Complete Load</button> : null}
+                    {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? (
+                      <button
+                        disabled={busy || !selectedLoad.ticketNumber}
+                        title={selectedLoad.ticketNumber ? "Complete this site load" : "Driver delivery and management-site ticket are required before completion"}
+                        onClick={() => loadAction("desktop_complete_load", "Load completed locally and queued for sync.")}
+                      >
+                        {selectedLoad.ticketNumber ? "Complete Load" : "Issue site ticket before completion"}
+                      </button>
+                    ) : null}
                   </div>
                   <div className="local-proof">Entity version {selectedLoad.entityVersion} · {selectedLoad.pendingEvents} unsynced local event{selectedLoad.pendingEvents === 1 ? "" : "s"}</div>
                 </>
