@@ -142,7 +142,15 @@ function drawField(input: {
 }
 
 async function sha256Hex(bytes: Uint8Array) {
-  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
+  // Expo Crypto requires an ArrayBuffer-backed BufferSource. pdf-lib's save()
+  // is typed as Uint8Array<ArrayBufferLike> in TS 6, so copy the exact PDF
+  // bytes into a fresh ArrayBuffer-backed view before hashing.
+  const stableBytes = new Uint8Array(bytes.byteLength);
+  stableBytes.set(bytes);
+  const digest = await Crypto.digest(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    stableBytes.buffer,
+  );
   return Array.from(new Uint8Array(digest), (value) =>
     value.toString(16).padStart(2, "0"),
   ).join("");
