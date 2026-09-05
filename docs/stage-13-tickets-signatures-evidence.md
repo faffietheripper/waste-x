@@ -6,7 +6,7 @@ Status: redesigned around the real receiving-site workflow on `stage-13-tickets-
 
 This design separates three things that must not be conflated:
 
-1. **Operational job/load state** — Waste X booking, driver progress, site acceptance/rejection and completion.
+1. **Operational job/load state** — Waste X booking, Driver progress, pre-collection Driver refusal, receiving-site acceptance/rejection and completion.
 2. **Legal movement paperwork** — for example a non-hazardous waste transfer note (WTN) or, where applicable, a hazardous waste consignment note. This documentation belongs to the transfer/movement and is not a post-completion weighbridge ticket.
 3. **Receiving-site / weighbridge ticket** — the receiving site's receipt/weight document after the site has received, checked and weighed the load. This is the Stage 13 “ticket”.
 
@@ -21,36 +21,58 @@ The design is based on current UK guidance reviewed in September 2026:
 
 The Waste X Driver/Mobile app is a transport execution tool, not a weighbridge or site-authority terminal.
 
-For the core collection-to-own-site flow the Driver has exactly three operational status actions:
+For the core collection-to-own-site flow the Driver has three normal transport status actions and one explicit exception **before collection only**:
 
 ```text
 ASSIGNED
-  ↓ Mark collected
-COLLECTED
-  ↓ Mark in transit
-IN_TRANSIT
-  ↓ Arrived at destination
-ARRIVED_DESTINATION
-  ↓
-Driver status work is finished.
+  ├── Reject collection + reason
+  │       ↓
+  │    REJECTED / CLOSED
+  │
+  └── Mark collected
+          ↓
+      COLLECTED
+          ↓ Mark in transit
+      IN_TRANSIT
+          ↓ Arrived at destination
+      ARRIVED_DESTINATION
+          ↓
+      Driver status work is finished.
 ```
+
+### Driver pre-collection rejection
+
+A Driver may arrive at the booked collection point and find that the actual collection cannot responsibly proceed — for example the waste does not match the booked material, the load is unsafe, or collection access makes the job impossible.
+
+Waste X therefore allows **Reject collection** only while the Driver workflow is still `ASSIGNED` and the canonical load is still `planned`.
+
+Rules:
+
+- a rejection reason is mandatory;
+- it is written to encrypted Mobile storage first and can be queued offline;
+- it closes the load as rejected when reconciled;
+- it disappears immediately after `FIELD_COLLECTED` / Mark collected;
+- a late/forged Mobile rejection after collection is rejected by the Cloud business rules;
+- it is not the same as the receiving site's later reject decision after destination arrival.
+
+This keeps the exception realistic without giving the Driver receiving-site authority.
 
 Removed from the normal Driver workflow:
 
 - Start job
 - En route
 - Arrive at collection
-- Confirm waste
+- Confirm waste as a separate checkpoint
 - Confirm quantity
 - Manual gross/tare/net entry
 - Confirm delivery as a separate fourth status
-- Accept load
-- Reject load
+- Accept load at destination
+- Reject load at destination
 - Complete load
 - Issue/generate/renumber site ticket
 - Generate canonical site-ticket PDF
 
-The booking already tells the Driver what to collect and where. The site, not the Driver, validates the received waste and final quantity.
+The booking tells the Driver what to collect and where. Before loading, the Driver may refuse a materially wrong/unsafe collection. Once collected, the receiving site owns the later waste validation, quantity, acceptance/rejection and completion decision.
 
 ## Receiving-site workflow
 
@@ -61,14 +83,17 @@ WEB / DESKTOP
 Job booked + Driver/vehicle assigned
         ↓
 MOBILE
-Mark collected
-        ↓
-Mark in transit
-        ↓
-Arrived at destination
-        ↓
-        ├────────── Driver has no more status actions
-        ↓
+ASSIGNED
+   ├── Reject collection + reason → REJECTED / CLOSED
+   │
+   └── Mark collected
+            ↓
+        Mark in transit
+            ↓
+        Arrived at destination
+            ↓
+            ├────────── Driver has no more status actions
+            ↓
 WEB / DESKTOP — RECEIVING SITE
 Load becomes ARRIVED / awaiting site decision
         ↓
@@ -76,7 +101,7 @@ Check transfer paperwork + waste + permit/EWC + site capacity
         ↓
 Record weighbridge/weight data as appropriate
         ↓
-        ├── REJECT → rejection record / reason / onward handling
+        ├── REJECT → receiving-site rejection record / reason / onward handling
         │
         └── ACCEPT
               ↓
@@ -95,7 +120,7 @@ Record weighbridge/weight data as appropriate
           DWT receipt is prepared/queued separately
 ```
 
-### Why ARRIVED_DESTINATION is the Driver's final status
+### Why ARRIVED_DESTINATION is the Driver's final normal status
 
 A Driver can truthfully state that the vehicle/load has reached the receiving site. The Driver cannot truthfully decide that the waste has been accepted by the permitted facility. Acceptance is a receiving-site decision after the site's checks.
 
@@ -106,13 +131,14 @@ Therefore `ARRIVED_DESTINATION` is the hand-off boundary between transport execu
 | Capability | Mobile / Driver | Web / Desktop receiving site |
 | --- | --- | --- |
 | View assigned job/load | Yes | Yes |
+| Reject/refuse collection before loading | **Yes, ASSIGNED only + reason** | View/reconcile |
 | Mark collected | Yes | View |
 | Mark in transit | Yes | View |
 | Mark arrived at destination | Yes | View / receives arrival |
-| Validate actual waste / permit | No | Yes |
+| Validate actual received waste / permit | No | Yes |
 | Enter gross/tare/net/final quantity | No | Yes |
-| Accept incoming load | No | Yes, after Driver arrival |
-| Reject incoming load | No | Yes, after Driver arrival |
+| Accept incoming load at destination | No | Yes, after Driver arrival |
+| Reject incoming load at destination | No | Yes, after Driver arrival |
 | Complete incoming load | No | Yes, after acceptance + final quantity |
 | Create/finalise site ticket | No | Yes, after completion/final transaction |
 | Generate canonical ticket PDF | No | Yes |
@@ -122,14 +148,17 @@ Therefore `ARRIVED_DESTINATION` is the hand-off boundary between transport execu
 
 ## Hard authority rules
 
-1. Mobile can only emit the three Driver status events plus explicitly permitted field-evidence/issue events.
-2. Mobile cannot mutate `ticketNumber`, waste description, gross/tare/net weight, acceptance, rejection or completion.
-3. Accept/reject on Web/Desktop is blocked until the latest Driver field state is `ARRIVED_DESTINATION` for Mobile-linked loads.
-4. A Mobile `FIELD_ARRIVED_DESTINATION` event projects the incoming canonical load into site state `arrived`; site staff do not need a duplicate “Mark arrived” click.
-5. Incoming completion requires site acceptance and a positive final net quantity.
-6. The receiving-site ticket is not issued before site completion/final transaction.
-7. Reprint reuses the same ticket number and same immutable PDF bytes.
-8. DWT reporting is downstream of receipt/completion and is retryable; DEFRA/Cloud availability does not determine whether the yard can physically process a load.
+1. Mobile can emit only the three normal Driver status events, the explicit pre-collection rejection event, and permitted field-evidence/issue events.
+2. `FIELD_COLLECTION_REJECTED` is valid only while field state is `ASSIGNED` and canonical load state is `planned`; a reason is mandatory.
+3. After `FIELD_COLLECTED`, Driver collection rejection is permanently unavailable for that movement.
+4. Mobile cannot mutate `ticketNumber`, waste description, gross/tare/net weight, receiving-site acceptance/rejection or completion.
+5. Accept/reject on Web/Desktop is blocked until the latest Driver field state is `ARRIVED_DESTINATION` for Mobile-linked loads.
+6. A Mobile `FIELD_ARRIVED_DESTINATION` event projects the incoming canonical load into site state `arrived`; site staff do not need a duplicate “Mark arrived” click.
+7. Driver workflow proof and the canonical load mutation are published in the same Cloud change so Desktop cannot observe an own-transport `arrived` load before its Driver-arrival proof.
+8. Incoming completion requires site acceptance and a positive final net quantity.
+9. The receiving-site ticket is not issued before site completion/final transaction.
+10. Reprint reuses the same ticket number and same immutable PDF bytes.
+11. DWT reporting is downstream of receipt/completion and is retryable; DEFRA/Cloud availability does not determine whether the yard can physically process a load.
 
 ## Transfer note vs site ticket
 
@@ -171,7 +200,7 @@ PDF_GENERATED
 PRINTED / DELIVERED_DIGITALLY
 ```
 
-A rejected load does not receive a normal accepted-load ticket. It keeps an immutable rejection record and, where required, rejected-load/consignment documentation.
+A rejected load does not receive a normal accepted-load ticket. It keeps an immutable rejection record and, where required, rejected-load/consignment documentation. That applies both to a Driver refusal before collection and to a receiving-site rejection after arrival, although the authority/reason/timestamp must distinguish which rejection occurred.
 
 ## Ticket identity and numbering
 
@@ -223,7 +252,7 @@ Recommended ticket content:
 
 ## Digital ticket on Mobile
 
-There is no ticket workflow in the Driver status screen.
+There is no ticket-generation workflow in the Driver status screen.
 
 A completed job may display a separate read-only **Documents** section only when a site ticket actually exists:
 
@@ -336,24 +365,34 @@ The receiving-site ticket does not wait for a live DEFRA response. DWT failure i
 
 ## Certification plan after redesign
 
-### A — streamlined Driver workflow
+### A — Driver pre-collection refusal
 
 1. Fresh booked load appears on Mobile as `ASSIGNED`.
-2. Only `Mark collected` is available.
-3. Then only `Mark in transit`.
+2. `Mark collected` is the primary action and `Reject collection` is a secondary exception action.
+3. Open Reject collection and verify a reason is mandatory.
+4. Reject while offline, restart Mobile, and verify the rejected local record/reason survives.
+5. Reconnect and verify the same load becomes rejected in Cloud/Web/Desktop with the Driver reason retained.
+6. On a separate fresh load, press `Mark collected` and confirm Reject collection disappears immediately.
+7. Attempt a forged/late `FIELD_COLLECTION_REJECTED` after collection in a controlled test; Cloud must reject it with `DRIVER_COLLECTION_REJECTION_NOT_ALLOWED`.
+
+### B — streamlined Driver workflow
+
+1. Fresh booked load appears on Mobile as `ASSIGNED`.
+2. Driver chooses the normal path: `Mark collected`.
+3. Then only `Mark in transit` is the normal status action.
 4. Then only `Arrived at destination`.
 5. No Start/En route/Arrive collection/quantity/weight/delivery/ticket generation controls exist.
-6. Run one action offline, restart, reconnect and prove queue reconciliation.
+6. Run one normal action offline, restart, reconnect and prove queue reconciliation.
 
-### B — authority hand-off
+### C — authority hand-off
 
-1. Before Driver arrival, Web/Desktop Accept and Reject are blocked.
+1. Before Driver destination arrival, Web/Desktop receiving-site Accept and Reject are blocked for the own-transport Mobile-linked load.
 2. Driver marks `ARRIVED_DESTINATION`.
-3. Same load becomes `arrived` / awaiting site decision.
+3. Same Cloud/Desktop change carries both canonical `arrived` status and Driver `ARRIVED_DESTINATION` proof.
 4. Web/Desktop can now Accept or Reject.
-5. Mobile cannot accept/reject.
+5. Mobile cannot perform receiving-site accept/reject.
 
-### C — acceptance, weight and completion
+### D — acceptance, weight and completion
 
 1. Accept the load on Web/Desktop after site checks.
 2. Enter/confirm site weight data.
@@ -361,7 +400,7 @@ The receiving-site ticket does not wait for a live DEFRA response. DWT failure i
 4. Complete the load on Web/Desktop.
 5. DWT receipt is prepared/queued separately.
 
-### D — site ticket
+### E — site ticket
 
 1. Before completion, normal site ticket generation is unavailable.
 2. After completion/final transaction, generate/finalise the site ticket.
@@ -370,15 +409,18 @@ The receiving-site ticket does not wait for a live DEFRA response. DWT failure i
 5. Reconnect and reconcile.
 6. Mobile receives the ticket in a read-only Documents section.
 
-### E — evidence and printing
+### F — evidence and printing
 
 Certify signatures/photos/documents offline, resumable uploads, Test Printer discovery/print/reprint and retention guards.
 
 ## Section 13 checklist
 
+- [ ] Driver can reject/refuse a collection only before Mark collected, with mandatory reason
+- [ ] Driver rejection disappears after collection and late rejection is server-blocked
 - [ ] Streamlined Driver workflow: Collected → In transit → Arrived destination
 - [ ] Site-only Accept / Reject after Driver arrival
 - [ ] Site-only weights and completion
+- [ ] Atomic Driver-arrival proof + canonical arrived change for Desktop sync
 - [ ] Generate receiving-site ticket completely offline on Desktop after completion
 - [ ] Local ticket numbering strategy
 - [ ] PDF generation
