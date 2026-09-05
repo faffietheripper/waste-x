@@ -36,8 +36,9 @@ import {
 
 /**
  * Driver Mobile is deliberately not a site-operations client. It may record
- * only transport milestones and ancillary notes/issues. Waste acceptance,
- * weights, completion and receiving-site ticketing are Web/Desktop authority.
+ * only transport milestones, a pre-collection refusal, and ancillary
+ * notes/issues. Waste acceptance at the receiving site, weights, completion
+ * and receiving-site ticketing remain Web/Desktop authority.
  */
 export type MobileJobLoadEventType =
   | MobileFieldWorkflowEventTypeV1
@@ -58,6 +59,10 @@ export type MobileSyncStatus = {
   conflicts: number;
   failed: number;
   lastError: string | null;
+};
+
+type MobileCollectionRejectionPayload = {
+  reason: string;
 };
 
 type MobileDeliveryNotePayload = {
@@ -92,6 +97,7 @@ type AssignmentRow = {
 };
 
 const MOBILE_FIELD_ACTIVITY_EVENT_TYPES = new Set<MobileFieldActivityEventTypeV1>([
+  "FIELD_COLLECTION_REJECTED",
   "FIELD_DELIVERY_NOTE_ADDED",
   "FIELD_ISSUE_REPORTED",
 ]);
@@ -159,6 +165,23 @@ function validateFieldActivity(
 ) {
   const workflow = getMobileFieldWorkflowState(assignment);
 
+  if (eventType === "FIELD_COLLECTION_REJECTED") {
+    const reason = (payload as Partial<MobileCollectionRejectionPayload> | null)?.reason;
+    if (workflow.step !== "ASSIGNED") {
+      throw new Error("A collection can only be rejected before it has been marked collected.");
+    }
+    if (assignment.load.status.toLowerCase() !== "planned") {
+      throw new Error("This load is no longer awaiting Driver collection.");
+    }
+    if (typeof reason !== "string" || reason.trim().length < 3) {
+      throw new Error("Enter a reason before rejecting this collection.");
+    }
+    if (reason.trim().length > 2000) {
+      throw new Error("Collection rejection reasons must be 2,000 characters or fewer.");
+    }
+    return;
+  }
+
   if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
     const note = (payload as Partial<MobileDeliveryNotePayload> | null)?.note;
     if (workflow.step !== "ARRIVED_DESTINATION") {
@@ -201,6 +224,20 @@ function applyLocalProjection(
 
   if (isMobileFieldWorkflowEventType(eventType)) {
     next = applyMobileFieldWorkflowEvent(next, eventType, occurredAt);
+  }
+
+  if (eventType === "FIELD_COLLECTION_REJECTED") {
+    const rejection = payload as MobileCollectionRejectionPayload;
+    next.load.status = "rejected";
+    next.fieldActivity = [
+      ...(next.fieldActivity ?? []),
+      {
+        eventType,
+        occurredAt,
+        text: rejection.reason.trim(),
+        issueType: null,
+      },
+    ];
   }
 
   if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
@@ -334,8 +371,9 @@ export async function queueMobileJobLoadEvent(input: {
 
     await database.runAsync(
       `UPDATE local_mobile_assignment
-       SET entity_version = ?, payload_json = ?, refreshed_at = ?
+       SET load_status = ?, entity_version = ?, payload_json = ?, refreshed_at = ?
        WHERE load_id = ?`,
+      projected.load.status,
       projected.load.entityVersion,
       JSON.stringify(projected),
       recordedAt,
