@@ -151,9 +151,9 @@ export function DeliveryActivityPanel({
       <View style={styles.headingRow}>
         <View style={styles.flexOne}>
           <Text style={styles.eyebrow}>FIELD NOTES & ISSUES</Text>
-          <Text style={styles.title}>Optional notes stay with this load.</Text>
+          <Text style={styles.title}>Field activity stays with this load.</Text>
           <Text style={styles.helper}>
-            Ticketing, weights, acceptance and completion are controlled by the receiving site, not the Driver app.
+            Pre-collection refusal is a Driver decision. Destination acceptance/rejection, weights, completion and ticketing are controlled by the receiving site.
           </Text>
         </View>
         <View style={[styles.stateBadge, !canChange && styles.stateBadgeClosed]}>
@@ -169,23 +169,31 @@ export function DeliveryActivityPanel({
       {activity.length > 0 ? (
         <View style={styles.historyBlock}>
           <Text style={styles.formLabel}>FIELD ACTIVITY</Text>
-          {activity.map((entry, index) => (
-            <View key={`${entry.eventType}-${entry.occurredAt}-${index}`} style={styles.activityCard}>
-              <View style={styles.activityTopRow}>
-                <Text style={[styles.activityKind, entry.eventType === "FIELD_ISSUE_REPORTED" && styles.activityKindIssue]}>
-                  {entry.eventType === "FIELD_DELIVERY_NOTE_ADDED"
-                    ? "ARRIVAL NOTE"
-                    : `ISSUE · ${issueLabel(entry.issueType)}`}
-                </Text>
-                <Text style={styles.activityTime}>{new Date(entry.occurredAt).toLocaleString()}</Text>
+          {activity.map((entry, index) => {
+            const rejected = entry.eventType === "FIELD_COLLECTION_REJECTED";
+            const issue = entry.eventType === "FIELD_ISSUE_REPORTED";
+            const label = rejected
+              ? "COLLECTION REJECTED"
+              : entry.eventType === "FIELD_DELIVERY_NOTE_ADDED"
+                ? "ARRIVAL NOTE"
+                : `ISSUE · ${issueLabel(entry.issueType)}`;
+
+            return (
+              <View key={`${entry.eventType}-${entry.occurredAt}-${index}`} style={styles.activityCard}>
+                <View style={styles.activityTopRow}>
+                  <Text style={[styles.activityKind, (issue || rejected) && styles.activityKindIssue]}>
+                    {label}
+                  </Text>
+                  <Text style={styles.activityTime}>{new Date(entry.occurredAt).toLocaleString()}</Text>
+                </View>
+                <Text style={styles.activityText}>{entry.text}</Text>
               </View>
-              <Text style={styles.activityText}>{entry.text}</Text>
-            </View>
-          ))}
+            );
+          })}
         </View>
       ) : (
         <View style={styles.emptyHistory}>
-          <Text style={styles.emptyHistoryTitle}>No field notes or issues yet.</Text>
+          <Text style={styles.emptyHistoryTitle}>No field activity yet.</Text>
           <Text style={styles.emptyHistoryBody}>You only need to add something here when it is operationally useful.</Text>
         </View>
       )}
@@ -246,7 +254,7 @@ export function DeliveryActivityPanel({
         </View>
       )}
 
-      <Text style={styles.localHint}>Notes and issues are written to encrypted SQLCipher first and queued with the same load ID.</Text>
+      <Text style={styles.localHint}>Field activity is written to encrypted SQLCipher first and queued with the same load ID.</Text>
     </View>
   );
 }
@@ -290,7 +298,7 @@ const styles = StyleSheet.create({
   activityCard: { padding: 12, borderRadius: 12, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#e2e8f0" },
   activityTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   activityKind: { color: "#166534", fontSize: 8, fontWeight: "900", letterSpacing: 0.7 },
-  activityKindIssue: { color: "#c2410c" },
+  activityKindIssue: { color: "#b91c1c" },
   activityTime: { color: "#94a3b8", fontSize: 8, fontWeight: "700" },
   activityText: { marginTop: 6, color: "#334155", fontSize: 11, lineHeight: 17 },
   emptyHistory: { marginTop: 16, padding: 13, borderRadius: 12, backgroundColor: "#f8fafc" },
