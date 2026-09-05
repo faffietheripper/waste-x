@@ -8,6 +8,9 @@ type ProvisioningStatus = { provisioned: boolean; deviceId: string | null; organ
 type AuthStatus = { unlocked: boolean; canOffline: boolean; email: string | null; mode: "ONLINE" | "OFFLINE" | null; offlineExpiresAt: string | null; offlineDaysRemaining: number };
 type OperationalSummary = { jobs: number; jobLoads: number; pendingSyncEvents: number; conflicts: number };
 type OpsReference = { id: string; label: string; haulierCounterpartyId: string | null };
+type WeightMetric = "Grams" | "Kilograms" | "Tonnes";
+type TareSource = "LOAD" | "VEHICLE_MASTER" | "MANUAL" | null;
+type VehicleTareResult = { vehicleId: string; tareWeightKg: number | null };
 
 type DailyLoad = {
   id: string;
@@ -49,19 +52,55 @@ type EditState = {
   grossWeight: string;
   tareWeight: string;
   netWeight: string;
-  weightMetric: string;
+  weightMetric: WeightMetric;
   notes: string;
 };
 
+function weightMetric(value: string): WeightMetric {
+  return value === "Grams" || value === "Kilograms" || value === "Tonnes" ? value : "Tonnes";
+}
+
+function formatWeightInput(value: number) {
+  return Number(value.toFixed(3)).toString();
+}
+
+function calculatedNetWeight(grossValue: string, tareValue: string) {
+  if (!grossValue.trim() || !tareValue.trim()) return "";
+  const gross = Number(grossValue);
+  const tare = Number(tareValue);
+  if (!Number.isFinite(gross) || !Number.isFinite(tare) || gross < tare) return "";
+  return formatWeightInput(gross - tare);
+}
+
+function vehicleTareForMetric(tareWeightKg: number | null, metric: WeightMetric) {
+  if (tareWeightKg === null || !Number.isFinite(tareWeightKg) || tareWeightKg < 0) return null;
+  if (metric === "Grams") return formatWeightInput(tareWeightKg * 1000);
+  if (metric === "Tonnes") return formatWeightInput(tareWeightKg / 1000);
+  return formatWeightInput(tareWeightKg);
+}
+
+function convertWeight(value: string, from: WeightMetric, to: WeightMetric) {
+  if (!value.trim() || from === to) return value;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return value;
+  const kilograms = from === "Tonnes" ? numeric * 1000 : from === "Grams" ? numeric / 1000 : numeric;
+  const converted = to === "Tonnes" ? kilograms / 1000 : to === "Grams" ? kilograms * 1000 : kilograms;
+  return formatWeightInput(converted);
+}
+
 function editStateFor(load: DailyLoad): EditState {
+  const metric = weightMetric(load.weightMetric);
+  const grossWeight = load.grossWeight ?? "";
+  const tareWeight = load.tareWeight ?? "";
+  const calculatedNet = calculatedNetWeight(grossWeight, tareWeight);
   return {
     driverId: load.driverId ?? "",
     vehicleId: load.vehicleId ?? "",
     wasteDescription: load.wasteDescription,
-    grossWeight: load.grossWeight ?? "",
-    tareWeight: load.tareWeight ?? "",
-    netWeight: load.netWeight ?? "",
-    weightMetric: load.weightMetric || "Tonnes",
+    grossWeight,
+    tareWeight,
+    netWeight: calculatedNet || load.netWeight || "",
+    weightMetric: metric,
     notes: load.notes ?? "",
   };
 }
@@ -103,6 +142,7 @@ export function App() {
   const [cloudBusy, setCloudBusy] = useState(false);
   const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState | null>(null);
+  const [tareSource, setTareSource] = useState<TareSource>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("Waste X Desktop — Mac");
@@ -145,7 +185,7 @@ export function App() {
       setSync(syncStatus);
       setCloudContext(context);
     } else {
-      setSummary(null); setOperations(null); setSync(null); setCloudContext(null); setCloudCatalogue(null); setSelectedLoadId(null); setEdit(null);
+      setSummary(null); setOperations(null); setSync(null); setCloudContext(null); setCloudCatalogue(null); setSelectedLoadId(null); setEdit(null); setTareSource(null);
     }
   }
 
@@ -179,6 +219,11 @@ export function App() {
     } finally { setSyncBusy(false); syncLoopActive.current = false; }
   }
 
+  async function storedVehicleTare(vehicleId: string, metric: WeightMetric) {
+    const result = await invoke<VehicleTareResult>("desktop_vehicle_tare", { input: { vehicleId } });
+    return vehicleTareForMetric(result.tareWeightKg, metric);
+  }
+
   useEffect(() => {
     void (async () => {
       try { await invoke("local_db_self_test"); await refreshLocalState(); }
@@ -186,7 +231,39 @@ export function App() {
     })();
   }, []);
   useEffect(() => { if (!email && auth?.email) setEmail(auth.email); }, [auth?.email, email]);
-  useEffect(() => { if (selectedLoad) setEdit(editStateFor(selectedLoad)); }, [selectedLoad?.id]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedLoad) {
+      setEdit(null);
+      setTareSource(null);
+      return () => { cancelled = true; };
+    }
+
+    const initial = editStateFor(selectedLoad);
+    setEdit(initial);
+    if (selectedLoad.tareWeight !== null && selectedLoad.tareWeight.trim() !== "") {
+      setTareSource("LOAD");
+      return () => { cancelled = true; };
+    }
+    if (!selectedLoad.vehicleId) {
+      setTareSource(null);
+      return () => { cancelled = true; };
+    }
+
+    void storedVehicleTare(selectedLoad.vehicleId, initial.weightMetric)
+      .then((tare) => {
+        if (cancelled || tare === null) return;
+        setEdit((current) => current && current.vehicleId === selectedLoad.vehicleId
+          ? { ...current, tareWeight: tare, netWeight: calculatedNetWeight(current.grossWeight, tare) }
+          : current);
+        setTareSource("VEHICLE_MASTER");
+      })
+      .catch((error) => {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : String(error));
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedLoad?.id]);
   useEffect(() => {
     if (!auth?.unlocked) return;
     const initial = window.setTimeout(() => void syncNow(false), 1200);
@@ -229,24 +306,83 @@ export function App() {
 
   async function handleLock() { await invoke("desktop_lock"); setMessage(null); await refreshLocalState(); }
 
+  function loadDetailsInput(load: DailyLoad, values: EditState) {
+    const netWeight = calculatedNetWeight(values.grossWeight, values.tareWeight);
+    return {
+      loadId: load.id,
+      driverId: values.driverId || null,
+      vehicleId: values.vehicleId || null,
+      wasteDescription: values.wasteDescription,
+      grossWeight: numberOrNull(values.grossWeight),
+      tareWeight: numberOrNull(values.tareWeight),
+      netWeight: numberOrNull(netWeight),
+      weightMetric: values.weightMetric,
+      weightIsEstimate: false,
+      ticketNumber: null,
+      notes: values.notes || null,
+    };
+  }
+
   async function saveDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedLoad || !edit) return;
-    await run(() => invoke("desktop_save_load_details", {
-      input: {
-        loadId: selectedLoad.id,
-        driverId: edit.driverId || null,
-        vehicleId: edit.vehicleId || null,
-        wasteDescription: edit.wasteDescription,
-        grossWeight: numberOrNull(edit.grossWeight),
-        tareWeight: numberOrNull(edit.tareWeight),
-        netWeight: numberOrNull(edit.netWeight),
-        weightMetric: edit.weightMetric,
-        weightIsEstimate: false,
-        ticketNumber: null,
-        notes: edit.notes || null,
-      },
-    }), "Site details saved locally and queued for Cloud sync.");
+    await run(
+      () => invoke("desktop_save_load_details", { input: loadDetailsInput(selectedLoad, edit) }),
+      "Site details saved locally and queued for Cloud sync.",
+    );
+  }
+
+  async function completeSelectedLoad() {
+    if (!selectedLoad || !edit) return;
+    const netWeight = calculatedNetWeight(edit.grossWeight, edit.tareWeight);
+    const net = Number(netWeight);
+    if (!netWeight || !Number.isFinite(net) || net <= 0) {
+      setMessage("Enter a gross weight above tare. Waste X calculates the positive net weight automatically before completion.");
+      return;
+    }
+
+    await run(async () => {
+      /* Completion finalises the values currently visible to the operator.
+       * They no longer need to press Save site details before Complete Load. */
+      await invoke("desktop_save_load_details", { input: loadDetailsInput(selectedLoad, edit) });
+      await invoke("desktop_complete_load", { input: { loadId: selectedLoad.id } });
+    }, "Site weights finalised and load completed locally. The receiving-site ticket can now be generated.");
+  }
+
+  async function handleVehicleChange(vehicleId: string) {
+    if (!edit) return;
+    setEdit({ ...edit, vehicleId });
+    if (!vehicleId) {
+      setTareSource(null);
+      return;
+    }
+
+    try {
+      const tare = await storedVehicleTare(vehicleId, edit.weightMetric);
+      if (tare === null) {
+        setTareSource(null);
+        return;
+      }
+      setEdit((current) => current && current.vehicleId === vehicleId
+        ? { ...current, tareWeight: tare, netWeight: calculatedNetWeight(current.grossWeight, tare) }
+        : current);
+      setTareSource("VEHICLE_MASTER");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleMetricChange(nextMetric: WeightMetric) {
+    if (!edit) return;
+    const grossWeight = convertWeight(edit.grossWeight, edit.weightMetric, nextMetric);
+    const tareWeight = convertWeight(edit.tareWeight, edit.weightMetric, nextMetric);
+    setEdit({
+      ...edit,
+      weightMetric: nextMetric,
+      grossWeight,
+      tareWeight,
+      netWeight: calculatedNetWeight(grossWeight, tareWeight),
+    });
   }
 
   async function loadAction(command: string, success: string) {
@@ -265,6 +401,7 @@ export function App() {
 
   const locked = Boolean(provisioning?.provisioned && !auth?.unlocked);
   const syncProblems = (sync?.conflicts ?? 0) + (sync?.permanentFailed ?? 0) + (sync?.deferredRemoteChanges ?? 0);
+  const incomingWeightLocked = Boolean(selectedLoad?.direction === "incoming" && !["arrived", "accepted"].includes(selectedLoad.status));
 
   return (
     <main className="shell">
@@ -318,12 +455,13 @@ export function App() {
                   <div className="editor-heading"><div><span className="eyebrow">Selected load</span><h3>{selectedLoad.jobNumber} · Load {selectedLoad.loadNumber ?? "—"}</h3></div><span className={`status-pill status-${selectedLoad.status}`}>{selectedLoad.status}</span></div>
                   <form className="editor-form" onSubmit={saveDetails}>
                     <label><span>Driver</span><select value={edit.driverId} onChange={(e) => setEdit({ ...edit, driverId: e.target.value })}><option value="">Select driver</option>{availableDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.label}</option>)}</select></label>
-                    <label><span>Vehicle</span><select value={edit.vehicleId} onChange={(e) => setEdit({ ...edit, vehicleId: e.target.value })}><option value="">Select vehicle</option>{availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}</option>)}</select></label>
+                    <label><span>Vehicle</span><select value={edit.vehicleId} onChange={(e) => void handleVehicleChange(e.target.value)}><option value="">Select vehicle</option>{availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}</option>)}</select></label>
                     <label className="wide"><span>Waste description</span><input value={edit.wasteDescription} onChange={(e) => setEdit({ ...edit, wasteDescription: e.target.value })} /></label>
-                    <label><span>Gross</span><input inputMode="decimal" value={edit.grossWeight} onChange={(e) => setEdit({ ...edit, grossWeight: e.target.value })} /></label>
-                    <label><span>Tare</span><input inputMode="decimal" value={edit.tareWeight} onChange={(e) => setEdit({ ...edit, tareWeight: e.target.value })} /></label>
-                    <label><span>Net</span><input inputMode="decimal" value={edit.netWeight} onChange={(e) => setEdit({ ...edit, netWeight: e.target.value })} /></label>
-                    <label><span>Metric</span><select value={edit.weightMetric} onChange={(e) => setEdit({ ...edit, weightMetric: e.target.value })}><option>Tonnes</option><option>Kilograms</option><option>Grams</option></select></label>
+                    <label><span>Gross · weighbridge reading</span><input disabled={incomingWeightLocked} inputMode="decimal" value={edit.grossWeight} onChange={(e) => { const grossWeight = e.target.value; setEdit({ ...edit, grossWeight, netWeight: calculatedNetWeight(grossWeight, edit.tareWeight) }); }} /></label>
+                    <label><span>Tare · editable</span><input disabled={incomingWeightLocked} inputMode="decimal" value={edit.tareWeight} onChange={(e) => { const tareWeight = e.target.value; setTareSource("MANUAL"); setEdit({ ...edit, tareWeight, netWeight: calculatedNetWeight(edit.grossWeight, tareWeight) }); }} /><small className="small-copy">{tareSource === "VEHICLE_MASTER" ? "Loaded from the selected vehicle's stored tare." : tareSource === "LOAD" ? "Using the tare already saved on this load." : tareSource === "MANUAL" ? "Operator-adjusted tare for this load." : "No stored vehicle tare — enter the actual tare."}</small></label>
+                    <label><span>Net · calculated</span><input readOnly inputMode="decimal" value={edit.netWeight} /><small className="small-copy">Gross − tare. Waste X recalculates this automatically.</small></label>
+                    <label><span>Metric</span><select disabled={incomingWeightLocked} value={edit.weightMetric} onChange={(e) => handleMetricChange(e.target.value as WeightMetric)}><option>Tonnes</option><option>Kilograms</option><option>Grams</option></select></label>
+                    {incomingWeightLocked ? <p className="wide small-copy">Weight entry unlocks after the Driver reaches the destination and the load is handed to the receiving site.</p> : null}
                     <label className="wide"><span>Site ticket</span><input disabled value={selectedLoad.ticketNumber ?? (selectedLoad.status === "completed" ? "Ready to generate below" : "Available after site completion")} /></label>
                     <label className="wide"><span>Notes</span><textarea rows={3} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
                     <button disabled={busy || ["completed", "rejected", "cancelled"].includes(selectedLoad.status)}>Save site details</button>
@@ -334,7 +472,7 @@ export function App() {
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" && !selectedLoad.haulierCounterpartyId ? <span className="small-copy">Waiting for the assigned Driver to mark Arrived at destination on Mobile.</span> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button disabled={busy} onClick={() => loadAction("desktop_accept_load", "Load accepted locally and queued for sync.")}>Accept</button> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button className="danger-button" disabled={busy} onClick={rejectLoad}>Reject</button> : null}
-                    {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? <button disabled={busy} onClick={() => loadAction("desktop_complete_load", "Load completed locally and queued for sync.")}>Complete Load</button> : null}
+                    {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? <button disabled={busy} onClick={() => void completeSelectedLoad()}>Finalise weights + Complete Load</button> : null}
                   </div>
 
                   {selectedLoad.status === "completed" || selectedLoad.ticketNumber ? <TicketPanel loadId={selectedLoad.id} disabled={busy} onChanged={refreshLocalState} /> : null}
