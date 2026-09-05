@@ -3,7 +3,7 @@ import * as SQLite from "expo-sqlite";
 import { getOrCreateDatabaseKey } from "./secure";
 
 const DATABASE_NAME = "waste-x-mobile.db";
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export type MobileDatabaseStatus = {
   ready: true;
@@ -129,6 +129,31 @@ export async function initialiseMobileDatabase(
 
     CREATE INDEX IF NOT EXISTS local_mobile_assignment_driver_idx
       ON local_mobile_assignment(driver_id, job_date);
+
+    CREATE TABLE IF NOT EXISTS local_ticket (
+      ticket_id TEXT PRIMARY KEY,
+      ticket_number TEXT NOT NULL UNIQUE,
+      organisation_id TEXT NOT NULL,
+      job_id TEXT NOT NULL,
+      load_id TEXT NOT NULL UNIQUE,
+      device_id TEXT NOT NULL,
+      number_source TEXT NOT NULL,
+      source_entity_version INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      cloud_event_id TEXT,
+      issued_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS local_ticket_job_idx
+      ON local_ticket(job_id, issued_at);
+
+    CREATE INDEX IF NOT EXISTS local_ticket_device_idx
+      ON local_ticket(device_id, issued_at);
+
+    CREATE INDEX IF NOT EXISTS local_ticket_cloud_event_idx
+      ON local_ticket(cloud_event_id);
   `);
 
   // Existing Step 11 installations may pre-date newer columns. SQLite
