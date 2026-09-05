@@ -7,6 +7,11 @@ export type MobileDriverScopeResolutionV1 =
  * Driver progress is intentionally small. The Driver confirms only physical
  * transport milestones they directly control. Site acceptance/rejection,
  * weights, completion and receiving-site ticketing belong to Web/Desktop.
+ *
+ * The one exception is a pre-collection refusal: while still ASSIGNED the
+ * Driver may reject the booked collection if the waste/site is unsuitable.
+ * That is recorded as FIELD_COLLECTION_REJECTED and becomes unavailable as
+ * soon as FIELD_COLLECTED has been recorded.
  */
 export type MobileFieldWorkflowStepV1 =
   | "ASSIGNED"
@@ -20,6 +25,7 @@ export type MobileFieldWorkflowEventTypeV1 =
   | "FIELD_ARRIVED_DESTINATION";
 
 export type MobileFieldActivityEventTypeV1 =
+  | "FIELD_COLLECTION_REJECTED"
   | "FIELD_DELIVERY_NOTE_ADDED"
   | "FIELD_ISSUE_REPORTED";
 
@@ -108,8 +114,10 @@ export interface MobileAssignmentV1 {
    */
   workflow?: MobileFieldWorkflowStateV1;
   /**
-   * Delivery notes and field issues stay attached to the same immutable load.
-   * They are ancillary evidence/operations records, not acceptance decisions.
+   * Driver collection refusals, arrival notes and field issues stay attached
+   * to the same immutable load. Only FIELD_COLLECTION_REJECTED is a terminal
+   * Driver decision, and it is valid solely before collection. Site acceptance
+   * and destination rejection remain Web/Desktop authority.
    */
   fieldActivity?: MobileFieldActivityV1[];
 }
