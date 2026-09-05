@@ -75,6 +75,10 @@ const rejectPayloadSchema = z.object({
   reason: z.string().trim().min(3).max(2000),
 });
 
+const fieldCollectionRejectPayloadSchema = z.object({
+  reason: z.string().trim().min(3).max(2000),
+});
+
 const fieldIssueTypeSchema = z.enum([
   "DELAY",
   "SITE_ACCESS",
@@ -324,6 +328,35 @@ async function applyJobLoadEvent(
   const now = new Date();
 
   switch (event.eventType) {
+    case "FIELD_COLLECTION_REJECTED": {
+      if (["completed", "rejected", "cancelled"].includes(load.status)) {
+        throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
+      }
+      const currentStep = await currentFieldWorkflowStep(tx, context, event.entityId);
+      if (currentStep !== "ASSIGNED" || load.status !== "planned") {
+        throw new SyncBusinessRuleError("DRIVER_COLLECTION_REJECTION_NOT_ALLOWED");
+      }
+      const parsed = fieldCollectionRejectPayloadSchema.safeParse(event.payload);
+      if (!parsed.success) {
+        throw new SyncBusinessRuleError("COLLECTION_REJECTION_REASON_REQUIRED");
+      }
+      await tx
+        .update(jobLoads)
+        .set({
+          status: "rejected",
+          notes: appendOperationalNote(
+            load.notes,
+            "DRIVER COLLECTION REJECTED",
+            parsed.data.reason,
+            new Date(event.occurredAt),
+          ),
+          completedAt: new Date(event.occurredAt),
+          updatedAt: now,
+        })
+        .where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
+      break;
+    }
+
     case "FIELD_DELIVERY_NOTE_ADDED": {
       if (["completed", "rejected", "cancelled"].includes(load.status)) {
         throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
@@ -591,6 +624,29 @@ export async function processSyncEvent(context: ClientApiContext, event: SyncEve
         entityPayload = await applyJobLoadEvent(tx, context, event);
       } else {
         throw new SyncBusinessRuleError("UNSUPPORTED_ENTITY_TYPE");
+      }
+
+      /*
+       * Driver workflow proof travels in the same Cloud change as the physical
+       * load mutation. In particular, FIELD_ARRIVED_DESTINATION can project an
+       * incoming own-transport load to canonical `arrived`; Desktop must never
+       * receive that status before the proof that the Driver caused it.
+       */
+      if (
+        event.entityType === "job_load" &&
+        isFieldWorkflowEventType(event.eventType) &&
+        entityPayload &&
+        typeof entityPayload === "object"
+      ) {
+        const transition = FIELD_WORKFLOW_TRANSITIONS[event.eventType];
+        entityPayload = {
+          ...(entityPayload as Record<string, unknown>),
+          fieldWorkflow: {
+            step: transition.toStep,
+            updatedAt: event.occurredAt,
+            lastEventType: event.eventType,
+          },
+        };
       }
 
       const now = new Date();
