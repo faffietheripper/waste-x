@@ -126,7 +126,11 @@ export function getMobileFieldWorkflowState(
   }
 
   return {
-    step: assignment.load.status === "completed" || assignment.load.status === "rejected"
+    // Completed legacy records can safely be treated as having reached the
+    // destination. Rejected cannot: a Driver may now reject while still
+    // ASSIGNED before collecting anything. Site-rejected loads with a real
+    // journey retain their explicit workflow history from Cloud.
+    step: assignment.load.status === "completed"
       ? "ARRIVED_DESTINATION"
       : "ASSIGNED",
     updatedAt: assignment.load.movementAt,
