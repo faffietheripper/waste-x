@@ -9,36 +9,28 @@ export type WeighbridgeTicketData = {
   loadNumber: number;
   direction: "incoming" | "outgoing";
   status: string;
-
   organisationName: string;
   organisationAddress: string;
-
   siteName: string;
   siteAddress: string;
   permitNumber: string;
-
   customerName: string;
   customerAddress: string;
-
   carrierName: string;
   carrierRegistrationNumber: string;
   driverName: string;
   vehicleRegistration: string;
-
   ewcCode: string;
   wasteDescription: string;
-
   grossWeight: string | null;
   tareWeight: string | null;
   netWeight: string | null;
   weightMetric: "Grams" | "Kilograms" | "Tonnes";
   weightIsEstimate: boolean;
   weightSource: string;
-
   arrivedAt: Date | null;
   movementAt: Date | null;
   completedAt: Date | null;
-
   purchaseOrder: string;
   customerReference: string;
   notes: string;
@@ -55,13 +47,7 @@ function organisationAddress(org: {
   postCode: string;
   country: string;
 }) {
-  return [
-    org.streetAddress,
-    org.city,
-    org.region,
-    org.postCode,
-    org.country,
-  ]
+  return [org.streetAddress, org.city, org.region, org.postCode, org.country]
     .map((part) => clean(part))
     .filter(Boolean)
     .join(", ");
@@ -103,20 +89,16 @@ export async function getWeighbridgeTicketData(params: {
       haulier: true,
       driver: true,
       vehicle: true,
-      materialProfile: {
-        with: {
-          ewcCode: true,
-        },
-      },
-      thirdPartyDestinationSite: {
-        with: {
-          counterparty: true,
-        },
-      },
+      materialProfile: { with: { ewcCode: true } },
+      thirdPartyDestinationSite: { with: { counterparty: true } },
     },
   });
 
-  if (!load || load.status !== "completed") {
+  // Printing/downloading is never allowed to invent a ticket reference. The
+  // receiving-site transaction must be completed and a canonical ticket number
+  // must already have been persisted by Web/Desktop site authority.
+  const ticketNumber = clean(load?.ticketNumber);
+  if (!load || load.status !== "completed" || !ticketNumber) {
     return null;
   }
 
@@ -131,12 +113,8 @@ export async function getWeighbridgeTicketData(params: {
 
   const customerAddress =
     load.direction === "incoming"
-      ? load.clientSite?.fullAddress ??
-        load.clientSite?.postcode ??
-        "Not recorded"
-      : externalDestination?.fullAddress ??
-        externalDestination?.postcode ??
-        "Not recorded";
+      ? load.clientSite?.fullAddress ?? load.clientSite?.postcode ?? "Not recorded"
+      : externalDestination?.fullAddress ?? externalDestination?.postcode ?? "Not recorded";
 
   const siteName =
     load.direction === "incoming"
@@ -146,36 +124,26 @@ export async function getWeighbridgeTicketData(params: {
   const siteAddress =
     load.direction === "incoming"
       ? ownSite?.fullAddress ?? ownSite?.postcode ?? "Not recorded"
-      : externalDestination?.fullAddress ??
-        externalDestination?.postcode ??
-        "Not recorded";
-
-  // Keep the fallback aligned with the existing DWT receipt reference.
-  const generatedTicketNumber = `WX-${job.jobNumber}-L${load.loadNumber}`;
+      : externalDestination?.fullAddress ?? externalDestination?.postcode ?? "Not recorded";
 
   return {
-    ticketNumber: clean(load.ticketNumber) || generatedTicketNumber,
+    ticketNumber,
     jobNumber: job.jobNumber,
     loadNumber: load.loadNumber,
     direction: load.direction,
     status: load.status,
-
     organisationName: load.organisation.teamName,
     organisationAddress: organisationAddress(load.organisation),
-
     siteName,
     siteAddress,
     permitNumber: load.sitePermit?.permitNumber ?? "Not recorded",
-
     customerName,
     customerAddress,
-
     carrierName: load.haulier?.name ?? load.organisation.teamName,
     carrierRegistrationNumber:
       load.haulier?.carrierRegistrationNumber ?? "Not recorded",
     driverName: load.driver?.name ?? "Not recorded",
     vehicleRegistration: load.vehicle?.registrationNumber ?? "Not recorded",
-
     ewcCode:
       clean(load.ewcCodeSnapshot) ||
       load.materialProfile?.ewcCode?.code ||
@@ -184,22 +152,17 @@ export async function getWeighbridgeTicketData(params: {
       clean(load.wasteDescriptionSnapshot) ||
       load.materialProfile?.wasteDescription ||
       "Not recorded",
-
     grossWeight: load.grossWeight,
     tareWeight: load.tareWeight,
     netWeight: load.netWeight,
     weightMetric: load.weightMetric,
     weightIsEstimate: load.weightIsEstimate,
     weightSource: load.weightSource,
-
     arrivedAt: load.receivedAt,
     movementAt: load.movementAt,
     completedAt: load.completedAt,
-
     purchaseOrder: clean(load.purchaseOrder ?? job.purchaseOrder),
-    customerReference: clean(
-      load.customerReference ?? job.customerReference,
-    ),
+    customerReference: clean(load.customerReference ?? job.customerReference),
     notes: clean(load.notes),
   };
 }
