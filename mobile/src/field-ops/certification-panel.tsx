@@ -87,10 +87,10 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
     <View style={styles.section}>
       <View style={styles.headerRow}>
         <View style={styles.flexOne}>
-          <Text style={styles.eyebrow}>DEVELOPMENT · STEP 12.7</Text>
-          <Text style={styles.title}>Field E2E certification</Text>
+          <Text style={styles.eyebrow}>DEVELOPMENT · DRIVER E2E</Text>
+          <Text style={styles.title}>Streamlined field certification</Text>
           <Text style={styles.helper}>
-            Proves one real Waste X load survives local/offline work and reconciles back to Cloud without changing identity.
+            Proves Collected → In transit → Arrived at destination works local-first and reconciles to the same Cloud load.
           </Text>
         </View>
         <View style={[styles.stateBadge, snapshot?.fullyCertified && styles.stateBadgeGood]}>
@@ -100,19 +100,8 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
         </View>
       </View>
 
-      {error ? (
-        <View style={styles.errorCard}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      ) : null}
-
-      {snapshot?.cloudError && online ? (
-        <View style={styles.errorCard}>
-          <Text style={styles.errorText}>
-            Cloud proof unavailable: {snapshot.cloudError}
-          </Text>
-        </View>
-      ) : null}
+      {error ? <View style={styles.errorCard}><Text style={styles.errorText}>{error}</Text></View> : null}
+      {snapshot?.cloudError && online ? <View style={styles.errorCard}><Text style={styles.errorText}>Cloud proof unavailable: {snapshot.cloudError}</Text></View> : null}
 
       {!run ? (
         <View style={styles.setupBlock}>
@@ -120,29 +109,18 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
           {assignments.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>No real loads are cached yet.</Text>
-              <Text style={styles.emptyBody}>
-                Create a Driver with the same email as this Waste X login, assign that Driver to a booked Job/Load, then refresh the field workspace.
-              </Text>
+              <Text style={styles.emptyBody}>Assign this Driver to a booked Job/Load, then refresh the field workspace.</Text>
             </View>
-          ) : (
-            assignments.map((assignment) => (
-              <Pressable
-                key={assignment.load.id}
-                disabled={busy}
-                onPress={() => void start(assignment)}
-                style={styles.assignmentButton}
-              >
-                <View style={styles.flexOne}>
-                  <Text style={styles.assignmentJob}>{assignment.job.jobNumber}</Text>
-                  <Text style={styles.assignmentMeta}>
-                    Load {assignment.load.loadNumber} · {assignment.transport.driverName}
-                  </Text>
-                  <Text selectable style={styles.assignmentId}>{assignment.load.id}</Text>
-                </View>
-                <Text style={styles.assignmentAction}>Start →</Text>
-              </Pressable>
-            ))
-          )}
+          ) : assignments.map((assignment) => (
+            <Pressable key={assignment.load.id} disabled={busy} onPress={() => void start(assignment)} style={styles.assignmentButton}>
+              <View style={styles.flexOne}>
+                <Text style={styles.assignmentJob}>{assignment.job.jobNumber}</Text>
+                <Text style={styles.assignmentMeta}>Load {assignment.load.loadNumber} · {assignment.transport.driverName}</Text>
+                <Text selectable style={styles.assignmentId}>{assignment.load.id}</Text>
+              </View>
+              <Text style={styles.assignmentAction}>Start →</Text>
+            </Pressable>
+          ))}
         </View>
       ) : (
         <>
@@ -156,60 +134,39 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
             <Check label="Driver scope matched" pass={Boolean(snapshot?.driverMatched)} />
             <Check label="Real assignment cached" pass={Boolean(snapshot?.assignmentCached)} />
             <Check label="Same local job/load identity" pass={Boolean(snapshot?.sameRecordIdentity)} />
-            <Check label="Workflow started" pass={Boolean(snapshot?.workflowStarted)} />
-            <Check label="Waste + quantity confirmed" pass={Boolean(snapshot?.collectionConfirmed)} />
+            <Check label="Collected recorded" pass={Boolean(snapshot?.collectedRecorded)} />
+            <Check label="In transit recorded" pass={Boolean(snapshot?.inTransitRecorded)} />
+            <Check label="Arrived at destination" pass={Boolean(snapshot?.arrivedDestinationRecorded)} />
             <Check label="Offline checkpoint recorded" pass={Boolean(snapshot?.offlineCheckpointRecorded)} />
             <Check label="Encrypted record survived restart" pass={Boolean(snapshot?.localRecordSurvivedRestart)} />
             <Check label="Cloud queue fully drained" pass={Boolean(snapshot?.cloudQueueDrained)} />
             <Check label="Cloud exact job/load identity" pass={Boolean(snapshot?.cloudIdentityMatches)} />
-            <Check label="Cloud field state matches Mobile" pass={Boolean(snapshot?.cloudFieldStateMatches)} />
+            <Check label="Cloud Driver state matches Mobile" pass={Boolean(snapshot?.cloudFieldStateMatches)} />
             <Check label="No conflicts / failures" pass={Boolean(snapshot?.noConflictOrFailure)} />
-            <Check label="Field journey delivered" pass={Boolean(snapshot?.fieldDelivered)} />
           </View>
 
           <View style={styles.queueCard}>
             <Text style={styles.queueTitle}>Selected-load outbox</Text>
-            <Text style={styles.queueText}>
-              {snapshot?.queue.pending ?? 0} pending · {snapshot?.queue.synced ?? 0} synced · {snapshot?.queue.conflicts ?? 0} conflicts · {snapshot?.queue.failed ?? 0} failed
-            </Text>
-            {snapshot?.cloud ? (
-              <Text style={styles.cloudText}>
-                Cloud v{snapshot.cloud.entityVersion} · {snapshot.cloud.fieldWorkflow?.step ?? "no field mirror"} · {snapshot.cloud.load.id}
-              </Text>
-            ) : null}
+            <Text style={styles.queueText}>{snapshot?.queue.pending ?? 0} pending · {snapshot?.queue.synced ?? 0} synced · {snapshot?.queue.conflicts ?? 0} conflicts · {snapshot?.queue.failed ?? 0} failed</Text>
+            {snapshot?.cloud ? <Text style={styles.cloudText}>Cloud v{snapshot.cloud.entityVersion} · {snapshot.cloud.fieldWorkflow?.step ?? "no Driver mirror"} · {snapshot.cloud.load.id}</Text> : null}
           </View>
 
-          <Pressable
-            disabled={busy || Boolean(snapshot?.offlineCheckpointRecorded)}
-            onPress={() => void checkpoint()}
-            style={[
-              styles.primaryButton,
-              (busy || snapshot?.offlineCheckpointRecorded) && styles.disabledButton,
-            ]}
-          >
+          <Pressable disabled={busy || Boolean(snapshot?.offlineCheckpointRecorded)} onPress={() => void checkpoint()} style={[styles.primaryButton, (busy || snapshot?.offlineCheckpointRecorded) && styles.disabledButton]}>
             <Text style={styles.primaryButtonText}>
-              {snapshot?.offlineCheckpointRecorded
-                ? "Offline checkpoint recorded"
-                : online
-                  ? "Go offline, perform an action, then checkpoint"
-                  : "Record offline + queued checkpoint"}
+              {snapshot?.offlineCheckpointRecorded ? "Offline checkpoint recorded" : online ? "Go offline, perform one Driver action, then checkpoint" : "Record offline + queued checkpoint"}
             </Text>
           </Pressable>
 
           <View style={styles.instructions}>
             <Text style={styles.instructionsTitle}>Certification sequence</Text>
             <Text style={styles.instructionsText}>
-              1. Advance this real job normally. 2. Turn connectivity off. 3. Perform at least one field action. 4. Record the offline checkpoint here. 5. Fully close and reopen Waste X Mobile. 6. Reconnect and let the queue drain. 7. Finish the journey to Delivered. 8. Refresh this proof while online so Cloud identity and field state are checked.
+              1. Start this proof on a real assigned load. 2. Perform one of the three Driver actions offline. 3. Record the checkpoint. 4. Fully close and reopen Mobile while offline. 5. Reconnect and drain the queue. 6. Finish at Arrived at destination. 7. Refresh proof online. Site accept/reject, weights, completion and tickets are deliberately outside Mobile certification.
             </Text>
           </View>
 
           <View style={styles.buttonRow}>
-            <Pressable disabled={busy} onPress={() => void reload()} style={styles.secondaryButton}>
-              {busy ? <ActivityIndicator /> : <Text style={styles.secondaryText}>Refresh proof</Text>}
-            </Pressable>
-            <Pressable disabled={busy} onPress={() => void clear()} style={styles.secondaryButton}>
-              <Text style={styles.secondaryText}>Reset run</Text>
-            </Pressable>
+            <Pressable disabled={busy} onPress={() => void reload()} style={styles.secondaryButton}>{busy ? <ActivityIndicator /> : <Text style={styles.secondaryText}>Refresh proof</Text>}</Pressable>
+            <Pressable disabled={busy} onPress={() => void clear()} style={styles.secondaryButton}><Text style={styles.secondaryText}>Reset run</Text></Pressable>
           </View>
         </>
       )}
@@ -218,25 +175,11 @@ export function MobileCertificationPanel({ online }: { online: boolean }) {
 }
 
 function Check({ label, pass }: { label: string; pass: boolean }) {
-  return (
-    <View style={styles.checkRow}>
-      <View style={[styles.checkDot, pass && styles.checkDotGood]}>
-        <Text style={styles.checkDotText}>{pass ? "✓" : ""}</Text>
-      </View>
-      <Text style={[styles.checkLabel, pass && styles.checkLabelGood]}>{label}</Text>
-    </View>
-  );
+  return <View style={styles.checkRow}><View style={[styles.checkDot, pass && styles.checkDotGood]}><Text style={styles.checkDotText}>{pass ? "✓" : ""}</Text></View><Text style={[styles.checkLabel, pass && styles.checkLabelGood]}>{label}</Text></View>;
 }
 
 const styles = StyleSheet.create({
-  section: {
-    marginTop: 18,
-    padding: 17,
-    borderRadius: 18,
-    backgroundColor: "#fff7ed",
-    borderWidth: 1,
-    borderColor: "#fed7aa",
-  },
+  section: { marginTop: 18, padding: 17, borderRadius: 18, backgroundColor: "#fff7ed", borderWidth: 1, borderColor: "#fed7aa" },
   flexOne: { flex: 1 },
   headerRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
   eyebrow: { color: "#c2410c", fontSize: 9, fontWeight: "900", letterSpacing: 0.9 },
