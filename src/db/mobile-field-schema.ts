@@ -4,30 +4,19 @@ import { jobLoads, organisations } from "./schema";
 
 export type JobLoadFieldStep =
   | "ASSIGNED"
-  | "STARTED"
-  | "EN_ROUTE"
-  | "ARRIVED_COLLECTION"
   | "COLLECTED"
   | "IN_TRANSIT"
-  | "ARRIVED_DESTINATION"
-  | "DELIVERED";
+  | "ARRIVED_DESTINATION";
 
 export type JobLoadFieldEventType =
-  | "FIELD_JOB_STARTED"
-  | "FIELD_EN_ROUTE"
-  | "FIELD_ARRIVED_COLLECTION"
   | "FIELD_COLLECTED"
   | "FIELD_IN_TRANSIT"
-  | "FIELD_ARRIVED_DESTINATION"
-  | "FIELD_DELIVERED";
+  | "FIELD_ARRIVED_DESTINATION";
 
 /**
- * Driver-facing progress is deliberately separate from bb_job_load.status.
- *
- * bb_job_load.status remains the canonical waste/compliance state
- * (planned/arrived/accepted/completed/etc). This 1:1 sidecar gives Web,
- * Desktop and Mobile a durable current field journey state for the same
- * jobLoadId without overloading regulatory semantics.
+ * Driver-facing transport progress is deliberately separate from the canonical
+ * receiving-site load status. The Driver stops at ARRIVED_DESTINATION. Site
+ * staff then own acceptance/rejection, weights and completion.
  */
 export const jobLoadFieldStates = pgTable(
   "bb_job_load_field_state",
