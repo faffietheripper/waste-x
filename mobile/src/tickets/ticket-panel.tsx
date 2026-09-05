@@ -17,6 +17,11 @@ import {
   type LocalWasteTicket,
 } from "@/tickets/local-ticket";
 import {
+  generateLocalTicketPdf,
+  getLocalTicketPdf,
+  type LocalTicketPdf,
+} from "@/tickets/ticket-pdf";
+import {
   getMobileSyncStatus,
   syncPendingMobileEvents,
   type MobileSyncStatus,
@@ -34,27 +39,42 @@ export function MobileTicketPanel({
   onSyncStatusChange: (status: MobileSyncStatus) => void;
 }) {
   const [ticket, setTicket] = useState<LocalWasteTicket | null>(null);
+  const [pdf, setPdf] = useState<LocalTicketPdf | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function reloadTicket() {
     const next = await getLocalTicketForLoad(assignment.load.id);
     setTicket(next);
+    if (next) {
+      setPdf(await getLocalTicketPdf(next.ticketId));
+    } else {
+      setPdf(null);
+    }
     return next;
   }
 
   useEffect(() => {
     let cancelled = false;
-    void getLocalTicketForLoad(assignment.load.id)
-      .then((next) => {
-        if (!cancelled) setTicket(next);
-      })
-      .catch((reason) => {
+    void (async () => {
+      try {
+        const next = await getLocalTicketForLoad(assignment.load.id);
+        if (cancelled) return;
+        setTicket(next);
+        if (!next) {
+          setPdf(null);
+          return;
+        }
+        const nextPdf = await getLocalTicketPdf(next.ticketId);
+        if (!cancelled) setPdf(nextPdf);
+      } catch (reason) {
         if (!cancelled) {
           setError(reason instanceof Error ? reason.message : String(reason));
         }
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -68,6 +88,7 @@ export function MobileTicketPanel({
     try {
       const result = await issueLocalTicket(assignment);
       setTicket(result.ticket);
+      setPdf(await getLocalTicketPdf(result.ticket.ticketId));
       onAssignmentChange(result.assignment);
       onSyncStatusChange(await getMobileSyncStatus());
 
@@ -119,6 +140,27 @@ export function MobileTicketPanel({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function generatePdf() {
+    if (!ticket) return;
+    setPdfBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const result = await generateLocalTicketPdf(ticket.ticketId);
+      setPdf(result.document);
+      setMessage(
+        result.created
+          ? "PDF generated completely offline, SHA-256 hashed and stored inside encrypted local storage."
+          : "The original immutable offline PDF is still attached to this ticket; Waste X did not regenerate or renumber it.",
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPdfBusy(false);
     }
   }
 
@@ -198,10 +240,75 @@ export function MobileTicketPanel({
         </View>
       )}
 
+      {ticket ? (
+        <View style={styles.pdfSection}>
+          <View style={styles.pdfHeadingRow}>
+            <View style={styles.flexOne}>
+              <Text style={styles.pdfEyebrow}>STEP 13.2 · OFFLINE PDF</Text>
+              <Text style={styles.pdfTitle}>Freeze the issued ticket into a document.</Text>
+              <Text style={styles.pdfHelper}>
+                The PDF is rendered from the immutable local ticket snapshot. No API request is used and the finished bytes are SHA-256 hashed before being stored in SQLCipher.
+              </Text>
+            </View>
+            <View style={[styles.badge, pdf && styles.badgeIssued]}>
+              <Text style={[styles.badgeText, pdf && styles.badgeTextIssued]}>
+                {pdf ? "GENERATED" : "PENDING"}
+              </Text>
+            </View>
+          </View>
+
+          {pdf ? (
+            <View style={styles.pdfCard}>
+              <View style={styles.pdfMetaRow}>
+                <Text style={styles.pdfMetaLabel}>Template</Text>
+                <Text style={styles.pdfMetaValue}>v{pdf.templateVersion}</Text>
+              </View>
+              <View style={styles.pdfMetaRow}>
+                <Text style={styles.pdfMetaLabel}>Size</Text>
+                <Text style={styles.pdfMetaValue}>{formatBytes(pdf.byteLength)}</Text>
+              </View>
+              <View style={styles.pdfMetaRow}>
+                <Text style={styles.pdfMetaLabel}>Generated</Text>
+                <Text style={styles.pdfMetaValue}>{new Date(pdf.generatedAt).toLocaleString()}</Text>
+              </View>
+              <Text style={styles.hashLabel}>SHA-256</Text>
+              <Text selectable style={styles.hashValue}>{pdf.sha256}</Text>
+              <Pressable
+                disabled={pdfBusy}
+                onPress={() => void generatePdf()}
+                style={[styles.secondaryButton, pdfBusy && styles.primaryButtonDisabled]}
+              >
+                {pdfBusy ? <ActivityIndicator /> : null}
+                <Text style={styles.secondaryButtonText}>
+                  {pdfBusy ? "Checking local PDF…" : "Verify original PDF"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.emptyPdfCard}>
+              <Text style={styles.emptyTitle}>No PDF has been generated for this ticket yet.</Text>
+              <Text style={styles.emptyBody}>
+                You can turn the server off before pressing this button. Generation and hashing happen entirely on the phone.
+              </Text>
+              <Pressable
+                disabled={pdfBusy}
+                onPress={() => void generatePdf()}
+                style={[styles.primaryButton, pdfBusy && styles.primaryButtonDisabled]}
+              >
+                {pdfBusy ? <ActivityIndicator color="#ffffff" /> : null}
+                <Text style={styles.primaryButtonText}>
+                  {pdfBusy ? "Generating locally…" : "Generate PDF completely offline"}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      ) : null}
+
       <View style={styles.nextCard}>
         <Text style={styles.nextTitle}>Next in Section 13</Text>
         <Text style={styles.nextBody}>
-          Offline PDF, signatures and evidence will attach to this same immutable ticket ID rather than creating parallel records.
+          Generator/site, driver and receiver signatures plus photographs/documents will attach to this same immutable ticket ID and PDF hash chain.
         </Text>
       </View>
     </View>
@@ -235,6 +342,12 @@ function syncStateStyle(state: LocalWasteTicket["syncState"]) {
       : styles.pendingValue;
 }
 
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 const styles = StyleSheet.create({
   wrapper: { gap: 12 },
   flexOne: { flex: 1 },
@@ -266,6 +379,20 @@ const styles = StyleSheet.create({
   primaryButton: { marginTop: 12, minHeight: 46, paddingHorizontal: 14, borderRadius: 13, backgroundColor: "#111827", flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
   primaryButtonDisabled: { opacity: 0.45 },
   primaryButtonText: { color: "#ffffff", fontSize: 11, fontWeight: "900", textAlign: "center" },
+  secondaryButton: { marginTop: 12, minHeight: 42, paddingHorizontal: 14, borderRadius: 12, backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#dbe2ea", flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
+  secondaryButtonText: { color: "#334155", fontSize: 10, fontWeight: "900" },
+  pdfSection: { marginTop: 2, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#e2e8f0" },
+  pdfHeadingRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
+  pdfEyebrow: { color: "#0f766e", fontSize: 9, fontWeight: "900", letterSpacing: 0.9 },
+  pdfTitle: { marginTop: 5, color: "#111827", fontSize: 15, fontWeight: "900" },
+  pdfHelper: { marginTop: 5, color: "#64748b", fontSize: 10, lineHeight: 16 },
+  pdfCard: { marginTop: 12, padding: 14, borderRadius: 14, backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#bbf7d0" },
+  emptyPdfCard: { marginTop: 12, padding: 14, borderRadius: 14, backgroundColor: "#f0fdfa", borderWidth: 1, borderColor: "#99f6e4" },
+  pdfMetaRow: { flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: 7 },
+  pdfMetaLabel: { color: "#64748b", fontSize: 9, fontWeight: "700" },
+  pdfMetaValue: { flex: 1, textAlign: "right", color: "#0f766e", fontSize: 9, fontWeight: "900" },
+  hashLabel: { marginTop: 12, color: "#64748b", fontSize: 8, fontWeight: "900", letterSpacing: 0.7 },
+  hashValue: { marginTop: 4, color: "#0f766e", fontSize: 8, lineHeight: 12, fontWeight: "700" },
   nextCard: { padding: 12, borderRadius: 12, backgroundColor: "#f8fafc" },
   nextTitle: { color: "#334155", fontSize: 10, fontWeight: "900" },
   nextBody: { marginTop: 4, color: "#64748b", fontSize: 9, lineHeight: 15 },
