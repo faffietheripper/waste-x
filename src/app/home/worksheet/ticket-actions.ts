@@ -9,6 +9,7 @@ import { deriveReceivingSiteTicketNumber } from "@waste-x/operations-core";
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { jobLoads, jobs, users } from "@/db/schema";
+import { recordSyncChange } from "@/lib/client-api/change-feed";
 
 function clean(value: FormDataEntryValue | null) {
   return typeof value === "string" ? value.trim() : "";
@@ -61,6 +62,7 @@ export async function issueReceivingSiteTicketAction(formData: FormData) {
     columns: {
       id: true,
       jobId: true,
+      ownSiteId: true,
       loadNumber: true,
       status: true,
       ticketNumber: true,
@@ -102,7 +104,7 @@ export async function issueReceivingSiteTicketAction(formData: FormData) {
     loadId: load.id,
   });
 
-  await database
+  const [updated] = await database
     .update(jobLoads)
     .set({ ticketNumber, updatedAt: new Date() })
     .where(
@@ -111,7 +113,20 @@ export async function issueReceivingSiteTicketAction(formData: FormData) {
         eq(jobLoads.organisationId, user.organisationId),
         eq(jobLoads.status, "completed"),
       ),
-    );
+    )
+    .returning();
+
+  if (!updated) {
+    returnToWorksheet(returnDate, "error", "site_ticket_requires_completed_load");
+  }
+
+  await recordSyncChange({
+    organisationId: user.organisationId,
+    siteId: load.ownSiteId,
+    entityType: "job_load",
+    entityId: load.id,
+    payload: updated,
+  });
 
   revalidatePath("/home/worksheet");
   revalidatePath(`/home/jobs/${load.jobId}`);
