@@ -1,136 +1,183 @@
 # Stage 13 — Tickets, signatures & evidence
 
-Status: redesign in progress on `stage-13-tickets-evidence`.
+Status: redesigned around the real receiving-site workflow on `stage-13-tickets-evidence`.
 
-## Core authority rule
+## Research basis and terminology
 
-The Waste X Driver/Mobile app **never creates, numbers, renumbers or finalises the management-site ticket**.
+This design separates three things that must not be conflated:
 
-Mobile is the field evidence device. It records what happened in the field, including delivery confirmation and signatures/photos. The management/site workflow is the ticket authority. Desktop generates the canonical Waste X ticket from the site's encrypted local record after the movement has reached the required state.
+1. **Operational job/load state** — Waste X booking, driver progress, site acceptance/rejection and completion.
+2. **Legal movement paperwork** — for example a non-hazardous waste transfer note (WTN) or, where applicable, a hazardous waste consignment note. This documentation belongs to the transfer/movement and is not a post-completion weighbridge ticket.
+3. **Receiving-site / weighbridge ticket** — the receiving site's receipt/weight document after the site has received, checked and weighed the load. This is the Stage 13 “ticket”.
 
-This rule removes the earlier experimental Mobile ticket issuer from the Stage 13 design.
+The design is based on current UK guidance reviewed in September 2026:
+
+- Environment Agency waste duty of care guidance: non-hazardous transfers require an agreed written waste description/transfer information; hazardous movements use consignment notes.
+- Environment Agency appropriate-measures guidance for permitted non-hazardous/inert facilities: receiving sites must visually check waste and transfer documentation, reject non-conforming waste where required, and weigh each load on arrival unless a reliable alternative system is used.
+- DEFRA Digital Waste Tracking phase 1: permitted/licensed receiving sites in England and Wales must report received controlled waste from 1 October 2026, normally within 2 working days. DWT submission is therefore a post-receipt compliance workflow and must not block the physical yard from receiving a load when Cloud/DEFRA is unavailable.
+- UK weighbridge practice: incoming vehicles are commonly identified/weighed on entry, tipped after site acceptance, weighed again or resolved against a known tare, and the receipt/weighbridge ticket is produced from the final transaction.
+
+## Product rule: the Driver app is intentionally simple
+
+The Waste X Driver/Mobile app is a transport execution tool, not a weighbridge or site-authority terminal.
+
+For the core collection-to-own-site flow the Driver has exactly three operational status actions:
+
+```text
+ASSIGNED
+  ↓ Mark collected
+COLLECTED
+  ↓ Mark in transit
+IN_TRANSIT
+  ↓ Arrived at destination
+ARRIVED_DESTINATION
+  ↓
+Driver status work is finished.
+```
+
+Removed from the normal Driver workflow:
+
+- Start job
+- En route
+- Arrive at collection
+- Confirm waste
+- Confirm quantity
+- Manual gross/tare/net entry
+- Confirm delivery as a separate fourth status
+- Accept load
+- Reject load
+- Complete load
+- Issue/generate/renumber site ticket
+- Generate canonical site-ticket PDF
+
+The booking already tells the Driver what to collect and where. The site, not the Driver, validates the received waste and final quantity.
+
+## Receiving-site workflow
+
+For an incoming load collected by the waste management company's Driver:
+
+```text
+WEB / DESKTOP
+Job booked + Driver/vehicle assigned
+        ↓
+MOBILE
+Mark collected
+        ↓
+Mark in transit
+        ↓
+Arrived at destination
+        ↓
+        ├────────── Driver has no more status actions
+        ↓
+WEB / DESKTOP — RECEIVING SITE
+Load becomes ARRIVED / awaiting site decision
+        ↓
+Check transfer paperwork + waste + permit/EWC + site capacity
+        ↓
+Record weighbridge/weight data as appropriate
+        ↓
+        ├── REJECT → rejection record / reason / onward handling
+        │
+        └── ACCEPT
+              ↓
+          unload / final tare or final quantity
+              ↓
+          positive final net quantity
+              ↓
+          COMPLETE LOAD
+              ↓
+          generate/finalise receiving-site ticket
+              ↓
+          print / email / digital delivery
+              ↓
+          Mobile receives the same ticket read-only
+              ↓
+          DWT receipt is prepared/queued separately
+```
+
+### Why ARRIVED_DESTINATION is the Driver's final status
+
+A Driver can truthfully state that the vehicle/load has reached the receiving site. The Driver cannot truthfully decide that the waste has been accepted by the permitted facility. Acceptance is a receiving-site decision after the site's checks.
+
+Therefore `ARRIVED_DESTINATION` is the hand-off boundary between transport execution and site acceptance.
 
 ## Authority matrix
 
-| Capability | Mobile / Driver | Desktop / Management site | External third party |
-| --- | --- | --- | --- |
-| Start / progress field journey | Yes | View/reconcile | No |
-| Confirm delivery | Yes | View/reconcile | No |
-| Generate Waste X ticket number | **No** | **Yes** | No |
-| Generate Waste X PDF | **No** | **Yes** | No |
-| Print / reprint Waste X ticket | No | **Yes** | No |
-| Receive/view digital Waste X ticket | **Yes** | Yes | Optional |
-| Capture generator/site signature | Yes | Optional | No |
-| Capture driver signature | Yes | Optional | No |
-| Capture receiver signature | Yes | Optional | No |
-| Capture field photos | Yes | Optional | No |
-| Supply external weighbridge ticket | Capture as evidence | Store/review | External authority issues it |
-| Upload evidence | Queue locally first | Queue locally first | No |
+| Capability | Mobile / Driver | Web / Desktop receiving site |
+| --- | --- | --- |
+| View assigned job/load | Yes | Yes |
+| Mark collected | Yes | View |
+| Mark in transit | Yes | View |
+| Mark arrived at destination | Yes | View / receives arrival |
+| Validate actual waste / permit | No | Yes |
+| Enter gross/tare/net/final quantity | No | Yes |
+| Accept incoming load | No | Yes, after Driver arrival |
+| Reject incoming load | No | Yes, after Driver arrival |
+| Complete incoming load | No | Yes, after acceptance + final quantity |
+| Create/finalise site ticket | No | Yes, after completion/final transaction |
+| Generate canonical ticket PDF | No | Yes |
+| Print/reprint | No | Desktop/site |
+| Receive/view digital site ticket | Yes, read-only | Yes |
+| Capture transport/field evidence | Yes | Optional/review |
 
-## Non-negotiable invariants
+## Hard authority rules
 
-1. Driver/Mobile cannot issue or alter the canonical management-site ticket number.
-2. A management-site Waste X ticket is one-to-one with the immutable Waste X load identity.
-3. Where a Mobile journey exists, the site cannot issue the ticket until the Driver has confirmed delivery and the local Desktop working set contains `FIELD_DELIVERED` / `DELIVERED`.
-4. The site may generate the ticket and PDF with Waste X Cloud unavailable, provided the required delivery state and load data are already present locally.
-5. Cloud is never used as a ticket-number counter.
-6. Reprint never creates a new ticket number or a new PDF identity.
-7. Signatures/photos captured before ticket issue attach to `jobId + loadId`; once the one-to-one ticket is issued they automatically belong to that same movement/ticket chain.
-8. Every PDF, signature, photograph, external document and print event is SHA-256 hashed or references a hashed immutable object.
-9. Evidence is committed to encrypted local storage before upload is attempted.
-10. Cloud/R2/S3 reconciliation never deletes the only local copy.
-11. Uploads are resumable and independently retryable from operational metadata sync.
-12. Printing consumes the already-finalised PDF; printing cannot mutate the ticket.
-13. Development printing must be certifiable without owning a physical printer.
-14. A third-party weighbridge ticket remains third-party evidence. Waste X must not pretend the Driver or Waste X management site issued that external document.
+1. Mobile can only emit the three Driver status events plus explicitly permitted field-evidence/issue events.
+2. Mobile cannot mutate `ticketNumber`, waste description, gross/tare/net weight, acceptance, rejection or completion.
+3. Accept/reject on Web/Desktop is blocked until the latest Driver field state is `ARRIVED_DESTINATION` for Mobile-linked loads.
+4. A Mobile `FIELD_ARRIVED_DESTINATION` event projects the incoming canonical load into site state `arrived`; site staff do not need a duplicate “Mark arrived” click.
+5. Incoming completion requires site acceptance and a positive final net quantity.
+6. The receiving-site ticket is not issued before site completion/final transaction.
+7. Reprint reuses the same ticket number and same immutable PDF bytes.
+8. DWT reporting is downstream of receipt/completion and is retryable; DEFRA/Cloud availability does not determine whether the yard can physically process a load.
 
-## Canonical movement sequence
+## Transfer note vs site ticket
 
-The primary Stage 13 certification flow is:
+### Non-hazardous waste transfer note
+
+A WTN (or alternative document containing the required transfer information) supports the transfer of non-hazardous controlled waste. It is associated with the handover/movement, not generated only after the receiving site has completed its weighbridge transaction.
+
+Waste X should model this later as a **Movement Document**, separate from the site ticket:
 
 ```text
-Mobile / Driver
-  assigned load
-      ↓
-  collect waste
-      ↓
-  capture generator/site evidence as required
-      ↓
-  travel to destination
-      ↓
-  capture receiver evidence as required
-      ↓
-  CONFIRM DELIVERY
-  FIELD_DELIVERED
-      ↓
-      │  Cloud sync OR local Bridge relay
-      ▼
-Desktop / Management site
-  local working set sees DELIVERED
-      ↓
-  verify/accept site receipt
-      ↓
-  confirm actual waste + gross/tare/net weight
-      ↓
-  ISSUE CANONICAL WASTE X TICKET
-      ↓
-  generate immutable PDF locally
-      ↓
-  print / reprint if required
-      ↓
-  complete/finalise site load
-      ↓
-      │  sync when available
-      ▼
-Mobile / Driver
-  receives/caches the same digital ticket
-  no issue/renumber control exists
+Movement document
+  type = WTN | SEASON_TICKET_REFERENCE | OTHER_VALID_TRANSFER_DOCUMENT
+  prepared/agreed for the movement
+  signatures/acknowledgements as required
+  available to the Driver during collection/transport
 ```
 
-### Important offline rule
+### Hazardous waste
 
-“Generate ticket completely offline” means **Cloud is not required for issuance**. It does not mean Desktop may invent a delivery state it has never received.
+Hazardous waste uses a consignment note. It must accompany the hazardous waste movement and has role-specific sections for producer/holder, carrier, consignor and consignee. It must not be represented by a generic post-completion Waste X weighbridge ticket.
 
-If the Driver has confirmed delivery while Cloud is unavailable, Desktop can unlock ticket issue as soon as that `FIELD_DELIVERED` event reaches Desktop through Waste X Bridge/local relay. If neither Cloud nor Bridge has delivered the field event yet, Desktop must remain locked and display why.
+Hazardous movement-document workflow is a separate compliance slice and must not be faked by Stage 13 ticketing.
 
-That protects the chronology of the movement.
+### Receiving-site / weighbridge ticket
 
-## 13.1 — Ticket eligibility & authority
+This is the Stage 13 canonical ticket. It is proof of the receiving-site transaction/weight and can be printed or delivered digitally after the site completes the load.
 
-### Desktop owns issuance
+## Stage 13 ticket lifecycle
 
-Ticket issue is exposed only from the management/site Desktop workflow.
+```text
+NO_SITE_TICKET
+    ↓ site has completed load with final transaction data
+READY_TO_FINALISE
+    ↓
+ISSUED
+    ↓
+PDF_GENERATED
+    ↓
+PRINTED / DELIVERED_DIGITALLY
+```
 
-For a Mobile-linked load, Desktop requires:
+A rejected load does not receive a normal accepted-load ticket. It keeps an immutable rejection record and, where required, rejected-load/consignment documentation.
 
-- same immutable `jobId + loadId`
-- `fieldWorkflow.step === "DELIVERED"`
-- load not cancelled/rejected
-- site-side operational state valid for finalisation
-- actual waste description present
-- positive final net quantity
-- required driver/vehicle identity present
+## Ticket identity and numbering
 
-For an incoming own-site load, site acceptance must happen before ticket issue.
+The site ticket remains one-to-one with `loadId`.
 
-If a load has no Mobile field workflow at all, a future explicit “site-controlled / no Mobile journey” policy may allow authorised management users to issue against the site record. That is a separate audited exception path; it must not silently bypass a Mobile journey that exists.
-
-### Mobile owns delivery confirmation, not ticket authority
-
-Mobile ticket UI states are read-only:
-
-- `WAITING FOR DELIVERY` — Driver journey not yet delivered
-- `WAITING FOR SITE TICKET` — delivery confirmed; management site has not issued yet
-- `TICKET RECEIVED` — canonical ticket number exists on the load and is cached locally
-- `DOCUMENT AVAILABLE` — immutable site-generated PDF/evidence object has synced to the device
-
-There is no Mobile “Issue ticket” or “Generate PDF” action.
-
-## 13.2 — Local ticket numbering strategy
-
-Ticket numbering must work without a Cloud counter and must be deterministic for the same load.
-
-Waste X already gives every Job and Load a stable identity before field operation. The management-site number is derived from those immutable values:
+For offline-safe deterministic identity, Waste X may derive the human ticket reference from immutable booked identifiers:
 
 ```text
 {JOB_NUMBER}-L{LOAD_NUMBER}-{LOAD_ID_PREFIX}
@@ -142,343 +189,205 @@ Example:
 WX-20260905-B9C1E7-L01-02B9FE3C
 ```
 
-Properties:
+The UUID/load identity is canonical; the human ticket number is immutable once issued. Cloud never renumbers an issued ticket.
 
-- deterministic for the same job/load
-- no Cloud round-trip
-- safe if two authorised site Desktops temporarily attempt the same load
-- human-recognisable
-- canonical load UUID remains the collision-resistant identity
-- Cloud never renumbers an issued ticket
+If commercial customers later require site-specific sequential weighbridge numbers, implement that as a configurable site numbering policy with pre-allocated offline ranges. Do not silently replace the deterministic MVP policy.
 
-If the load already contains an authorised ticket number from Cloud/Desktop, Desktop adopts that number rather than replacing it.
+## PDF generation
 
-The ticket is one-to-one with `loadId`. Internally, Waste X treats the immutable load identity as the canonical ticket anchor and the human ticket number as an immutable issued reference.
-
-## 13.3 — Offline PDF generation
-
-PDF generation belongs to Desktop/site because the site owns the final ticket.
-
-The PDF is rendered only after ticket issuance from the frozen site/load snapshot.
+Canonical ticket PDF generation belongs to Web/Desktop site authority, not Mobile.
 
 Requirements:
 
-- no Cloud/API call required
-- generated from encrypted local data
-- one immutable PDF per issued ticket version
-- exact PDF bytes SHA-256 hashed before storage
+- generated from final site/load data
+- works with Cloud unavailable on Desktop when the completed transaction is already local
+- exact bytes hashed with SHA-256 before storage
 - encrypted local storage
 - template version recorded
-- generation timestamp recorded
-- original bytes reused for every reprint
-- PDF remains available after app restart and while offline
+- original bytes reused for print/reprint
+- survives Desktop restart
 
-The PDF must include at minimum:
+Recommended ticket content:
 
-- Waste X ticket number
-- Job / Load reference
-- movement direction
-- movement/delivery timestamps
-- origin and destination
+- site ticket number
+- job/load reference
+- receiving site
+- customer/source
 - waste description and EWC
-- gross / tare / net and metric
-- driver / vehicle / carrier
-- site / permit identity where applicable
+- carrier/driver/vehicle
+- arrival/completion timestamps
+- gross/tare/net/final quantity and unit
+- acceptance result
 - issue timestamp
-- ticket/load immutable identity
-- template version
+- immutable load identity
 
-## 13.4 — Digital ticket on Mobile
+## Digital ticket on Mobile
 
-Mobile receives the site-generated ticket through the same load identity.
+There is no ticket workflow in the Driver status screen.
 
-When the Cloud/Bridge working set contains the ticket number, Mobile caches it with the assignment. When the generated ticket PDF/evidence metadata is available, Mobile caches the document for offline viewing.
+A completed job may display a separate read-only **Documents** section only when a site ticket actually exists:
 
-Mobile may:
+```text
+Documents
+  Site ticket WX-...
+  Issued by receiving site
+  View offline copy (when cached)
+```
 
-- display ticket number
-- display issue/site status
-- view cached PDF offline
-- show evidence/signature status
-- share/export only where product policy allows
+Mobile may receive/cache/view/share according to policy. It cannot issue, edit, renumber or regenerate the canonical site document.
 
-Mobile may **not**:
+## Evidence and signatures
 
-- create a ticket number
-- edit a ticket number
-- regenerate a canonical PDF
-- replace the site's PDF
-- mark an external third-party ticket as Waste X-issued
+Evidence links primarily to `organisationId + jobId + loadId`; it does not depend on a ticket existing first.
 
-## 13.5 — Signatures
+This supports realistic capture during collection/transport/arrival.
 
-Signatures are evidence records, not ticket-number generators.
+Evidence types include:
 
-Roles:
-
-- `GENERATOR_SITE`
-- `DRIVER`
-- `RECEIVER`
-
-A signature can be captured before the final site ticket exists. It initially links to `organisationId + jobId + loadId`. Because the Waste X ticket is one-to-one with the load, it becomes part of the same ticket evidence chain after site issue.
-
-Each signature stores:
-
-- evidence UUIDv7
-- organisation ID
-- job ID
-- load ID
-- signer role
-- optional signer name
-- capture timestamp
-- optional GPS latitude/longitude/accuracy
-- MIME type / dimensions
-- SHA-256
-- encrypted local object reference
-- upload status
-- remote object reference after upload
-
-The Driver signature must be a separate evidence object from the generator/receiver signature even if captured on the same device.
-
-## 13.6 — Photographs, camera & documents
-
-Evidence types:
-
+- `GENERATOR_SIGNATURE`
+- `DRIVER_SIGNATURE`
+- `RECEIVER_SIGNATURE`
 - `FIELD_PHOTO`
 - `EXTERNAL_WEIGHBRIDGE_TICKET_PHOTO`
 - `ATTACHED_DOCUMENT`
-- `SIGNATURE_IMAGE`
-- `WASTE_X_TICKET_PDF`
+- `WASTE_X_SITE_TICKET_PDF`
 
-Acquisition rules:
+Each evidence object records:
 
-- camera capture writes encrypted local bytes first
-- attached files are copied into Waste X-controlled encrypted storage before upload
-- SHA-256 is calculated before upload
-- evidence remains viewable offline
-- optional GPS metadata is captured only when available/authorised
-- evidence is always linked to job/load
-
-### External weighbridge ticket
-
-If a third-party destination issues its own weighbridge ticket:
-
-```text
-Third-party site issues external ticket
-        ↓
-Driver photographs it in Mobile
-        ↓
-Waste X stores image as EXTERNAL_WEIGHBRIDGE_TICKET_PHOTO
-        ↓
-SHA-256 + load linkage + timestamp (+ optional GPS)
-        ↓
-Upload when connectivity returns
-```
-
-The external ticket does not become the Waste X-issued canonical site ticket. Both can coexist on the same movement record.
-
-## 13.7 — Encrypted local evidence storage
-
-Mobile uses SQLCipher/device secure storage; Desktop uses the existing encrypted SQLCipher local database/application-data boundary.
-
-Binary objects must never be referenced only by a temporary camera/download path.
-
-Evidence lifecycle:
-
-```text
-CAPTURED_LOCAL
-   ↓
-HASHED
-   ↓
-QUEUED
-   ↓
-UPLOADING
-   ↓
-UPLOADED
-   ↓
-VERIFIED
-   ↓
-RETENTION_ELIGIBLE
-```
-
-Failure states stay explicit and retryable:
-
-- `UPLOAD_FAILED`
-- `HASH_MISMATCH`
-- `REMOTE_VERIFY_FAILED`
-- `CONFLICT`
-
-No failure state auto-deletes local bytes.
-
-## 13.8 — R2/S3 upload & metadata sync
-
-Large binary evidence upload is independent of ordinary operational event sync.
-
-Metadata sync must not be blocked forever by a large photo upload, and a large photo upload must be resumable without replaying unrelated operational events.
-
-For each evidence object Waste X records:
-
-- evidence ID
-- job/load identity
-- content type
-- byte size
+- evidence UUID
+- organisation/job/load IDs
+- evidence type / signer role where applicable
+- captured timestamp
+- optional signer name
+- optional GPS + accuracy
+- MIME type / byte size
 - SHA-256
+- encrypted local object reference
 - upload state
-- attempt count
-- last error
-- remote bucket/key after allocation
-- remote verification state
-- created/captured/uploaded/verified timestamps
+- remote object reference after verified upload
 
-Failed uploads resume from the same evidence identity rather than creating duplicates.
+## External weighbridge tickets
 
-## 13.9 — Desktop printer adapter
-
-Printing is a Desktop/site responsibility.
-
-Printer adapter boundary:
+When Waste X delivers to a third-party site, that external site's weighbridge ticket remains external evidence:
 
 ```text
-finalised immutable PDF
+External site issues ticket
         ↓
-printer discovery
+Driver photographs/uploads it
         ↓
-selected/default printer
+EXTERNAL_WEIGHBRIDGE_TICKET_PHOTO
         ↓
-submit exact PDF bytes
-        ↓
-record PRINT event
+hash + load linkage + offline cache
 ```
 
-Reprint:
+Waste X must not relabel that document as a Waste X receiving-site ticket.
+
+## Evidence upload
+
+Binary upload lifecycle:
 
 ```text
-same ticket ID
-same ticket number
-same PDF SHA-256
-        ↓
-submit exact original bytes again
-        ↓
-record REPRINT event
+LOCAL → HASHED → QUEUED → UPLOADING → UPLOADED → VERIFIED
 ```
 
-A print event records:
+Failures remain resumable and do not delete local bytes. Operational metadata sync and large-object upload are separate queues.
 
-- event UUID
-- ticket/load identity
-- `PRINT` or `REPRINT`
-- printer ID/name
-- submitting user
-- Desktop device ID
-- submitted PDF SHA-256
-- submitted timestamp
-- result (`SUCCESS`, `FAILED`, `CANCELLED`)
-- OS/test-printer job reference when available
-- error text when failed
+## Desktop printing
 
-### Development without a physical printer
+Printing consumes the already-finalised site-ticket PDF.
 
-Development exposes a **Waste X Test Printer** through the same adapter interface.
+```text
+immutable PDF
+   ↓
+discover printer
+   ↓
+select printer
+   ↓
+PRINT / REPRINT
+   ↓
+audit event
+```
 
-It behaves like a discovered printer but writes the submitted immutable PDF to a Waste X test-output directory and records the same print audit event.
+Reprint uses the same PDF SHA-256 and same ticket number.
 
-This allows certification of:
+Development includes a **Waste X Test Printer** so discovery, selection, print, reprint and failure audit can be tested without physical hardware.
 
-- discovery
-- selection
-- default printer
-- print
-- reprint
-- exact-byte reuse
-- print audit
-- simulated printer unavailable
-- simulated print failure
+## Retention
 
-A physical printer is only needed later to validate OS driver behaviour, paper size, margins and physical output.
+Local evidence is eligible for cleanup only after remote existence and SHA-256 have been verified, the retention period has elapsed, and there is no pending retry/conflict/legal hold. Ticket PDFs may use a longer or permanent Desktop retention policy.
 
-## 13.10 — Retention & deletion
+## DWT boundary
 
-Successful upload alone is not permission to delete local evidence.
+From 1 October 2026, permitted/licensed receiving sites in England and Wales must report controlled waste receipts through DEFRA's Report receipt of waste service, normally within 2 working days.
 
-Local bytes become eligible for cleanup only when all are true:
+Waste X therefore treats DWT as:
 
-- upload state is `VERIFIED`
-- remote object exists
-- remote metadata points to the same organisation/job/load/evidence ID
-- local and remote SHA-256 agree
-- configured retention period has elapsed
-- no pending retry exists
-- no conflict exists
-- no legal hold / investigation hold is active
+```text
+site receipt/completion
+      ↓
+prepare DWT receipt
+      ↓
+submit now OR queue/retry
+      ↓
+store DEFRA reference/status
+```
 
-Pending, failed, conflicted or unverified evidence is never automatically deleted.
+The receiving-site ticket does not wait for a live DEFRA response. DWT failure is a compliance retry state, not a reason to fabricate or block physical receipt history.
 
-Ticket PDF retention should be longer than ordinary transient upload cache and may be configured as permanent local history on management-site Desktop.
+## Certification plan after redesign
 
-## Stage 13 certification plan
+### A — streamlined Driver workflow
 
-### Certification A — field authority boundary
+1. Fresh booked load appears on Mobile as `ASSIGNED`.
+2. Only `Mark collected` is available.
+3. Then only `Mark in transit`.
+4. Then only `Arrived at destination`.
+5. No Start/En route/Arrive collection/quantity/weight/delivery/ticket generation controls exist.
+6. Run one action offline, restart, reconnect and prove queue reconciliation.
 
-1. Create a fresh real job/load.
-2. Confirm Mobile shows no ticket-issue control.
-3. Try Desktop ticket issue before delivery: must be blocked with `Driver delivery confirmation required`.
-4. Progress Mobile to `DELIVERED`.
-5. Sync or Bridge relay the field state to Desktop.
-6. Desktop ticket eligibility unlocks.
+### B — authority hand-off
 
-### Certification B — offline site ticket + PDF
+1. Before Driver arrival, Web/Desktop Accept and Reject are blocked.
+2. Driver marks `ARRIVED_DESTINATION`.
+3. Same load becomes `arrived` / awaiting site decision.
+4. Web/Desktop can now Accept or Reject.
+5. Mobile cannot accept/reject.
 
-1. Desktop has `DELIVERED` state and final site data cached.
-2. Disconnect Waste X Cloud.
-3. Issue ticket on Desktop.
-4. Confirm deterministic ticket number.
-5. Confirm PDF generated locally.
-6. Record SHA-256.
-7. Fully close/reopen Desktop.
-8. Confirm same ticket number, same PDF and same SHA-256 survive.
-9. Reconnect Cloud.
-10. Confirm the same ticket number reconciles to the same `jobId + loadId`.
+### C — acceptance, weight and completion
 
-### Certification C — Mobile receives, never generates
+1. Accept the load on Web/Desktop after site checks.
+2. Enter/confirm site weight data.
+3. Positive final net quantity is required.
+4. Complete the load on Web/Desktop.
+5. DWT receipt is prepared/queued separately.
 
-1. Reconcile Mobile after site ticket issue.
-2. Confirm the same ticket number appears.
-3. Confirm no issue/edit/regenerate control exists.
-4. Disconnect Mobile.
-5. Confirm ticket remains visible offline.
+### D — site ticket
 
-### Certification D — evidence
+1. Before completion, normal site ticket generation is unavailable.
+2. After completion/final transaction, generate/finalise the site ticket.
+3. Generate immutable PDF and SHA-256 locally.
+4. Restart Desktop and verify same ticket/PDF/hash.
+5. Reconnect and reconcile.
+6. Mobile receives the ticket in a read-only Documents section.
 
-1. Capture generator/site signature offline.
-2. Capture driver signature offline.
-3. Capture receiver signature offline.
-4. Capture a field photo.
-5. Photograph a mock external weighbridge ticket.
-6. Attach a document.
-7. Restart Mobile offline and confirm all evidence remains viewable.
-8. Reconnect and verify resumable upload + Cloud metadata.
+### E — evidence and printing
 
-### Certification E — printing without hardware
+Certify signatures/photos/documents offline, resumable uploads, Test Printer discovery/print/reprint and retention guards.
 
-1. Discover `Waste X Test Printer`.
-2. Select it.
-3. Print the ticket.
-4. Verify output file matches stored PDF SHA-256.
-5. Reprint.
-6. Verify second print event is `REPRINT` and ticket/PDF identities did not change.
-7. Simulate failure and verify failed print event remains auditable/retryable.
+## Section 13 checklist
 
-## Section 13 completion checklist
-
-- [ ] Generate ticket completely offline — Desktop/site
-- [ ] Local deterministic ticket numbering — Desktop/site
-- [ ] PDF generation — Desktop/site
-- [ ] Local printer discovery — Desktop
-- [ ] Select printer — Desktop
-- [ ] Print — Desktop
-- [ ] Reprint — Desktop
-- [ ] Record print event — Desktop
-- [ ] Digital ticket on Mobile — receive/cache only
+- [ ] Streamlined Driver workflow: Collected → In transit → Arrived destination
+- [ ] Site-only Accept / Reject after Driver arrival
+- [ ] Site-only weights and completion
+- [ ] Generate receiving-site ticket completely offline on Desktop after completion
+- [ ] Local ticket numbering strategy
+- [ ] PDF generation
+- [ ] Local printer discovery on Desktop
+- [ ] Select printer
+- [ ] Print
+- [ ] Reprint exact PDF
+- [ ] Record print event
+- [ ] Digital ticket on Mobile — receive/cache/view only
 - [ ] Capture generator/site signature
 - [ ] Capture driver signature
 - [ ] Capture receiver signature
@@ -487,11 +396,11 @@ Ticket PDF retention should be longer than ordinary transient upload cache and m
 - [ ] Attach documents
 - [ ] Photograph external weighbridge ticket
 - [ ] Local encrypted evidence storage
-- [ ] SHA/hash evidence
+- [ ] SHA-256 evidence
 - [ ] Link evidence to job/load
 - [ ] Optional GPS metadata
 - [ ] Evidence remains viewable offline
 - [ ] Queue R2/S3 uploads
 - [ ] Resume failed uploads
 - [ ] Sync evidence metadata to Cloud
-- [ ] Local retention/deletion rules after verified successful sync
+- [ ] Local retention/deletion after verified successful sync
