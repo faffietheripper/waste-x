@@ -1,4 +1,4 @@
-/* WASTE_X_WORKSHEET_FAST_FLOW_V1 */
+/* WASTE_X_WORKSHEET_RECEIVING_FLOW_V2 */
 "use server";
 
 import { and, desc, eq } from "drizzle-orm";
@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
+import { jobLoadFieldStates } from "@/db/mobile-field-schema";
 import {
   counterpartySiteAuthorisations,
   counterpartySiteEwcCodes,
@@ -19,8 +20,8 @@ import {
   users,
   vehicles,
 } from "@/db/schema";
-import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 import { prepareJobLoadWasteReceipt } from "@/modules/digital-waste-tracking/data-access/prepareJobLoadWasteReceipt";
+import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 
 type OperationsContext = {
   userId: string;
@@ -191,11 +192,60 @@ async function getLoadOrRedirect(
     columns: { status: true },
   });
 
-  if (!parentJob || parentJob.status === "cancelled" || parentJob.status === "draft") {
+  if (
+    !parentJob ||
+    parentJob.status === "cancelled" ||
+    parentJob.status === "draft"
+  ) {
     worksheetRedirect(returnDate, "error", "job_not_operational");
   }
 
   return load;
+}
+
+/**
+ * Own-transport loads use the assigned Driver's Mobile destination arrival as
+ * the physical hand-off to the receiving site. External-haulier loads can use
+ * the explicit site arrival action until that carrier has a digital workflow.
+ */
+async function ownTransportDriverHasArrived(
+  load: {
+    id: string;
+    driverId: string | null;
+    haulierCounterpartyId: string | null;
+  },
+  organisationId: string,
+) {
+  if (!load.driverId || load.haulierCounterpartyId) {
+    return true;
+  }
+
+  const fieldState = await database.query.jobLoadFieldStates.findFirst({
+    where: and(
+      eq(jobLoadFieldStates.jobLoadId, load.id),
+      eq(jobLoadFieldStates.organisationId, organisationId),
+    ),
+    columns: { step: true },
+  });
+
+  // DELIVERED is accepted only as a legacy development-state alias while old
+  // test data is migrated into the streamlined ARRIVED_DESTINATION model.
+  const step = fieldState?.step as string | undefined;
+  return step === "ARRIVED_DESTINATION" || step === "DELIVERED";
+}
+
+async function requireOwnTransportDriverArrival(
+  load: {
+    id: string;
+    driverId: string | null;
+    haulierCounterpartyId: string | null;
+  },
+  organisationId: string,
+  returnDate: string,
+) {
+  if (!(await ownTransportDriverHasArrived(load, organisationId))) {
+    worksheetRedirect(returnDate, "error", "driver_destination_arrival_required");
+  }
 }
 
 async function validateDriver(
@@ -386,89 +436,20 @@ export async function markLoadArrivedAction(formData: FormData) {
     worksheetRedirect(returnDate, "error", "load_not_planned");
   }
 
-  /*
-    Fast-path check-in:
-    The normal yard workflow should not require separate "Arrived" and "Accept"
-    clicks when the operator is not adding any information between them.
-
-    We still preserve "arrived" as a meaningful exception state. If the vehicle
-    physically presents but the EWC is not permitted, Waste X records the
-    factual arrival, leaves the load at "arrived", and lets the operator reject
-    or correct the load instead of pretending it was accepted.
-  */
-  if (!load.wasteDescriptionSnapshot?.trim()) {
-    worksheetRedirect(returnDate, "error", "waste_description_required");
+  // The core own-transport path must arrive through Driver Mobile. This action
+  // exists only as a factual arrival fallback for external hauliers.
+  if (!load.haulierCounterpartyId) {
+    worksheetRedirect(returnDate, "error", "driver_destination_arrival_required");
   }
-
-  const driverId = load.driverId;
-  const vehicleId = load.vehicleId;
-
-  if (!driverId) {
-    worksheetRedirect(returnDate, "error", "driver_required");
-  }
-
-  if (!vehicleId) {
-    worksheetRedirect(returnDate, "error", "vehicle_required");
-  }
-
-  const driverError = await validateDriver(
-    driverId,
-    organisationId,
-    load.haulierCounterpartyId,
-  );
-
-  if (driverError) {
-    worksheetRedirect(returnDate, "error", driverError);
-  }
-
-  const vehicleError = await validateVehicle(
-    vehicleId,
-    organisationId,
-    load.haulierCounterpartyId,
-  );
-
-  if (vehicleError) {
-    worksheetRedirect(returnDate, "error", vehicleError);
-  }
-
-  const permitMatch = await incomingPermitAllowsLoad({
-    organisationId,
-    permitId: load.sitePermitId,
-    siteId: load.ownSiteId,
-    ewcCodeId: load.ewcCodeId,
-  });
 
   const now = new Date();
-  const arrivalFields = {
-    receivedAt: load.receivedAt ?? now,
-    movementAt: load.movementAt ?? now,
-    updatedAt: now,
-  };
-
-  if (!permitMatch) {
-    await database
-      .update(jobLoads)
-      .set({
-        ...arrivalFields,
-        status: "arrived",
-      })
-      .where(
-        and(
-          eq(jobLoads.id, load.id),
-          eq(jobLoads.organisationId, organisationId),
-        ),
-      );
-
-    await syncJobStatus(load.jobId, organisationId);
-    revalidateOperations(load.jobId);
-    worksheetRedirect(returnDate, "error", "permit_mismatch");
-  }
-
   await database
     .update(jobLoads)
     .set({
-      ...arrivalFields,
-      status: "accepted",
+      status: "arrived",
+      receivedAt: load.receivedAt ?? now,
+      movementAt: load.movementAt ?? now,
+      updatedAt: now,
     })
     .where(
       and(
@@ -479,7 +460,7 @@ export async function markLoadArrivedAction(formData: FormData) {
 
   await syncJobStatus(load.jobId, organisationId);
   revalidateOperations(load.jobId);
-  worksheetRedirect(returnDate, "success", "load_arrived_and_accepted");
+  worksheetRedirect(returnDate, "success", "load_arrived");
 }
 
 export async function saveLoadDetailsAction(formData: FormData) {
@@ -499,7 +480,6 @@ export async function saveLoadDetailsAction(formData: FormData) {
   const driverId = optionalString(formData.get("driverId"));
   const vehicleId = optionalString(formData.get("vehicleId"));
   const wasteDescription = optionalString(formData.get("wasteDescription"));
-  const ticketNumber = optionalString(formData.get("ticketNumber"));
   const notes = optionalString(formData.get("notes"));
   const weightMetric = cleanString(formData.get("weightMetric"));
 
@@ -507,11 +487,7 @@ export async function saveLoadDetailsAction(formData: FormData) {
     worksheetRedirect(returnDate, "error", "waste_description_required");
   }
 
-  if (![
-    "Grams",
-    "Kilograms",
-    "Tonnes",
-  ].includes(weightMetric)) {
+  if (!["Grams", "Kilograms", "Tonnes"].includes(weightMetric)) {
     worksheetRedirect(returnDate, "error", "invalid_weight_metric");
   }
 
@@ -520,7 +496,6 @@ export async function saveLoadDetailsAction(formData: FormData) {
     organisationId,
     load.haulierCounterpartyId,
   );
-
   if (driverError) {
     worksheetRedirect(returnDate, "error", driverError);
   }
@@ -530,7 +505,6 @@ export async function saveLoadDetailsAction(formData: FormData) {
     organisationId,
     load.haulierCounterpartyId,
   );
-
   if (vehicleError) {
     worksheetRedirect(returnDate, "error", vehicleError);
   }
@@ -548,11 +522,20 @@ export async function saveLoadDetailsAction(formData: FormData) {
     worksheetRedirect(returnDate, "error", code);
   }
 
+  const isWeightEntry =
+    grossWeight !== null || tareWeight !== null || netWeight !== null;
+
+  if (isWeightEntry && load.direction === "incoming") {
+    if (load.status !== "arrived" && load.status !== "accepted") {
+      worksheetRedirect(returnDate, "error", "weight_after_arrival_only");
+    }
+    await requireOwnTransportDriverArrival(load, organisationId, returnDate);
+  }
+
   if (grossWeight !== null && tareWeight !== null) {
     if (grossWeight < tareWeight) {
       worksheetRedirect(returnDate, "error", "gross_below_tare");
     }
-
     netWeight = grossWeight - tareWeight;
   }
 
@@ -568,7 +551,8 @@ export async function saveLoadDetailsAction(formData: FormData) {
       weightMetric: weightMetric as "Grams" | "Kilograms" | "Tonnes",
       weightIsEstimate: cleanString(formData.get("weightIsEstimate")) === "on",
       weightSource: "manual",
-      ticketNumber,
+      // Ticket number is intentionally not accepted from this form. It is
+      // created by the receiving-site ticket authority after completion.
       notes,
       updatedAt: new Date(),
     })
@@ -596,6 +580,8 @@ export async function acceptLoadAction(formData: FormData) {
   if (load.status !== "arrived") {
     worksheetRedirect(returnDate, "error", "load_must_be_arrived");
   }
+
+  await requireOwnTransportDriverArrival(load, organisationId, returnDate);
 
   if (!load.wasteDescriptionSnapshot?.trim()) {
     worksheetRedirect(returnDate, "error", "waste_description_required");
@@ -645,6 +631,8 @@ export async function rejectLoadAction(formData: FormData) {
     worksheetRedirect(returnDate, "error", "load_must_be_arrived");
   }
 
+  await requireOwnTransportDriverArrival(load, organisationId, returnDate);
+
   if (reason.length < 3) {
     worksheetRedirect(returnDate, "error", "rejection_reason_required");
   }
@@ -685,12 +673,13 @@ export async function completeIncomingLoadAction(formData: FormData) {
     worksheetRedirect(returnDate, "error", "load_must_be_accepted");
   }
 
+  await requireOwnTransportDriverArrival(load, organisationId, returnDate);
+
   if (!load.receivedAt) {
     worksheetRedirect(returnDate, "error", "received_time_missing");
   }
 
   const netWeight = Number(load.netWeight ?? "0");
-
   if (!Number.isFinite(netWeight) || netWeight <= 0) {
     worksheetRedirect(returnDate, "error", "net_weight_required");
   }
@@ -712,10 +701,9 @@ export async function completeIncomingLoadAction(formData: FormData) {
     );
 
   /*
-    Stage 5 bridge:
-    Prepare a DWT receipt draft from the factual Job Load, but never block
-    yard operations if DWT configuration is incomplete. The DWT Centre can
-    retry preparation and will surface missing fields for human review.
+    DWT is downstream compliance, not a yard gate. Prepare from the completed
+    factual receipt, but leave physical operations complete if the reporting
+    service or configuration is unavailable. The DWT Centre can retry.
   */
   try {
     await prepareJobLoadWasteReceipt({
@@ -758,7 +746,6 @@ export async function completeOutgoingLoadAction(formData: FormData) {
   }
 
   const netWeight = Number(load.netWeight ?? "0");
-
   if (!Number.isFinite(netWeight) || netWeight <= 0) {
     worksheetRedirect(returnDate, "error", "net_weight_required");
   }
@@ -872,7 +859,6 @@ export async function addExtraLoadAction(formData: FormData) {
   }
 
   const previous = job.loads[0];
-
   if (!previous) {
     worksheetRedirect(returnDate, "error", "source_load_missing");
   }
