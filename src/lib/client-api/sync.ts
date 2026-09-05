@@ -277,9 +277,6 @@ async function requireDriverDestinationForOwnTransport(
   context: ClientApiContext,
   load: { id: string; driverId: string | null; haulierCounterpartyId: string | null },
 ) {
-  // Own-transport loads with an assigned Driver use Mobile as the authoritative
-  // arrival signal. External-haulier/site-only loads can use the explicit site
-  // arrival path until their own digital integration exists.
   if (!load.driverId || load.haulierCounterpartyId) return;
   const step = await currentFieldWorkflowStep(tx, context, load.id);
   if (step !== "ARRIVED_DESTINATION") {
@@ -401,9 +398,6 @@ async function applyJobLoadEvent(
       await validateFieldWorkflowTransition(tx, context, event);
       const arrivedAtDestination = event.eventType === "FIELD_ARRIVED_DESTINATION";
       await tx.update(jobLoads).set({
-        // For the core incoming own-driver flow, Mobile destination arrival is
-        // the physical site arrival. This removes a duplicate yard click while
-        // keeping acceptance/rejection under site authority.
         status:
           arrivedAtDestination && load.direction === "incoming" && load.status === "planned"
             ? "arrived"
@@ -626,12 +620,9 @@ export async function processSyncEvent(context: ClientApiContext, event: SyncEve
         throw new SyncBusinessRuleError("UNSUPPORTED_ENTITY_TYPE");
       }
 
-      /*
-       * Driver workflow proof travels in the same Cloud change as the physical
-       * load mutation. In particular, FIELD_ARRIVED_DESTINATION can project an
-       * incoming own-transport load to canonical `arrived`; Desktop must never
-       * receive that status before the proof that the Driver caused it.
-       */
+      /* Driver workflow proof travels in the same Cloud change as the physical
+       * load mutation, so Desktop never sees own-transport `arrived` before the
+       * Driver-arrival proof that authorises it. */
       if (
         event.entityType === "job_load" &&
         isFieldWorkflowEventType(event.eventType) &&
@@ -645,6 +636,31 @@ export async function processSyncEvent(context: ClientApiContext, event: SyncEve
             step: transition.toStep,
             updatedAt: event.occurredAt,
             lastEventType: event.eventType,
+          },
+        };
+      }
+
+      /* Pre-collection Driver refusal is also published with structured
+       * authority metadata. Desktop can therefore accept a planned→rejected
+       * transition without mistaking it for a receiving-site rejection that
+       * would require destination arrival. */
+      if (
+        event.entityType === "job_load" &&
+        event.eventType === "FIELD_COLLECTION_REJECTED" &&
+        entityPayload &&
+        typeof entityPayload === "object"
+      ) {
+        const rejection = fieldCollectionRejectPayloadSchema.safeParse(event.payload);
+        if (!rejection.success) {
+          throw new SyncBusinessRuleError("COLLECTION_REJECTION_REASON_REQUIRED");
+        }
+        entityPayload = {
+          ...(entityPayload as Record<string, unknown>),
+          driverCollectionRejection: {
+            eventType: "FIELD_COLLECTION_REJECTED",
+            authority: "DRIVER",
+            occurredAt: event.occurredAt,
+            reason: rejection.data.reason,
           },
         };
       }
@@ -717,7 +733,7 @@ export async function processSyncEvent(context: ClientApiContext, event: SyncEve
         });
       } catch {
         // Preserve the original deterministic rejection even if audit persistence
-        // itself races with another duplicate delivery of the same event.
+        // races with another duplicate delivery of the same event.
       }
       return result(event.eventId, "REJECTED", null, error.code);
     }
