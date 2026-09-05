@@ -76,6 +76,16 @@ export function MobileTicketPanel({
         return;
       }
 
+      if (
+        result.ticket.numberSource === "MOBILE_OFFLINE" &&
+        !result.ticket.cloudEventId
+      ) {
+        setMessage(
+          "Ticket is safely issued in encrypted local storage. Its Cloud queue event could not be attached yet, so do not close the load until this state is remediated.",
+        );
+        return;
+      }
+
       setMessage(
         online
           ? "Ticket issued in encrypted local storage first. Confirming the ticket number with Waste X Cloud…"
