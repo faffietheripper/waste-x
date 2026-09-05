@@ -52,10 +52,10 @@ export function greetingForNow(date = new Date()) {
 }
 
 export function isCompletedAssignment(assignment: MobileAssignmentV1) {
-  return (
-    COMPLETED_STATUSES.has(assignment.load.status.toLowerCase()) ||
-    assignment.workflow?.step === "DELIVERED"
-  );
+  // Driver workflow deliberately ends at ARRIVED_DESTINATION. Completion is a
+  // receiving-site Web/Desktop decision, so Mobile history must follow the
+  // canonical load status rather than inventing a Driver-side completed step.
+  return COMPLETED_STATUSES.has(assignment.load.status.toLowerCase());
 }
 
 export function isCancelledAssignment(assignment: MobileAssignmentV1) {
