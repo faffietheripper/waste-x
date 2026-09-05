@@ -12,8 +12,8 @@ fn error(message: impl Into<String>) -> Box<dyn std::error::Error> {
 
 /**
  * Stage 13 invariants live at the encrypted local-database boundary as well as
- * in the UI. This prevents an older Desktop UI path from accidentally closing
- * a Mobile-linked movement before the management-site ticket exists.
+ * in React/Rust command validation. Driver arrival chronology is preserved,
+ * while receiving-site tickets are explicitly post-completion documents.
  */
 pub fn initialise(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data_dir = app
@@ -39,12 +39,13 @@ pub fn initialise(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     connection
         .execute_batch(
             r#"
-            /*
-             * A field-workflow mirror is operational chronology, not a mutable
-             * form field. Some ordinary Cloud load updates do not carry the
-             * synthetic fieldWorkflow object, so preserve the last known local
-             * mirror rather than silently erasing DELIVERED after a later pull.
-             */
+            /* Remove the earlier experimental rule that required a ticket
+             * before completion. That chronology was backwards. */
+            DROP TRIGGER IF EXISTS stage13_ticket_before_completion;
+
+            /* Driver transport chronology is synthetic field metadata and some
+             * ordinary Cloud job-load payloads do not include it. Preserve the
+             * last local mirror instead of erasing ARRIVED_DESTINATION. */
             CREATE TRIGGER IF NOT EXISTS stage13_preserve_field_workflow
             AFTER UPDATE OF payload_json ON local_job_load
             WHEN json_type(OLD.payload_json, '$.fieldWorkflow') = 'object'
@@ -59,21 +60,20 @@ pub fn initialise(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                WHERE id = NEW.id;
             END;
 
-            /*
-             * For any load that has entered the Mobile field workflow, Desktop
-             * may not close the site load until the canonical site ticket has
-             * been issued. Loads with no Mobile field workflow are left to the
-             * existing site-only rules until that separate policy is designed.
-             */
-            CREATE TRIGGER IF NOT EXISTS stage13_ticket_before_completion
-            BEFORE UPDATE OF status ON local_job_load
-            WHEN NEW.status = 'completed'
-              AND json_extract(OLD.payload_json, '$.fieldWorkflow.step') IS NOT NULL
-              AND COALESCE(trim(json_extract(NEW.payload_json, '$.ticketNumber')), '') = ''
+            /* A normal receiving-site ticket is evidence of a finished site
+             * transaction. Local code cannot create it against an uncompleted
+             * load even if an older UI accidentally exposes the command. */
+            CREATE TRIGGER IF NOT EXISTS stage13_site_ticket_after_completion
+            BEFORE INSERT ON local_ticket
+            WHEN NEW.job_load_id IS NOT NULL
+              AND COALESCE(
+                    (SELECT status FROM local_job_load WHERE id = NEW.job_load_id),
+                    ''
+                  ) != 'completed'
             BEGIN
               SELECT RAISE(
                 ABORT,
-                'STAGE13_TICKET_REQUIRED: Driver delivery and management-site ticket are required before completion.'
+                'STAGE13_SITE_TICKET_REQUIRES_COMPLETED_LOAD: Complete the receiving-site transaction before issuing its ticket.'
               );
             END;
             "#,
