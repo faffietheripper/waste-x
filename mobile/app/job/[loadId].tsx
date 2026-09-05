@@ -20,7 +20,6 @@ import {
   getMobileAuthSnapshot,
   type MobileAuthSnapshot,
 } from "@/auth/mobile-auth";
-import { CollectionConfirmationPanel } from "@/field-ops/collection-confirmation";
 import { DeliveryActivityPanel } from "@/field-ops/delivery-activity";
 import {
   formatAssignmentDate,
@@ -32,7 +31,6 @@ import {
   getNextMobileFieldWorkflowAction,
   humanFieldWorkflowStep,
   isMobileAssignmentReadOnly,
-  isMobileCollectionReady,
   MOBILE_FIELD_WORKFLOW_STEPS,
 } from "@/field-ops/workflow";
 import {
@@ -65,60 +63,48 @@ export default function MobileJobDetailScreen() {
 
   useEffect(() => {
     let cancelled = false;
-
     void (async () => {
       try {
         const snapshot = await getMobileAuthSnapshot();
         if (cancelled) return;
-
         if (!snapshot.authenticated) {
           router.replace("/");
           return;
         }
-
         const [localAssignment, localSync] = await Promise.all([
           getLocalMobileAssignmentByLoadId(loadId ?? ""),
           getMobileSyncStatus(),
         ]);
-
         if (cancelled) return;
         setAuth(snapshot);
         setSyncStatus(localSync);
         setAssignment(localAssignment);
       } catch (reason) {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : String(reason));
-        }
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-
     return () => {
       cancelled = true;
     };
   }, [loadId, router]);
 
   const directionLabel = useMemo(() => {
-    if (!assignment) return "FIELD JOB";
+    if (!assignment) return "DRIVER JOB";
     return assignment.job.direction === "incoming" ? "COLLECTION" : "DELIVERY";
   }, [assignment]);
 
   async function recordNextFieldAction() {
     if (!assignment) return;
     if (isMobileAssignmentReadOnly(assignment)) {
-      setError("This field job is read only and can no longer be changed.");
+      setError("This Driver job is read only and can no longer be changed.");
       return;
     }
 
     const workflow = getMobileFieldWorkflowState(assignment);
     const action = getNextMobileFieldWorkflowAction(workflow.step);
     if (!action) return;
-
-    if (action.eventType === "FIELD_COLLECTED" && !isMobileCollectionReady(assignment)) {
-      setError("Confirm the waste and quantity before marking this load collected.");
-      return;
-    }
 
     setActionBusy(true);
     setError(null);
@@ -133,7 +119,7 @@ export default function MobileJobDetailScreen() {
       setSyncStatus(await getMobileSyncStatus());
       setMessage(
         auth?.onlineAuthenticated
-          ? `${action.label} saved on this phone first. Syncing with Waste X Cloud…`
+          ? `${action.label} saved on this phone first. Syncing with Waste X…`
           : `${action.label} saved securely on this phone and queued for sync.`,
       );
 
@@ -141,17 +127,11 @@ export default function MobileJobDetailScreen() {
         try {
           await syncPendingMobileEvents();
           const refreshed = await reloadLocalDetail();
-          setMessage(
-            refreshed
-              ? `${action.label} saved locally and confirmed by Waste X Cloud.`
-              : `${action.label} synced.`,
-          );
+          setMessage(refreshed ? `${action.label} confirmed by Waste X.` : `${action.label} synced.`);
         } catch (syncError) {
           setSyncStatus(await getMobileSyncStatus());
-          setMessage(
-            `${action.label} is safe on this phone. Cloud sync will retry when connectivity is available.`,
-          );
-          console.warn("[MOBILE_FIELD_OPS] Immediate sync deferred", syncError);
+          setMessage(`${action.label} is safe on this phone. Sync will retry automatically.`);
+          console.warn("[MOBILE_DRIVER] Immediate sync deferred", syncError);
         }
       }
     } catch (reason) {
@@ -172,26 +152,6 @@ export default function MobileJobDetailScreen() {
     );
   }
 
-  if (error && !assignment) {
-    return (
-      <SafeAreaView style={styles.screen}>
-        <View style={styles.emptyContainer}>
-          <Pressable onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </Pressable>
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyEyebrow}>JOB UNAVAILABLE</Text>
-            <Text style={styles.emptyTitle}>This load is not in your local working set.</Text>
-            <Text style={styles.emptyBody}>
-              {error ??
-                "Waste X only opens field jobs that are currently authorised and cached on this phone."}
-            </Text>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   if (!assignment) {
     return (
       <SafeAreaView style={styles.screen}>
@@ -203,7 +163,7 @@ export default function MobileJobDetailScreen() {
             <Text style={styles.emptyEyebrow}>JOB UNAVAILABLE</Text>
             <Text style={styles.emptyTitle}>This load is not in your local working set.</Text>
             <Text style={styles.emptyBody}>
-              Waste X only opens field jobs that are currently authorised and cached on this phone.
+              {error ?? "Waste X only opens jobs currently assigned and cached for this Driver."}
             </Text>
           </View>
         </View>
@@ -216,21 +176,11 @@ export default function MobileJobDetailScreen() {
   const workflow = getMobileFieldWorkflowState(assignment);
   const nextAction = getNextMobileFieldWorkflowAction(workflow.step);
   const readOnly = isMobileAssignmentReadOnly(assignment);
-  const canonicalTerminal = ["completed", "rejected", "cancelled", "canceled"].includes(
+  const terminal = ["completed", "rejected", "cancelled", "canceled"].includes(
     assignment.load.status.toLowerCase(),
   );
-  const parentJobClosed = ["draft", "cancelled", "canceled"].includes(
-    assignment.job.status.toLowerCase(),
-  );
-  const fieldDelivered = workflow.step === "DELIVERED";
+  const atDestination = workflow.step === "ARRIVED_DESTINATION";
   const workflowIndex = MOBILE_FIELD_WORKFLOW_STEPS.indexOf(workflow.step);
-  const collectionReady = isMobileCollectionReady(assignment);
-  const collectionGateActive =
-    !readOnly && workflow.step === "ARRIVED_COLLECTION";
-  const nextActionDisabled =
-    readOnly ||
-    actionBusy ||
-    (nextAction?.eventType === "FIELD_COLLECTED" && !collectionReady);
 
   return (
     <SafeAreaView style={styles.screen} edges={["top"]}>
@@ -239,38 +189,23 @@ export default function MobileJobDetailScreen() {
           <Pressable onPress={() => router.back()} hitSlop={10} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
           </Pressable>
-          <View
-            style={[
-              styles.connectionPill,
-              auth?.onlineAuthenticated ? styles.onlinePill : styles.offlinePill,
-            ]}
-          >
-            <View
-              style={[
-                styles.connectionDot,
-                auth?.onlineAuthenticated ? styles.onlineDot : styles.offlineDot,
-              ]}
-            />
+          <View style={[styles.connectionPill, auth?.onlineAuthenticated ? styles.onlinePill : styles.offlinePill]}>
+            <View style={[styles.connectionDot, auth?.onlineAuthenticated ? styles.onlineDot : styles.offlineDot]} />
             <Text style={styles.connectionText}>
-              {auth?.onlineAuthenticated ? "Online" : "Offline"}
-              {pending > 0 ? ` · ${pending} queued` : ""}
+              {auth?.onlineAuthenticated ? "Online" : "Offline"}{pending > 0 ? ` · ${pending} queued` : ""}
             </Text>
           </View>
         </View>
 
         <Text style={styles.eyebrow}>{directionLabel}</Text>
         <Text style={styles.title}>{assignment.job.jobNumber}</Text>
-        <Text style={styles.subtitle}>
-          Load {assignment.load.loadNumber} · {formatAssignmentDate(assignment.job.jobDate)}
-        </Text>
+        <Text style={styles.subtitle}>Load {assignment.load.loadNumber} · {formatAssignmentDate(assignment.job.jobDate)}</Text>
 
         <View style={styles.statusCard}>
           <View style={styles.flexOne}>
-            <Text style={styles.statusLabel}>FIELD PROGRESS</Text>
+            <Text style={styles.statusLabel}>DRIVER PROGRESS</Text>
             <Text style={styles.statusValue}>{humanFieldWorkflowStep(workflow.step)}</Text>
-            <Text style={styles.canonicalStatus}>
-              Load status · {humanStatus(assignment.load.status)}
-            </Text>
+            <Text style={styles.canonicalStatus}>Site load status · {humanStatus(assignment.load.status)}</Text>
           </View>
           <View style={styles.versionBadge}>
             <Text style={styles.versionLabel}>LOCAL VERSION</Text>
@@ -278,122 +213,79 @@ export default function MobileJobDetailScreen() {
           </View>
         </View>
 
-        {error ? (
-          <View style={styles.errorCard}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-        {message ? (
-          <View style={styles.messageCard}>
-            <Text style={styles.messageText}>{message}</Text>
-          </View>
-        ) : null}
+        {error ? <View style={styles.errorCard}><Text style={styles.errorText}>{error}</Text></View> : null}
+        {message ? <View style={styles.messageCard}><Text style={styles.messageText}>{message}</Text></View> : null}
 
-        <Section title="Field workflow">
+        <Section title="Driver workflow">
+          <Text style={styles.workflowIntro}>
+            Only record the physical transport milestones you control. The receiving site handles acceptance, rejection, weights, completion and ticketing.
+          </Text>
           <View style={styles.timeline}>
             {MOBILE_FIELD_WORKFLOW_STEPS.map((step, index) => {
               const completed = index < workflowIndex;
               const current = index === workflowIndex;
               return (
                 <View key={step} style={styles.timelineRow}>
-                  <View
-                    style={[
-                      styles.timelineDot,
-                      completed && styles.timelineDotComplete,
-                      current && styles.timelineDotCurrent,
-                    ]}
-                  >
-                    <Text style={styles.timelineDotText}>
-                      {completed ? "✓" : current ? "•" : ""}
-                    </Text>
+                  <View style={[styles.timelineDot, completed && styles.timelineDotComplete, current && styles.timelineDotCurrent]}>
+                    <Text style={styles.timelineDotText}>{completed ? "✓" : current ? "•" : ""}</Text>
                   </View>
                   <View style={styles.flexOne}>
-                    <Text
-                      style={[
-                        styles.timelineLabel,
-                        (completed || current) && styles.timelineLabelActive,
-                      ]}
-                    >
-                      {humanFieldWorkflowStep(step)}
-                    </Text>
-                    {current && workflow.updatedAt ? (
-                      <Text style={styles.timelineTime}>
-                        {new Date(workflow.updatedAt).toLocaleString()}
-                      </Text>
-                    ) : null}
+                    <Text style={[styles.timelineLabel, (completed || current) && styles.timelineLabelActive]}>{humanFieldWorkflowStep(step)}</Text>
+                    {current && workflow.updatedAt ? <Text style={styles.timelineTime}>{new Date(workflow.updatedAt).toLocaleString()}</Text> : null}
                   </View>
                 </View>
               );
             })}
           </View>
 
-          {collectionGateActive ? (
-            <CollectionConfirmationPanel
-              assignment={assignment}
-              online={Boolean(auth?.onlineAuthenticated)}
-              onAssignmentChange={(updated) => {
-                setAssignment(updated);
-                setError(null);
-              }}
-              onSyncStatusChange={setSyncStatus}
-            />
-          ) : null}
-
           {!readOnly && nextAction ? (
             <View style={styles.actionBlock}>
-              <Text style={styles.actionEyebrow}>NEXT ACTION</Text>
+              <Text style={styles.actionEyebrow}>NEXT DRIVER ACTION</Text>
               <Text style={styles.actionTitle}>{nextAction.label}</Text>
-              <Text style={styles.actionHelper}>
-                {nextAction.eventType === "FIELD_COLLECTED" && !collectionReady
-                  ? "Waste and quantity confirmation are required before collection can be recorded."
-                  : nextAction.helper}
-              </Text>
-              <Pressable
-                disabled={nextActionDisabled}
-                onPress={() => void recordNextFieldAction()}
-                style={[
-                  styles.primaryAction,
-                  nextActionDisabled && styles.primaryActionDisabled,
-                ]}
-              >
+              <Text style={styles.actionHelper}>{nextAction.helper}</Text>
+              <Pressable disabled={actionBusy} onPress={() => void recordNextFieldAction()} style={[styles.primaryAction, actionBusy && styles.primaryActionDisabled]}>
                 {actionBusy ? <ActivityIndicator color="#ffffff" /> : null}
-                <Text style={styles.primaryActionText}>
-                  {actionBusy
-                    ? "Saving locally…"
-                    : nextAction.eventType === "FIELD_COLLECTED" && !collectionReady
-                      ? "Confirm waste & quantity first"
-                      : nextAction.label}
-                </Text>
+                <Text style={styles.primaryActionText}>{actionBusy ? "Saving locally…" : nextAction.label}</Text>
               </Pressable>
-              <Text style={styles.localActionHint}>
-                Recorded to encrypted SQLCipher first. Internet is not required.
+              <Text style={styles.localActionHint}>Recorded to encrypted SQLCipher first. Internet is not required.</Text>
+            </View>
+          ) : atDestination && !terminal ? (
+            <View style={styles.handoffCard}>
+              <Text style={styles.handoffEyebrow}>DRIVER HAND-OFF COMPLETE</Text>
+              <Text style={styles.handoffTitle}>Awaiting receiving-site decision.</Text>
+              <Text style={styles.handoffBody}>
+                The site can now check the waste and paperwork, record the weight, then accept or reject the load. You do not need to confirm delivery or issue a ticket.
               </Text>
             </View>
           ) : (
             <View style={styles.completeBlock}>
-              <Text style={styles.completeTitle}>
-                {parentJobClosed
-                  ? "This job is read only."
-                  : canonicalTerminal
-                    ? "This load is in a terminal state."
-                    : fieldDelivered
-                      ? "Field journey complete."
-                      : "No field action is available."}
-              </Text>
-              <Text style={styles.completeBody}>
-                {parentJobClosed
-                  ? `Job status: ${humanStatus(assignment.job.status)}. No further Mobile actions can be recorded.`
-                  : canonicalTerminal
-                    ? `Canonical load status: ${humanStatus(assignment.load.status)}.`
-                    : fieldDelivered
-                      ? "The driver journey is delivered. Existing delivery notes and issues remain visible below while final Waste X compliance completion stays separate."
-                      : "Waste X has no valid next field transition for this load."}
-              </Text>
+              <Text style={styles.completeTitle}>{terminal ? `Load ${humanStatus(assignment.load.status)}` : "No Driver action available."}</Text>
+              <Text style={styles.completeBody}>Site-side decisions remain read-only on Driver Mobile.</Text>
             </View>
           )}
         </Section>
 
-        <Section title="Delivery & issues">
+        <Section title="Route">
+          <SiteCard label={assignment.job.direction === "incoming" ? "COLLECTION SITE" : "ORIGIN SITE"} location={assignment.origin} accent />
+          <View style={styles.routeConnector}><View style={styles.routeLine} /><Text style={styles.routeArrow}>↓</Text></View>
+          <SiteCard label={assignment.job.direction === "incoming" ? "DESTINATION SITE" : "DELIVERY SITE"} location={assignment.destination} />
+        </Section>
+
+        <Section title="Booked waste">
+          <View style={styles.detailGrid}>
+            <DetailTile label="EWC" value={assignment.load.ewcCode ?? "Not set"} />
+            <DetailTile label="SITE NET" value={weight ?? "Pending site weight"} />
+          </View>
+          <DetailRow label="Booked description" value={assignment.load.wasteDescription ?? assignment.material?.name ?? "Not set"} />
+          <Text style={styles.readOnlyHint}>Waste description and weight are site-controlled records on Driver Mobile.</Text>
+        </Section>
+
+        <Section title="Driver & vehicle">
+          <DetailRow label="Driver" value={assignment.transport.driverName} />
+          <DetailRow label="Vehicle" value={assignment.transport.vehicleRegistration ?? "Not assigned"} />
+        </Section>
+
+        <Section title="Field notes & issues">
           <DeliveryActivityPanel
             assignment={assignment}
             online={Boolean(auth?.onlineAuthenticated)}
@@ -405,100 +297,39 @@ export default function MobileJobDetailScreen() {
           />
         </Section>
 
-        <Section title="Route">
-          <SiteCard
-            label={assignment.job.direction === "incoming" ? "COLLECTION SITE" : "ORIGIN SITE"}
-            location={assignment.origin}
-            accent
-          />
-          <View style={styles.routeConnector}>
-            <View style={styles.routeLine} />
-            <Text style={styles.routeArrow}>↓</Text>
-          </View>
-          <SiteCard
-            label={assignment.job.direction === "incoming" ? "DESTINATION SITE" : "DELIVERY SITE"}
-            location={assignment.destination}
-          />
-        </Section>
-
-        <Section title="Waste & quantity">
-          <View style={styles.detailGrid}>
-            <DetailTile label="EWC" value={assignment.load.ewcCode ?? "Not set"} />
-            <DetailTile label="NET" value={weight ?? "Not confirmed"} />
-          </View>
-          <DetailRow
-            label="Waste description"
-            value={assignment.load.wasteDescription ?? assignment.material?.name ?? "Not set"}
-          />
-          {assignment.material ? (
-            <DetailRow label="Material profile" value={assignment.material.name} />
-          ) : null}
-          {assignment.load.grossWeight ? (
-            <DetailRow
-              label="Gross weight"
-              value={`${assignment.load.grossWeight} ${assignment.load.weightMetric}`}
-            />
-          ) : null}
-          {assignment.load.tareWeight ? (
-            <DetailRow
-              label="Tare weight"
-              value={`${assignment.load.tareWeight} ${assignment.load.weightMetric}`}
-            />
-          ) : null}
-          <DetailRow
-            label="Quantity basis"
-            value={`${assignment.load.weightMetric}${assignment.load.weightIsEstimate ? " · estimate" : " · actual"}`}
-          />
-          <DetailRow
-            label="Weight source"
-            value={assignment.load.weightSource ?? "Not recorded"}
-          />
-          <DetailRow label="Ticket number" value={assignment.load.ticketNumber ?? "Not issued"} />
-        </Section>
-
-        <Section title="Driver & vehicle">
-          <DetailRow label="Driver" value={assignment.transport.driverName} />
-          <DetailRow
-            label="Vehicle"
-            value={assignment.transport.vehicleRegistration ?? "Not assigned"}
-          />
-          <DetailRow label="Driver ID" value={assignment.transport.driverId} mono />
-        </Section>
+        {assignment.load.ticketNumber ? (
+          <Section title="Documents">
+            <View style={styles.documentCard}>
+              <View style={styles.documentTopRow}>
+                <View style={styles.flexOne}>
+                  <Text style={styles.documentEyebrow}>RECEIVING-SITE TICKET</Text>
+                  <Text selectable style={styles.documentNumber}>{assignment.load.ticketNumber}</Text>
+                </View>
+                <View style={styles.receivedBadge}><Text style={styles.receivedBadgeText}>RECEIVED</Text></View>
+              </View>
+              <Text style={styles.documentBody}>
+                Issued by the receiving site after its final transaction. This Driver copy is read-only; Mobile cannot issue, edit or renumber it.
+              </Text>
+            </View>
+          </Section>
+        ) : null}
 
         <Section title="Job information">
           <DetailRow label="Job status" value={humanStatus(assignment.job.status)} />
-          <DetailRow
-            label="Customer reference"
-            value={assignment.job.customerReference ?? "Not supplied"}
-          />
-          <DetailRow
-            label="Purchase order"
-            value={assignment.job.purchaseOrder ?? "Not supplied"}
-          />
-          <DetailRow
-            label="Movement time"
-            value={
-              assignment.load.movementAt
-                ? new Date(assignment.load.movementAt).toLocaleString()
-                : "Not recorded"
-            }
-          />
+          <DetailRow label="Customer reference" value={assignment.job.customerReference ?? "Not supplied"} />
+          <DetailRow label="Purchase order" value={assignment.job.purchaseOrder ?? "Not supplied"} />
         </Section>
 
         {assignment.job.notes ? (
-          <Section title="Instructions / notes">
-            <View style={styles.notesCard}>
-              <Text style={styles.notesText}>{assignment.job.notes}</Text>
-            </View>
-          </Section>
+          <Section title="Instructions / notes"><View style={styles.notesCard}><Text style={styles.notesText}>{assignment.job.notes}</Text></View></Section>
         ) : null}
 
         <View style={styles.localFirstCard}>
           <View style={styles.localFirstDot} />
           <View style={styles.flexOne}>
-            <Text style={styles.localFirstTitle}>Local-first operational record</Text>
+            <Text style={styles.localFirstTitle}>Local-first Driver record</Text>
             <Text style={styles.localFirstBody}>
-              Viewing, confirming waste/quantity, recording delivery notes/issues and advancing this journey all use the authorised SQLCipher record on this phone first. Every event keeps the same Waste X load ID for Cloud or trusted Bridge delivery.
+              Collection, transit, destination arrival and field evidence are written to encrypted storage first. Site acceptance, weights, completion and tickets stay under Web/Desktop authority.
             </Text>
           </View>
         </View>
@@ -508,68 +339,29 @@ export default function MobileJobDetailScreen() {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.sectionCard}>{children}</View>
-    </View>
-  );
+  return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text><View style={styles.sectionCard}>{children}</View></View>;
 }
 
-function SiteCard({
-  label,
-  location,
-  accent = false,
-}: {
-  label: string;
-  location: MobileAssignmentLocationV1 | null;
-  accent?: boolean;
-}) {
+function SiteCard({ label, location, accent = false }: { label: string; location: MobileAssignmentLocationV1 | null; accent?: boolean }) {
   return (
     <View style={[styles.siteCard, accent && styles.siteCardAccent]}>
       <View style={styles.siteTopRow}>
         <Text style={styles.siteLabel}>{label}</Text>
-        {location ? (
-          <Text style={styles.siteKind}>
-            {location.kind === "OWN_SITE" ? "WASTE X SITE" : "EXTERNAL SITE"}
-          </Text>
-        ) : null}
+        {location ? <Text style={styles.siteKind}>{location.kind === "OWN_SITE" ? "WASTE X SITE" : "EXTERNAL SITE"}</Text> : null}
       </View>
       <Text style={styles.siteName}>{location?.name ?? "Site pending"}</Text>
-      <Text style={styles.siteAddress}>
-        {location?.fullAddress ?? "Address not available"}
-      </Text>
+      <Text style={styles.siteAddress}>{location?.fullAddress ?? "Address not available"}</Text>
       {location?.postcode ? <Text style={styles.sitePostcode}>{location.postcode}</Text> : null}
     </View>
   );
 }
 
 function DetailTile({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.detailTile}>
-      <Text style={styles.detailTileLabel}>{label}</Text>
-      <Text style={styles.detailTileValue}>{value}</Text>
-    </View>
-  );
+  return <View style={styles.detailTile}><Text style={styles.detailTileLabel}>{label}</Text><Text style={styles.detailTileValue}>{value}</Text></View>;
 }
 
-function DetailRow({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text selectable style={[styles.detailValue, mono && styles.monoValue]}>
-        {value}
-      </Text>
-    </View>
-  );
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return <View style={styles.detailRow}><Text style={styles.detailLabel}>{label}</Text><Text selectable style={styles.detailValue}>{value}</Text></View>;
 }
 
 const styles = StyleSheet.create({
@@ -581,7 +373,7 @@ const styles = StyleSheet.create({
   emptyContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 12 },
   emptyCard: { marginTop: 28, padding: 24, borderRadius: 20, backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#ece7df" },
   emptyEyebrow: { color: "#ea580c", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  emptyTitle: { marginTop: 10, color: "#111827", fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.7 },
+  emptyTitle: { marginTop: 10, color: "#111827", fontSize: 24, lineHeight: 29, fontWeight: "800" },
   emptyBody: { marginTop: 10, color: "#64748b", fontSize: 13, lineHeight: 20 },
   topBar: { paddingTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   backButton: { paddingVertical: 8, paddingRight: 12 },
@@ -596,12 +388,12 @@ const styles = StyleSheet.create({
   eyebrow: { marginTop: 24, color: "#ea580c", fontSize: 10, fontWeight: "900", letterSpacing: 1.4 },
   title: { marginTop: 7, color: "#111827", fontSize: 36, fontWeight: "900", letterSpacing: -1.2 },
   subtitle: { marginTop: 4, color: "#64748b", fontSize: 14, fontWeight: "600" },
-  statusCard: { marginTop: 20, padding: 18, borderRadius: 18, backgroundColor: "#111827", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 16 },
+  statusCard: { marginTop: 20, padding: 18, borderRadius: 18, backgroundColor: "#111827", flexDirection: "row", alignItems: "center", gap: 16 },
   statusLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900", letterSpacing: 1 },
   statusValue: { marginTop: 5, color: "#ffffff", fontSize: 21, fontWeight: "800" },
   canonicalStatus: { marginTop: 5, color: "#94a3b8", fontSize: 10, fontWeight: "700" },
   versionBadge: { alignItems: "flex-end" },
-  versionLabel: { color: "#64748b", fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+  versionLabel: { color: "#64748b", fontSize: 8, fontWeight: "900" },
   versionValue: { marginTop: 4, color: "#f97316", fontSize: 14, fontWeight: "900" },
   errorCard: { marginTop: 12, padding: 13, borderRadius: 13, backgroundColor: "#fff1f2", borderWidth: 1, borderColor: "#fecdd3" },
   errorText: { color: "#9f1239", fontSize: 12, lineHeight: 18, fontWeight: "700" },
@@ -610,8 +402,9 @@ const styles = StyleSheet.create({
   section: { marginTop: 24 },
   sectionTitle: { marginBottom: 10, color: "#111827", fontSize: 18, fontWeight: "800" },
   sectionCard: { padding: 16, borderRadius: 18, backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#ece7df" },
+  workflowIntro: { marginBottom: 14, color: "#64748b", fontSize: 11, lineHeight: 17 },
   timeline: { gap: 2 },
-  timelineRow: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 12 },
+  timelineRow: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 12 },
   timelineDot: { width: 24, height: 24, borderRadius: 99, borderWidth: 2, borderColor: "#e2e8f0", backgroundColor: "#ffffff", alignItems: "center", justifyContent: "center" },
   timelineDotComplete: { borderColor: "#111827", backgroundColor: "#111827" },
   timelineDotCurrent: { borderColor: "#f97316", backgroundColor: "#fff7ed" },
@@ -626,29 +419,40 @@ const styles = StyleSheet.create({
   primaryAction: { marginTop: 14, minHeight: 52, borderRadius: 15, backgroundColor: "#111827", flexDirection: "row", gap: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 18 },
   primaryActionDisabled: { opacity: 0.45 },
   primaryActionText: { color: "#ffffff", fontSize: 14, fontWeight: "900" },
-  localActionHint: { marginTop: 8, color: "#94a3b8", fontSize: 9, lineHeight: 14, textAlign: "center", fontWeight: "700" },
+  localActionHint: { marginTop: 8, color: "#94a3b8", fontSize: 9, textAlign: "center", fontWeight: "700" },
+  handoffCard: { marginTop: 16, padding: 15, borderRadius: 14, backgroundColor: "#fff7ed", borderWidth: 1, borderColor: "#fed7aa" },
+  handoffEyebrow: { color: "#c2410c", fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+  handoffTitle: { marginTop: 6, color: "#7c2d12", fontSize: 15, fontWeight: "900" },
+  handoffBody: { marginTop: 5, color: "#9a3412", fontSize: 11, lineHeight: 17 },
   completeBlock: { marginTop: 16, padding: 14, borderRadius: 14, backgroundColor: "#f8fafc" },
   completeTitle: { color: "#334155", fontSize: 13, fontWeight: "800" },
   completeBody: { marginTop: 5, color: "#64748b", fontSize: 11, lineHeight: 17 },
   siteCard: { padding: 15, borderRadius: 15, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#f1f5f9" },
   siteCardAccent: { backgroundColor: "#fff7ed", borderColor: "#fed7aa" },
-  siteTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  siteLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900", letterSpacing: 0.9 },
-  siteKind: { color: "#c2410c", fontSize: 8, fontWeight: "800", letterSpacing: 0.5 },
+  siteTopRow: { flexDirection: "row", justifyContent: "space-between", gap: 10 },
+  siteLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900" },
+  siteKind: { color: "#c2410c", fontSize: 8, fontWeight: "800" },
   siteName: { marginTop: 8, color: "#111827", fontSize: 16, fontWeight: "800" },
   siteAddress: { marginTop: 5, color: "#64748b", fontSize: 12, lineHeight: 18 },
   sitePostcode: { marginTop: 4, color: "#334155", fontSize: 11, fontWeight: "800" },
   routeConnector: { height: 30, alignItems: "center", justifyContent: "center" },
   routeLine: { position: "absolute", width: 1, top: 0, bottom: 0, backgroundColor: "#fed7aa" },
-  routeArrow: { color: "#f97316", fontSize: 14, fontWeight: "900", backgroundColor: "#ffffff", paddingHorizontal: 5 },
+  routeArrow: { color: "#f97316", fontSize: 14, backgroundColor: "#ffffff", paddingHorizontal: 5 },
   detailGrid: { flexDirection: "row", gap: 10, marginBottom: 4 },
   detailTile: { flex: 1, minHeight: 75, padding: 13, borderRadius: 13, backgroundColor: "#f8fafc" },
-  detailTileLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900", letterSpacing: 0.8 },
+  detailTileLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900" },
   detailTileValue: { marginTop: 7, color: "#111827", fontSize: 14, fontWeight: "800" },
   detailRow: { paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e2e8f0" },
-  detailLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900", letterSpacing: 0.7 },
+  detailLabel: { color: "#94a3b8", fontSize: 9, fontWeight: "900" },
   detailValue: { marginTop: 5, color: "#334155", fontSize: 13, lineHeight: 19, fontWeight: "700" },
-  monoValue: { fontSize: 11, fontWeight: "600" },
+  readOnlyHint: { marginTop: 10, color: "#94a3b8", fontSize: 10, lineHeight: 15 },
+  documentCard: { padding: 15, borderRadius: 14, backgroundColor: "#f0fdf4", borderWidth: 1, borderColor: "#bbf7d0" },
+  documentTopRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  documentEyebrow: { color: "#166534", fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+  documentNumber: { marginTop: 6, color: "#14532d", fontSize: 14, lineHeight: 20, fontWeight: "900" },
+  receivedBadge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 999, backgroundColor: "#dcfce7" },
+  receivedBadgeText: { color: "#15803d", fontSize: 8, fontWeight: "900" },
+  documentBody: { marginTop: 10, color: "#166534", fontSize: 11, lineHeight: 17 },
   notesCard: { padding: 14, borderRadius: 13, backgroundColor: "#fff7ed" },
   notesText: { color: "#7c2d12", fontSize: 13, lineHeight: 20 },
   localFirstCard: { marginTop: 24, padding: 16, borderRadius: 17, backgroundColor: "#111827", flexDirection: "row", gap: 12 },
