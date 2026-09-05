@@ -16,6 +16,7 @@ const APP_PATH = path.join(
 );
 const BUNDLE_ID = "com.wastex.mobile";
 const METRO_URL = "http://127.0.0.1:8081";
+const DEV_CLIENT_URL = `wastex://expo-development-client/?url=${encodeURIComponent(METRO_URL)}`;
 const METRO_LOG = path.join(os.tmpdir(), "waste-x-mobile-metro.log");
 
 function run(command, args, options = {}) {
@@ -258,6 +259,13 @@ async function main() {
     simulator.udid,
     BUNDLE_ID,
   ]);
+
+  // A direct native launch can otherwise reopen expo-dev-client's historical
+  // "most recent" bundle. Explicitly route this freshly installed build to
+  // the IPv4 Metro instance that this script has just verified.
+  await sleep(500);
+  console.log(`Connecting Waste X development client to ${METRO_URL}…`);
+  run("xcrun", ["simctl", "openurl", simulator.udid, DEV_CLIENT_URL]);
 
   console.log(`\nWaste X launched successfully. Metro is available on ${METRO_URL}.\n`);
 }
