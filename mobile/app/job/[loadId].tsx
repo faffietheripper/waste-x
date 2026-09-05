@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -48,6 +49,9 @@ export default function MobileJobDetailScreen() {
   const [syncStatus, setSyncStatus] = useState<MobileSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectBusy, setRejectBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -116,6 +120,8 @@ export default function MobileJobDetailScreen() {
         eventType: action.eventType,
       });
       setAssignment(queued.assignment);
+      setRejectOpen(false);
+      setRejectReason("");
       setSyncStatus(await getMobileSyncStatus());
       setMessage(
         auth?.onlineAuthenticated
@@ -138,6 +144,59 @@ export default function MobileJobDetailScreen() {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function rejectCollection() {
+    if (!assignment) return;
+    const workflow = getMobileFieldWorkflowState(assignment);
+    if (workflow.step !== "ASSIGNED" || assignment.load.status.toLowerCase() !== "planned") {
+      setRejectOpen(false);
+      setError("This collection can no longer be rejected by the Driver because collection has already started.");
+      return;
+    }
+
+    const reason = rejectReason.trim();
+    if (reason.length < 3) {
+      setError("Enter a reason before rejecting this collection.");
+      return;
+    }
+
+    setRejectBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const queued = await queueMobileJobLoadEvent({
+        loadId: assignment.load.id,
+        eventType: "FIELD_COLLECTION_REJECTED",
+        payload: { reason },
+      });
+      setAssignment(queued.assignment);
+      setRejectOpen(false);
+      setRejectReason("");
+      setSyncStatus(await getMobileSyncStatus());
+      setMessage(
+        auth?.onlineAuthenticated
+          ? "Collection rejected on this phone first. Syncing with Waste X…"
+          : "Collection rejected securely on this phone and queued for sync.",
+      );
+
+      if (auth?.onlineAuthenticated) {
+        try {
+          await syncPendingMobileEvents();
+          const refreshed = await reloadLocalDetail();
+          setMessage(refreshed ? "Collection rejection confirmed by Waste X." : "Collection rejection synced.");
+        } catch (syncError) {
+          setSyncStatus(await getMobileSyncStatus());
+          setMessage("Collection rejection is safe on this phone. Sync will retry automatically.");
+          console.warn("[MOBILE_DRIVER] Collection rejection sync deferred", syncError);
+        }
+      }
+    } catch (reasonError) {
+      setError(reasonError instanceof Error ? reasonError.message : String(reasonError));
+    } finally {
+      setRejectBusy(false);
     }
   }
 
@@ -180,11 +239,15 @@ export default function MobileJobDetailScreen() {
     assignment.load.status.toLowerCase(),
   );
   const atDestination = workflow.step === "ARRIVED_DESTINATION";
+  const canRejectBeforeCollection =
+    !readOnly &&
+    workflow.step === "ASSIGNED" &&
+    assignment.load.status.toLowerCase() === "planned";
   const workflowIndex = MOBILE_FIELD_WORKFLOW_STEPS.indexOf(workflow.step);
 
   return (
     <SafeAreaView style={styles.screen} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.topBar}>
           <Pressable onPress={() => router.back()} hitSlop={10} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
@@ -218,7 +281,7 @@ export default function MobileJobDetailScreen() {
 
         <Section title="Driver workflow">
           <Text style={styles.workflowIntro}>
-            Only record the physical transport milestones you control. The receiving site handles acceptance, rejection, weights, completion and ticketing.
+            Record only the physical transport milestones you control. Before collection you may refuse an unsuitable booked collection; after Mark collected, acceptance and rejection belong to the receiving site.
           </Text>
           <View style={styles.timeline}>
             {MOBILE_FIELD_WORKFLOW_STEPS.map((step, index) => {
@@ -243,11 +306,75 @@ export default function MobileJobDetailScreen() {
               <Text style={styles.actionEyebrow}>NEXT DRIVER ACTION</Text>
               <Text style={styles.actionTitle}>{nextAction.label}</Text>
               <Text style={styles.actionHelper}>{nextAction.helper}</Text>
-              <Pressable disabled={actionBusy} onPress={() => void recordNextFieldAction()} style={[styles.primaryAction, actionBusy && styles.primaryActionDisabled]}>
+              <Pressable disabled={actionBusy || rejectBusy} onPress={() => void recordNextFieldAction()} style={[styles.primaryAction, (actionBusy || rejectBusy) && styles.primaryActionDisabled]}>
                 {actionBusy ? <ActivityIndicator color="#ffffff" /> : null}
                 <Text style={styles.primaryActionText}>{actionBusy ? "Saving locally…" : nextAction.label}</Text>
               </Pressable>
               <Text style={styles.localActionHint}>Recorded to encrypted SQLCipher first. Internet is not required.</Text>
+
+              {canRejectBeforeCollection ? (
+                <View style={styles.rejectBlock}>
+                  {!rejectOpen ? (
+                    <>
+                      <Text style={styles.rejectHelper}>
+                        Wrong waste, unsafe load or collection cannot be taken? Refuse it before loading. This option disappears after Mark collected.
+                      </Text>
+                      <Pressable
+                        disabled={actionBusy || rejectBusy}
+                        onPress={() => {
+                          setRejectOpen(true);
+                          setError(null);
+                        }}
+                        style={styles.rejectOpenButton}
+                      >
+                        <Text style={styles.rejectOpenButtonText}>Reject collection</Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <View style={styles.rejectForm}>
+                      <Text style={styles.rejectEyebrow}>PRE-COLLECTION REFUSAL</Text>
+                      <Text style={styles.rejectTitle}>Why are you rejecting this collection?</Text>
+                      <Text style={styles.rejectHelper}>
+                        This closes the Driver collection as rejected. It is not the receiving site's later acceptance/rejection decision.
+                      </Text>
+                      <TextInput
+                        editable={!rejectBusy && !actionBusy}
+                        maxLength={2000}
+                        multiline
+                        onChangeText={setRejectReason}
+                        placeholder="e.g. Waste on site does not match the booked material"
+                        placeholderTextColor="#94a3b8"
+                        style={styles.rejectInput}
+                        value={rejectReason}
+                      />
+                      <View style={styles.rejectActions}>
+                        <Pressable
+                          disabled={rejectBusy || actionBusy}
+                          onPress={() => {
+                            setRejectOpen(false);
+                            setRejectReason("");
+                            setError(null);
+                          }}
+                          style={styles.rejectCancelButton}
+                        >
+                          <Text style={styles.rejectCancelButtonText}>Cancel</Text>
+                        </Pressable>
+                        <Pressable
+                          disabled={rejectBusy || actionBusy || rejectReason.trim().length < 3}
+                          onPress={() => void rejectCollection()}
+                          style={[
+                            styles.rejectConfirmButton,
+                            (rejectBusy || actionBusy || rejectReason.trim().length < 3) && styles.rejectConfirmButtonDisabled,
+                          ]}
+                        >
+                          {rejectBusy ? <ActivityIndicator color="#ffffff" /> : null}
+                          <Text style={styles.rejectConfirmButtonText}>{rejectBusy ? "Rejecting locally…" : "Confirm rejection"}</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              ) : null}
             </View>
           ) : atDestination && !terminal ? (
             <View style={styles.handoffCard}>
@@ -329,7 +456,7 @@ export default function MobileJobDetailScreen() {
           <View style={styles.flexOne}>
             <Text style={styles.localFirstTitle}>Local-first Driver record</Text>
             <Text style={styles.localFirstBody}>
-              Collection, transit, destination arrival and field evidence are written to encrypted storage first. Site acceptance, weights, completion and tickets stay under Web/Desktop authority.
+              Pre-collection refusal, collection, transit, destination arrival and field evidence are written to encrypted storage first. Site acceptance, destination rejection, weights, completion and tickets stay under Web/Desktop authority.
             </Text>
           </View>
         </View>
@@ -420,6 +547,20 @@ const styles = StyleSheet.create({
   primaryActionDisabled: { opacity: 0.45 },
   primaryActionText: { color: "#ffffff", fontSize: 14, fontWeight: "900" },
   localActionHint: { marginTop: 8, color: "#94a3b8", fontSize: 9, textAlign: "center", fontWeight: "700" },
+  rejectBlock: { marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#fee2e2" },
+  rejectOpenButton: { marginTop: 10, minHeight: 44, borderRadius: 13, borderWidth: 1, borderColor: "#fecaca", backgroundColor: "#fff7f7", alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  rejectOpenButtonText: { color: "#b91c1c", fontSize: 12, fontWeight: "900" },
+  rejectForm: { padding: 13, borderRadius: 14, backgroundColor: "#fff7f7", borderWidth: 1, borderColor: "#fecaca" },
+  rejectEyebrow: { color: "#b91c1c", fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+  rejectTitle: { marginTop: 6, color: "#7f1d1d", fontSize: 15, fontWeight: "900" },
+  rejectHelper: { marginTop: 6, color: "#991b1b", fontSize: 10, lineHeight: 16 },
+  rejectInput: { marginTop: 10, minHeight: 82, borderRadius: 12, borderWidth: 1, borderColor: "#fecaca", backgroundColor: "#ffffff", color: "#111827", fontSize: 12, lineHeight: 18, paddingHorizontal: 12, paddingVertical: 11, textAlignVertical: "top" },
+  rejectActions: { marginTop: 10, flexDirection: "row", gap: 8 },
+  rejectCancelButton: { flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: "#e2e8f0", backgroundColor: "#ffffff", alignItems: "center", justifyContent: "center" },
+  rejectCancelButtonText: { color: "#475569", fontSize: 11, fontWeight: "800" },
+  rejectConfirmButton: { flex: 1.4, minHeight: 44, borderRadius: 12, backgroundColor: "#b91c1c", flexDirection: "row", gap: 7, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },
+  rejectConfirmButtonDisabled: { opacity: 0.4 },
+  rejectConfirmButtonText: { color: "#ffffff", fontSize: 11, fontWeight: "900" },
   handoffCard: { marginTop: 16, padding: 15, borderRadius: 14, backgroundColor: "#fff7ed", borderWidth: 1, borderColor: "#fed7aa" },
   handoffEyebrow: { color: "#c2410c", fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
   handoffTitle: { marginTop: 6, color: "#7c2d12", fontSize: 15, fontWeight: "900" },
