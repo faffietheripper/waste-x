@@ -16,6 +16,7 @@ const APP_PATH = path.join(
 );
 const BUNDLE_ID = "com.wastex.mobile";
 const METRO_URL = "http://127.0.0.1:8081";
+const DEV_CLIENT_URL = `wastex://expo-development-client/?url=${encodeURIComponent(METRO_URL)}`;
 const METRO_LOG = path.join(os.tmpdir(), "waste-x-mobile-metro.log");
 
 function run(command, args, options = {}) {
@@ -84,6 +85,75 @@ function metroIsReady() {
   return metroStatus("127.0.0.1");
 }
 
+function realPath(value) {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function findIpv4MetroOwner() {
+  const pidResult = spawnSync(
+    "lsof",
+    ["-tiTCP:8081", "-sTCP:LISTEN"],
+    { cwd: MOBILE_ROOT, encoding: "utf8" },
+  );
+  const pid = String(pidResult.stdout || "")
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .find(Boolean);
+  if (!pid) return null;
+
+  const cwdResult = spawnSync(
+    "lsof",
+    ["-a", "-p", pid, "-d", "cwd", "-Fn"],
+    { cwd: MOBILE_ROOT, encoding: "utf8" },
+  );
+  const cwd = String(cwdResult.stdout || "")
+    .split(/\r?\n/)
+    .find((value) => value.startsWith("n"))
+    ?.slice(1)
+    .trim();
+
+  const commandResult = spawnSync(
+    "ps",
+    ["-p", pid, "-o", "command="],
+    { cwd: MOBILE_ROOT, encoding: "utf8" },
+  );
+  const command = String(commandResult.stdout || "").trim();
+
+  return { pid, cwd: cwd || null, command: command || null };
+}
+
+function assertMetroBelongsToThisCheckout() {
+  const owner = findIpv4MetroOwner();
+  if (!owner) {
+    console.error(
+      "Metro answered on 127.0.0.1:8081, but Waste X could not identify the process that owns the port.",
+    );
+    printPortOwner();
+    process.exit(1);
+  }
+
+  if (!owner.cwd || realPath(owner.cwd) !== realPath(MOBILE_ROOT)) {
+    console.error("\nA Metro server from a different checkout is already using 127.0.0.1:8081.");
+    console.error(`Existing Metro pid: ${owner.pid}`);
+    if (owner.cwd) console.error(`Existing Metro root: ${owner.cwd}`);
+    if (owner.command) console.error(`Existing Metro command: ${owner.command}`);
+    console.error(`This Waste X Mobile root: ${MOBILE_ROOT}`);
+    console.error(
+      `\nStop the existing Metro process (for example: kill ${owner.pid}) and run Waste X Mobile again.`,
+    );
+    console.error(
+      "Waste X will not reuse a Metro bundle from another checkout because that can launch stale JavaScript.\n",
+    );
+    process.exit(1);
+  }
+
+  console.log(`Waste X Metro is already running from this checkout on ${METRO_URL}.`);
+}
+
 function printMetroLog() {
   console.error(`\nMetro log: ${METRO_LOG}`);
   try {
@@ -119,7 +189,7 @@ function printPortOwner() {
 
 async function ensureMetro() {
   if (await metroIsReady()) {
-    console.log(`Waste X Metro is already running on ${METRO_URL}.`);
+    assertMetroBelongsToThisCheckout();
     return;
   }
 
@@ -258,6 +328,13 @@ async function main() {
     simulator.udid,
     BUNDLE_ID,
   ]);
+
+  // A direct native launch can otherwise reopen expo-dev-client's historical
+  // "most recent" bundle. Explicitly route this freshly installed build to
+  // the IPv4 Metro instance that this script has just verified.
+  await sleep(500);
+  console.log(`Connecting Waste X development client to ${METRO_URL}…`);
+  run("xcrun", ["simctl", "openurl", simulator.udid, DEV_CLIENT_URL]);
 
   console.log(`\nWaste X launched successfully. Metro is available on ${METRO_URL}.\n`);
 }

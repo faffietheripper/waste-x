@@ -878,13 +878,20 @@ fn apply_pull_change(
     if change_type == "DELETE" {
         delete_change(transaction, entity_type, entity_id, &payload)?;
     } else {
+        let fallback_changed_at;
+        let resolved_changed_at = if changed_at.is_empty() {
+            fallback_changed_at = now_iso();
+            fallback_changed_at.as_str()
+        } else {
+            changed_at
+        };
         upsert_change(
             transaction,
             organisation_id,
             entity_type,
             entity_id,
             entity_version,
-            if changed_at.is_empty() { &now_iso() } else { changed_at },
+            resolved_changed_at,
             &payload,
         )?;
     }

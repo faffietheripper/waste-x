@@ -19,6 +19,7 @@ import {
   humanFieldWorkflowStep,
   isMobileAssignmentReadOnly,
 } from "@/field-ops/workflow";
+import { MobileTicketPanel } from "@/tickets/ticket-panel";
 import {
   getMobileSyncStatus,
   queueMobileJobLoadEvent,
@@ -182,6 +183,15 @@ export function DeliveryActivityPanel({
           <Text style={styles.messageText}>{message}</Text>
         </View>
       ) : null}
+
+      <View style={styles.ticketStage}>
+        <MobileTicketPanel
+          assignment={assignment}
+          online={online}
+          onAssignmentChange={onAssignmentChange}
+          onSyncStatusChange={onSyncStatusChange}
+        />
+      </View>
 
       {activity.length > 0 ? (
         <View style={styles.historyBlock}>
@@ -410,6 +420,12 @@ const styles = StyleSheet.create({
     borderColor: "#bbf7d0",
   },
   messageText: { color: "#166534", fontSize: 11, lineHeight: 17, fontWeight: "700" },
+  ticketStage: {
+    marginTop: 18,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+  },
   historyBlock: { marginTop: 18, gap: 8 },
   formLabel: {
     color: "#475569",
