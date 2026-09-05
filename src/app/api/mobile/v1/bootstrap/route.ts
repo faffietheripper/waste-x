@@ -51,6 +51,7 @@ const FIELD_WORKFLOW_EVENT_TYPES = [
 ] as const;
 
 const FIELD_ACTIVITY_EVENT_TYPES = [
+  "FIELD_COLLECTION_REJECTED",
   "FIELD_DELIVERY_NOTE_ADDED",
   "FIELD_ISSUE_REPORTED",
 ] as const;
@@ -317,7 +318,17 @@ export async function GET(request: Request) {
       if (!row.payload || typeof row.payload !== "object") continue;
       const occurredAt = row.occurredAt.toISOString();
       const activity = fieldActivityByLoadId.get(row.entityId) ?? [];
-      if (row.eventType === "FIELD_DELIVERY_NOTE_ADDED") {
+
+      if (row.eventType === "FIELD_COLLECTION_REJECTED") {
+        const reason = (row.payload as { reason?: unknown }).reason;
+        if (typeof reason !== "string" || !reason.trim()) continue;
+        activity.push({
+          eventType: "FIELD_COLLECTION_REJECTED",
+          occurredAt,
+          text: reason.trim(),
+          issueType: null,
+        });
+      } else if (row.eventType === "FIELD_DELIVERY_NOTE_ADDED") {
         const note = (row.payload as { note?: unknown }).note;
         if (typeof note !== "string" || !note.trim()) continue;
         activity.push({ eventType: "FIELD_DELIVERY_NOTE_ADDED", occurredAt, text: note.trim(), issueType: null });
@@ -351,7 +362,11 @@ export async function GET(request: Request) {
       const vehicle = effectiveVehicleId ? vehiclesById.get(effectiveVehicleId) ?? null : null;
       const material = effectiveMaterialId ? materialsById.get(effectiveMaterialId) ?? null : null;
       const workflow = workflowByLoadId.get(row.loadId) ?? {
-        step: row.loadStatus === "completed" || row.loadStatus === "rejected"
+        // A pre-collection Driver refusal is terminal while still ASSIGNED. Do
+        // not infer destination arrival merely because canonical status is
+        // rejected. Site-side rejection after a real journey still has its
+        // actual workflow history above.
+        step: row.loadStatus === "completed"
           ? ("ARRIVED_DESTINATION" as const)
           : ("ASSIGNED" as const),
         updatedAt: row.movementAt?.toISOString() ?? null,
