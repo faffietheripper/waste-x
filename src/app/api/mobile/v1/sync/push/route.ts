@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 
-import { clientDevices, syncChangeFeed } from "@/db/client-sync-schema";
+import { clientDevices } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
   jobLoadFieldStates,
@@ -27,10 +27,12 @@ export const dynamic = "force-dynamic";
 const SHA256_HEX = /^[a-f0-9]{64}$/i;
 
 /**
- * Driver Mobile is transport execution only. This endpoint deliberately does
- * not accept load-detail, weight, acceptance, completion or ticket events.
+ * Driver Mobile is transport execution only. It may refuse an unsuitable
+ * collection before collection starts, but it cannot change load details,
+ * weights, receiving-site acceptance/completion or ticket fields.
  */
 const MOBILE_EVENT_TYPES = new Set([
+  "FIELD_COLLECTION_REJECTED",
   "FIELD_COLLECTED",
   "FIELD_IN_TRANSIT",
   "FIELD_ARRIVED_DESTINATION",
@@ -109,6 +111,13 @@ async function isAssignedLoad(organisationId: string, driverId: string, loadId: 
   return Boolean(assignment);
 }
 
+/**
+ * The canonical change-feed row is now published by processSyncEvent with the
+ * fieldWorkflow object already embedded. This mirror exists only for Cloud
+ * queries/certification and must not emit a second job_load change. Keeping the
+ * publication atomic prevents Desktop from observing canonical `arrived`
+ * before the Driver-arrival proof that authorises it.
+ */
 async function ensureFieldStateMirror({
   organisationId,
   entityId,
@@ -127,66 +136,26 @@ async function ensureFieldStateMirror({
   const step = FIELD_EVENT_STEPS[eventType];
   const occurred = new Date(occurredAt);
 
-  await database.transaction(async (tx) => {
-    const existing = await tx.query.jobLoadFieldStates.findFirst({
-      where: and(
-        eq(jobLoadFieldStates.jobLoadId, entityId),
-        eq(jobLoadFieldStates.organisationId, organisationId),
-      ),
-    });
-
-    if (
-      existing?.step === step &&
-      existing.lastEventType === eventType &&
-      existing.occurredAt?.toISOString() === occurred.toISOString()
-    ) {
-      return;
-    }
-
-    const load = await tx.query.jobLoads.findFirst({
-      where: and(eq(jobLoads.id, entityId), eq(jobLoads.organisationId, organisationId)),
-    });
-    if (!load) throw new Error("MOBILE_FIELD_MIRROR_LOAD_NOT_FOUND");
-
-    const parentJob = await tx.query.jobs.findFirst({
-      where: and(eq(jobs.id, load.jobId), eq(jobs.organisationId, organisationId)),
-      columns: { ownSiteId: true },
-    });
-
-    const now = new Date();
-    await tx
-      .insert(jobLoadFieldStates)
-      .values({
-        jobLoadId: entityId,
+  await database
+    .insert(jobLoadFieldStates)
+    .values({
+      jobLoadId: entityId,
+      organisationId,
+      step,
+      lastEventType: eventType,
+      occurredAt: occurred,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: jobLoadFieldStates.jobLoadId,
+      set: {
         organisationId,
         step,
         lastEventType: eventType,
         occurredAt: occurred,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: jobLoadFieldStates.jobLoadId,
-        set: { organisationId, step, lastEventType: eventType, occurredAt: occurred, updatedAt: now },
-      });
-
-    await tx.insert(syncChangeFeed).values({
-      organisationId,
-      siteId: load.ownSiteId ?? parentJob?.ownSiteId ?? null,
-      entityType: "job_load",
-      entityId,
-      entityVersion,
-      changeType: "UPSERT",
-      payload: {
-        ...load,
-        fieldWorkflow: {
-          step,
-          updatedAt: occurredAt,
-          lastEventType: eventType,
-        },
+        updatedAt: new Date(),
       },
-      changedAt: now,
     });
-  });
 }
 
 async function runPostApplyHooks({
