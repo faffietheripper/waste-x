@@ -56,6 +56,17 @@ function isFieldWorkflowEvent(value: string): value is JobLoadFieldEventType {
   return value in FIELD_EVENT_STEPS;
 }
 
+function attemptsMobileTicketAuthority(event: {
+  eventType: string;
+  payload: unknown;
+}) {
+  if (event.eventType !== "LOAD_DETAILS_UPDATED") return false;
+  if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) {
+    return false;
+  }
+  return Object.prototype.hasOwnProperty.call(event.payload, "ticketNumber");
+}
+
 async function resolveMobileDriver(context: {
   userId: string;
   organisationId: string;
@@ -359,6 +370,19 @@ export async function POST(request: Request) {
           status: "REJECTED" as const,
           entityVersion: null,
           reasonCode: "MOBILE_EVENT_NOT_ALLOWED",
+        });
+        continue;
+      }
+
+      // Stage 13 authority boundary: Driver/Mobile may confirm field facts and
+      // quantities, but it may never create, clear or replace the canonical
+      // management-site ticket number. Desktop/site is the only issuer.
+      if (attemptsMobileTicketAuthority(event)) {
+        results.push({
+          eventId: event.eventId,
+          status: "REJECTED" as const,
+          entityVersion: null,
+          reasonCode: "MOBILE_TICKET_AUTHORITY_VIOLATION",
         });
         continue;
       }
