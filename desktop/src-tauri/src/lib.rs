@@ -10,6 +10,7 @@ mod provisioning;
 mod stage13_guards;
 mod sync_engine;
 mod tickets;
+mod vehicle_tare;
 mod working_set;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -41,6 +42,7 @@ pub fn run() {
             operations::desktop_complete_load,
             tickets::desktop_ticket_status,
             tickets::desktop_issue_ticket,
+            vehicle_tare::desktop_vehicle_tare,
             sync_engine::desktop_sync_status,
             sync_engine::desktop_sync_now,
             cloud_access::desktop_cloud_context,
