@@ -8,6 +8,7 @@ mod offline_auth;
 mod operations;
 mod provisioning;
 mod stage13_guards;
+mod stage13_repairs;
 mod sync_engine;
 mod tickets;
 mod vehicle_tare;
@@ -20,6 +21,7 @@ pub fn run() {
             let local_db = local_db::initialise(app.handle())?;
             app.manage(local_db);
             stage13_guards::initialise(app.handle())?;
+            stage13_repairs::run(app.handle())?;
             app.manage(offline_auth::DesktopAuthState::default());
             app.manage(sync_engine::SyncEngineState::default());
             Ok(())
