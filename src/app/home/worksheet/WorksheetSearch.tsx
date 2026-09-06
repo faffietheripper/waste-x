@@ -16,13 +16,13 @@ export default function WorksheetSearch({
   totalRows,
 }: {
   date: string;
-  view: "live" | "completed";
+  view: "live" | "rejected" | "completed" | "cancelled";
   totalRows: number;
 }) {
   /*
     Search is intentionally client-side:
     - 300-400 rows can be filtered instantly without another database request.
-    - Mark arrived / Save weight / Accept can still use the existing Server Actions.
+    - Receiving-site actions can still use Server Actions.
     - The query is kept in sessionStorage so an action refresh does not make the
       operator lose the search they were working from.
   */
