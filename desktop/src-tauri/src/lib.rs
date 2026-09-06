@@ -8,6 +8,7 @@ mod offline_auth;
 mod operations;
 mod provisioning;
 mod stage13_guards;
+mod stage13_hash_repair;
 mod stage13_repairs;
 mod sync_engine;
 mod sync_review;
@@ -23,6 +24,7 @@ pub fn run() {
             app.manage(local_db);
             stage13_guards::initialise(app.handle())?;
             stage13_repairs::run(app.handle())?;
+            stage13_hash_repair::run(app.handle())?;
             app.manage(offline_auth::DesktopAuthState::default());
             app.manage(sync_engine::SyncEngineState::default());
             Ok(())
