@@ -10,7 +10,7 @@ import { jobLoadFieldStates } from "@/db/mobile-field-schema";
 import { jobLoads, jobs, users } from "@/db/schema";
 import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 
-export const SITE_REJECTION_CATEGORIES = [
+const SITE_REJECTION_CATEGORIES = [
   "WASTE_MISMATCH",
   "CONTAMINATION",
   "PERMIT_OR_COMPLIANCE",
