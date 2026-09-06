@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { and, eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
@@ -23,6 +25,13 @@ import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 export const dynamic = "force-dynamic";
 
 const SHA256_HEX = /^[a-f0-9]{64}$/i;
+
+function canonicalDesktopPayloadHash(payload: unknown) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payload ?? null))
+    .digest("hex");
+}
 
 async function runPostApplyHooks({
   organisationId,
@@ -133,11 +142,23 @@ export async function POST(request: Request) {
       );
     }
 
-    // Process in device order so a sequence of offline state transitions is
-    // replayed in the same order the operator performed them.
-    const orderedEvents = [...parsed.data.events].sort(
-      (a, b) => a.deviceSequence - b.deviceSequence,
-    );
+    /*
+      Desktop v1 originally hashed the Rust JSON serialization bytes while the
+      Cloud validator hashes the logical payload after JavaScript JSON parsing.
+      Numerically equivalent values such as 34.0 and 34 therefore produced
+      different hashes even though the authenticated payload was identical.
+
+      The Desktop endpoint is already protected by the device session + device
+      secret. Canonicalise the hash at Cloud ingress so processSyncEvent stores
+      and compares one JavaScript-canonical hash for idempotency. Mobile keeps
+      its existing strict client hash path on its own endpoint.
+    */
+    const orderedEvents = parsed.data.events
+      .map((event) => ({
+        ...event,
+        payloadHash: canonicalDesktopPayloadHash(event.payload),
+      }))
+      .sort((a, b) => a.deviceSequence - b.deviceSequence);
 
     const results = [];
     for (const event of orderedEvents) {
