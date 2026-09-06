@@ -9,7 +9,7 @@ use uuid::Uuid;
 const DB_FILE_NAME: &str = "waste-x-local.db";
 const DATABASE_KEYRING_SERVICE: &str = "com.wastex.desktop.local-database";
 const DATABASE_KEYRING_ACCOUNT: &str = "database-key-v1";
-const REPAIR_KEY: &str = "stage13_completion_pair_repair_v1";
+const MAX_AUTOMATIC_REBASE_ATTEMPTS: i64 = 3;
 
 fn error(message: impl Into<String>) -> Box<dyn std::error::Error> {
     Box::new(std::io::Error::new(std::io::ErrorKind::Other, message.into()))
@@ -24,21 +24,36 @@ fn scalar_string(payload: &Value, key: &str) -> Option<String> {
 }
 
 fn decimal_number(value: Option<&str>) -> Option<f64> {
-    value.and_then(|value| value.parse::<f64>().ok()).filter(|value| value.is_finite())
+    value
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
 }
 
 /**
- * Repairs the exact completion failure produced by the pre-atomic Stage 13
- * Desktop build:
+ * Repairs recoverable Stage 13 completion conflicts without hiding genuine
+ * concurrent terminal decisions.
+ *
+ * The pre-atomic Desktop build could leave a locally-completed receiving-site
+ * transaction behind Cloud as either:
  *
  *   LOAD_DETAILS_UPDATED -> ENTITY_VERSION_CONFLICT
  *   LOAD_COMPLETED       -> NET_WEIGHT_REQUIRED
  *
- * The physical completion is already durable in encrypted SQLite. The first
- * conflict also tells us the exact Cloud entity version that rejected the old
- * details event. We therefore supersede only that exact pair and enqueue one
- * rich LOAD_COMPLETED event rebased on the known Cloud version. Unrelated
- * conflicts and failures are never touched.
+ * or, after the first repair attempt, as a rebased LOAD_COMPLETED that itself
+ * hit ENTITY_VERSION_CONFLICT because Cloud advanced again before replay.
+ *
+ * This repair is deliberately repeatable rather than one-shot. It only rebases
+ * a local completed load when:
+ *   - the final local net weight is positive;
+ *   - there is an entity-version conflict from the completion sequence;
+ *   - no newer local event for that load is currently pending/sending;
+ *   - the latest deferred Cloud snapshot is still non-terminal and, for an
+ *     incoming load, still `accepted`;
+ *   - fewer than MAX_AUTOMATIC_REBASE_ATTEMPTS have already been made.
+ *
+ * Cloud still re-validates Driver arrival, acceptance, permit/EWC and final
+ * weight rules. A Cloud load that has become completed/rejected/cancelled is
+ * never overwritten automatically and remains a human review item.
  */
 pub fn run(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data_dir = app
@@ -61,49 +76,56 @@ pub fn run(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         ))
         .map_err(|e| error(format!("Could not unlock the Waste X local database: {e}")))?;
 
-    let already_ran: Option<String> = connection
-        .query_row(
-            "SELECT value FROM local_sync_metadata WHERE key = ?1",
-            params![REPAIR_KEY],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if already_ran.is_some() {
-        return Ok(());
-    }
-
     let transaction = connection.transaction()?;
     let mut statement = transaction.prepare(
         "SELECT
             l.id,
             l.organisation_id,
             l.own_site_id,
+            l.direction,
             l.payload_json,
             l.gross_weight,
             l.tare_weight,
             l.net_weight,
-            d.event_id,
-            d.server_entity_version,
-            c.event_id,
-            c.device_id,
-            c.actor_user_id
+            q.server_entity_version,
+            q.device_id,
+            q.actor_user_id,
+            (SELECT MAX(r.entity_version)
+               FROM local_sync_remote_conflict r
+              WHERE r.entity_type = 'job_load'
+                AND r.entity_id = l.id
+                AND r.resolved_at IS NULL) AS remote_entity_version,
+            (SELECT r.payload_json
+               FROM local_sync_remote_conflict r
+              WHERE r.entity_type = 'job_load'
+                AND r.entity_id = l.id
+                AND r.resolved_at IS NULL
+              ORDER BY r.entity_version DESC, r.received_at DESC
+              LIMIT 1) AS remote_payload_json
          FROM local_job_load l
-         INNER JOIN local_sync_queue d
-           ON d.entity_type = 'job_load'
-          AND d.entity_id = l.id
-          AND d.event_type = 'LOAD_DETAILS_UPDATED'
-          AND d.status = 'CONFLICT'
-          AND d.last_error = 'CONFLICT:ENTITY_VERSION_CONFLICT'
-          AND d.server_entity_version IS NOT NULL
-         INNER JOIN local_sync_queue c
-           ON c.entity_type = 'job_load'
-          AND c.entity_id = l.id
-          AND c.event_type = 'LOAD_COMPLETED'
-          AND c.status = 'FAILED'
-          AND c.last_error = 'REJECTED:NET_WEIGHT_REQUIRED'
-          AND c.device_sequence > d.device_sequence
+         INNER JOIN local_sync_queue q
+           ON q.event_id = (
+                SELECT q2.event_id
+                  FROM local_sync_queue q2
+                 WHERE q2.entity_type = 'job_load'
+                   AND q2.entity_id = l.id
+                   AND q2.status = 'CONFLICT'
+                   AND q2.last_error = 'CONFLICT:ENTITY_VERSION_CONFLICT'
+                   AND q2.server_entity_version IS NOT NULL
+                   AND q2.event_type IN ('LOAD_DETAILS_UPDATED', 'LOAD_COMPLETED')
+                 ORDER BY q2.device_sequence DESC
+                 LIMIT 1
+              )
          WHERE l.status = 'completed'
-         ORDER BY c.device_sequence",
+           AND CAST(COALESCE(l.net_weight, '0') AS REAL) > 0
+           AND NOT EXISTS (
+                SELECT 1
+                  FROM local_sync_queue active
+                 WHERE active.entity_type = 'job_load'
+                   AND active.entity_id = l.id
+                   AND active.status IN ('PENDING', 'SENDING')
+           )
+         ORDER BY q.device_sequence",
     )?;
 
     let rows = statement.query_map([], |row| {
@@ -112,14 +134,15 @@ pub fn run(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             row.get::<_, String>(1)?,
             row.get::<_, Option<String>>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(4)?,
             row.get::<_, Option<String>>(5)?,
             row.get::<_, Option<String>>(6)?,
-            row.get::<_, String>(7)?,
+            row.get::<_, Option<String>>(7)?,
             row.get::<_, i64>(8)?,
             row.get::<_, String>(9)?,
             row.get::<_, String>(10)?,
-            row.get::<_, String>(11)?,
+            row.get::<_, Option<i64>>(11)?,
+            row.get::<_, Option<String>>(12)?,
         ))
     })?;
 
@@ -144,33 +167,60 @@ pub fn run(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         |row| row.get(0),
     )?;
     let mut next_sequence = metadata_sequence.max(queue_sequence);
-    let mut repaired = 0_i64;
 
     for (
         load_id,
         organisation_id,
         own_site_id,
+        direction,
         payload_json,
         gross_weight,
         tare_weight,
         net_weight,
-        details_event_id,
-        cloud_version,
-        completion_event_id,
+        conflict_server_version,
         device_id,
         actor_user_id,
+        remote_entity_version,
+        remote_payload_json,
     ) in candidates
     {
+        let attempts: i64 = transaction.query_row(
+            "SELECT COUNT(*)
+               FROM local_audit_event
+              WHERE action = 'STAGE13_COMPLETION_CONFLICT_REBASED'
+                AND entity_type = 'job_load'
+                AND entity_id = ?1",
+            params![load_id],
+            |row| row.get(0),
+        )?;
+        if attempts >= MAX_AUTOMATIC_REBASE_ATTEMPTS {
+            continue;
+        }
+
+        /* Wait until pull has shown us the current Cloud snapshot. This makes
+         * the rebase decision based on state, not merely a version number. */
+        let Some(remote_payload_json) = remote_payload_json else {
+            continue;
+        };
+        let remote_payload: Value = serde_json::from_str(&remote_payload_json)
+            .map_err(|e| error(format!("Could not read deferred Cloud payload for {load_id}: {e}")))?;
+        let remote_status = scalar_string(&remote_payload, "status").unwrap_or_default();
+        let remote_is_terminal = matches!(remote_status.as_str(), "completed" | "rejected" | "cancelled");
+        if remote_is_terminal {
+            continue;
+        }
+        if direction == "incoming" && remote_status != "accepted" {
+            continue;
+        }
+
         let mut payload: Value = serde_json::from_str(&payload_json)
             .map_err(|e| error(format!("Could not read local completion payload for {load_id}: {e}")))?;
-
         let gross = decimal_number(gross_weight.as_deref());
         let tare = decimal_number(tare_weight.as_deref());
         let net = decimal_number(net_weight.as_deref());
-        let valid_net = net.filter(|value| *value > 0.0);
-        if valid_net.is_none() {
+        let Some(valid_net) = net.filter(|value| *value > 0.0) else {
             continue;
-        }
+        };
 
         if let Some(object) = payload.as_object_mut() {
             object.insert("status".to_string(), Value::String("completed".to_string()));
@@ -192,34 +242,50 @@ pub fn run(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         let payload_hash = hex::encode(Sha256::digest(completion_json.as_bytes()));
         let event_id = Uuid::now_v7().to_string();
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let cloud_version = conflict_server_version.max(remote_entity_version.unwrap_or(0));
         next_sequence += 1;
 
         transaction.execute(
             "UPDATE local_sync_queue
-             SET status = 'SYNCED',
-                 last_error = 'LOCAL_SUPERSEDED:Replaced by atomic LOAD_COMPLETED repair',
-                 updated_at = ?1
-             WHERE event_id IN (?2, ?3)",
-            params![now, details_event_id, completion_event_id],
+                SET status = 'SYNCED',
+                    last_error = 'LOCAL_SUPERSEDED:Rebased atomic LOAD_COMPLETED from latest accepted Cloud state',
+                    updated_at = ?1
+              WHERE entity_type = 'job_load'
+                AND entity_id = ?2
+                AND (
+                     (status = 'CONFLICT'
+                      AND last_error = 'CONFLICT:ENTITY_VERSION_CONFLICT'
+                      AND event_type IN ('LOAD_DETAILS_UPDATED', 'LOAD_COMPLETED'))
+                  OR (status = 'FAILED'
+                      AND last_error = 'REJECTED:NET_WEIGHT_REQUIRED'
+                      AND event_type = 'LOAD_COMPLETED')
+                )",
+            params![now, load_id],
         )?;
 
         transaction.execute(
             "UPDATE local_sync_remote_conflict
-             SET resolved_at = ?1
-             WHERE entity_type = 'job_load'
-               AND entity_id = ?2
-               AND resolved_at IS NULL
-               AND reason = 'LOCAL_UNSYNCED_CHANGE'",
+                SET resolved_at = ?1
+              WHERE entity_type = 'job_load'
+                AND entity_id = ?2
+                AND resolved_at IS NULL
+                AND reason = 'LOCAL_UNSYNCED_CHANGE'",
             params![now, load_id],
         )?;
 
         transaction.execute(
             "UPDATE local_job_load
-             SET entity_version = ?1,
-                 payload_json = ?2,
-                 updated_at = ?3
-             WHERE id = ?4 AND organisation_id = ?5",
-            params![cloud_version + 1, serde_json::to_string(&payload)?, now, load_id, organisation_id],
+                SET entity_version = ?1,
+                    payload_json = ?2,
+                    updated_at = ?3
+              WHERE id = ?4 AND organisation_id = ?5",
+            params![
+                cloud_version + 1,
+                serde_json::to_string(&payload)?,
+                now,
+                load_id,
+                organisation_id,
+            ],
         )?;
 
         transaction.execute(
@@ -248,28 +314,22 @@ pub fn run(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         transaction.execute(
             "INSERT INTO local_audit_event (
                 event_id, actor_user_id, action, entity_type, entity_id, payload_json, created_at
-             ) VALUES (?1, ?2, 'STAGE13_COMPLETION_PAIR_REPAIRED', 'job_load', ?3, ?4, ?5)",
+             ) VALUES (?1, ?2, 'STAGE13_COMPLETION_CONFLICT_REBASED', 'job_load', ?3, ?4, ?5)",
             params![
                 event_id,
                 actor_user_id,
                 load_id,
                 json!({
-                    "supersededDetailsEventId": details_event_id,
-                    "supersededCompletionEventId": completion_event_id,
                     "replacementBaseVersion": cloud_version,
-                }).to_string(),
+                    "remoteStatus": remote_status,
+                    "attempt": attempts + 1,
+                })
+                .to_string(),
                 now,
             ],
         )?;
-        repaired += 1;
     }
 
-    transaction.execute(
-        "INSERT INTO local_sync_metadata (key, value, updated_at)
-         VALUES (?1, ?2, datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![REPAIR_KEY, repaired.to_string()],
-    )?;
     transaction.execute(
         "INSERT INTO local_sync_metadata (key, value, updated_at)
          VALUES ('device_sequence', ?1, datetime('now'))
