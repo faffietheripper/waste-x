@@ -1,4 +1,4 @@
-/* WASTE_X_WORKSHEET_RECEIVING_FLOW_V2 */
+/* WASTE_X_WORKSHEET_RECEIVING_FLOW_V3 */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
@@ -21,11 +21,11 @@ import {
   completeIncomingLoadAction,
   completeOutgoingLoadAction,
   markLoadArrivedAction,
-  rejectLoadAction,
   saveLoadDetailsAction,
 } from "./actions";
 import { issueReceivingSiteTicketAction } from "./ticket-actions";
 import DailyOperationsScrollKeeper from "./DailyOperationsScrollKeeper";
+import RejectLoadModal from "./RejectLoadModal";
 import TransportAssignmentPopover from "./TransportAssignmentPopover";
 import WorksheetSearch from "./WorksheetSearch";
 import WorksheetToast from "./WorksheetToast";
@@ -40,6 +40,23 @@ type SearchParams = {
 };
 
 type WeightMetric = "Grams" | "Kilograms" | "Tonnes";
+type WorksheetView = "live" | "rejected" | "completed" | "cancelled";
+
+type RejectionSummary = {
+  authority: "RECEIVING_SITE" | "DRIVER";
+  categoryLabel: string;
+  reason: string;
+};
+
+const SITE_REJECTION_LABELS: Record<string, string> = {
+  WASTE_MISMATCH: "Waste does not match booking",
+  CONTAMINATION: "Contamination / unacceptable material",
+  PERMIT_OR_COMPLIANCE: "Permit / compliance issue",
+  UNSAFE_LOAD: "Unsafe load",
+  DOCUMENTATION: "Missing / incorrect paperwork",
+  SITE_CAPACITY: "Site cannot receive this load",
+  OTHER: "Other",
+};
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
@@ -134,11 +151,48 @@ function statusClasses(status: string) {
   }
 }
 
+function rejectionSummary(notes: string | null): RejectionSummary | null {
+  if (!notes?.trim()) return null;
+  const lines = notes.split("\n").map((line) => line.trim()).filter(Boolean).reverse();
+  for (const line of lines) {
+    const site = line.match(/^\[SITE REJECTED · ([A-Z_]+) · [^\]]+\]\s*(.+)$/);
+    if (site) {
+      return {
+        authority: "RECEIVING_SITE",
+        categoryLabel: SITE_REJECTION_LABELS[site[1] ?? ""] ?? SITE_REJECTION_LABELS.OTHER,
+        reason: (site[2] ?? "").trim(),
+      };
+    }
+
+    const driver = line.match(/^\[DRIVER COLLECTION REJECTED · [^\]]+\]\s*(.+)$/);
+    if (driver) {
+      return {
+        authority: "DRIVER",
+        categoryLabel: "Driver refused collection",
+        reason: (driver[1] ?? "").trim(),
+      };
+    }
+
+    const legacy = line.match(/^\[REJECTED · [^\]]+\]\s*(.+)$/);
+    if (legacy) {
+      const detail = (legacy[1] ?? "").trim();
+      const tagged = detail.match(/^\[CATEGORY:([A-Z_]+)\]\s*(.+)$/);
+      const category = tagged?.[1] ?? "OTHER";
+      return {
+        authority: "RECEIVING_SITE",
+        categoryLabel: SITE_REJECTION_LABELS[category] ?? SITE_REJECTION_LABELS.OTHER,
+        reason: (tagged?.[2] ?? detail).trim(),
+      };
+    }
+  }
+  return null;
+}
+
 const successMessages: Record<string, string> = {
   load_arrived: "External carrier marked as arrived. Site acceptance is still required.",
   load_details_saved: "Receiving-site details saved.",
   load_accepted: "Load accepted by the receiving site.",
-  load_rejected: "Load rejected by the receiving site and retained in the operational record.",
+  load_rejected: "Load rejected by the receiving site and moved to Rejected.",
   load_completed: "Incoming receiving-site transaction completed.",
   outgoing_load_completed: "Outgoing movement completed.",
   load_cancelled: "Planned load cancelled.",
@@ -170,6 +224,7 @@ const errorMessages: Record<string, string> = {
   permit_mismatch: "This EWC is not currently allowed by the selected receiving permit.",
   external_facility_permit_mismatch:
     "The selected third-party facility does not have an active authorisation for this EWC.",
+  rejection_category_required: "Choose a rejection category before refusing the load.",
   rejection_reason_required: "Enter a reason before rejecting the load.",
   driver_required: "Choose a driver before continuing.",
   vehicle_required: "Choose a vehicle before continuing.",
@@ -290,19 +345,55 @@ export default async function DailyOperationsPage({
       .map((load) => ({ job, load })),
   );
 
+  const liveRows = rows.filter(({ load }) => !["completed", "rejected", "cancelled"].includes(load.status));
+  const rejectedRows = rows.filter(({ load }) => load.status === "rejected");
   const completedRows = rows.filter(({ load }) => load.status === "completed");
-  const operationalRows = rows.filter(({ load }) => load.status !== "completed");
-  const liveLoads = operationalRows.filter(({ load }) => load.status !== "rejected" && load.status !== "cancelled");
-  const problemLoads = operationalRows.filter(({ load }) => load.status === "rejected" || load.status === "cancelled");
+  const cancelledRows = rows.filter(({ load }) => load.status === "cancelled");
   const incomingLoads = rows.filter(({ load }) => load.direction === "incoming");
-  const outgoingLoads = rows.filter(({ load }) => load.direction === "outgoing");
 
   const requestedView = firstParam(searchParams?.view);
-  const view = requestedView === "completed" ? "completed" : "live";
-  const visibleRows = view === "completed" ? completedRows : operationalRows;
+  const view: WorksheetView =
+    requestedView === "rejected" || requestedView === "completed" || requestedView === "cancelled"
+      ? requestedView
+      : "live";
+  const visibleRows =
+    view === "rejected"
+      ? rejectedRows
+      : view === "completed"
+        ? completedRows
+        : view === "cancelled"
+          ? cancelledRows
+          : liveRows;
   const success = firstParam(searchParams?.success);
   const error = firstParam(searchParams?.error);
   const isToday = selectedDate === londonDateInput();
+
+  const viewCopy: Record<WorksheetView, { eyebrow: string; heading: string; helper: string; empty: string }> = {
+    live: {
+      eyebrow: "Live receiving board",
+      heading: `${visibleRows.length} live load${visibleRows.length === 1 ? "" : "s"}`,
+      helper: "Driver arrives → site checks → Accept or Reject → Weigh → Complete",
+      empty: "No live loads for this date",
+    },
+    rejected: {
+      eyebrow: "Rejected loads",
+      heading: `${visibleRows.length} rejected load${visibleRows.length === 1 ? "" : "s"}`,
+      helper: "Receiving-site and Driver refusals stay visible with their recorded reason",
+      empty: "No rejected loads for this date",
+    },
+    completed: {
+      eyebrow: "Completed loads",
+      heading: `${visibleRows.length} completed load${visibleRows.length === 1 ? "" : "s"}`,
+      helper: "Final weights and receiving-site tickets",
+      empty: "No completed loads for this date",
+    },
+    cancelled: {
+      eyebrow: "Cancelled loads",
+      heading: `${visibleRows.length} cancelled load${visibleRows.length === 1 ? "" : "s"}`,
+      helper: "Planned loads cancelled before the operational movement",
+      empty: "No cancelled loads for this date",
+    },
+  };
 
   return (
     <main className="min-h-screen bg-[#f7f3ed] px-8 pb-20 pt-[15vh] pl-[24vw]">
@@ -315,13 +406,13 @@ export default async function DailyOperationsPage({
               <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-orange-400">Operations // Daily Operations</p>
               <h1 className="mt-2 text-3xl font-semibold tracking-tight">{formatDay(selectedDate)}</h1>
               <p className="mt-2 max-w-3xl text-sm text-white/45">
-                Driver arrival hands the load to the site. Site staff then check, weigh, accept or reject, and complete the transaction.
+                Driver arrival hands the load to the site. Site staff then check, accept or refuse, weigh accepted loads, and complete the transaction.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Link href={`/home/worksheet?date=${shiftDate(selectedDate, -1)}`} className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/65">← Previous</Link>
-              {!isToday && <Link href="/home/worksheet" className="rounded-xl border border-orange-400/30 bg-orange-400/10 px-4 py-2.5 text-xs font-semibold text-orange-400">Today</Link>}
-              <Link href={`/home/worksheet?date=${shiftDate(selectedDate, 1)}`} className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/65">Next →</Link>
+              <Link href={`/home/worksheet?date=${shiftDate(selectedDate, -1)}&view=${view}`} className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/65">← Previous</Link>
+              {!isToday && <Link href={`/home/worksheet?view=${view}`} className="rounded-xl border border-orange-400/30 bg-orange-400/10 px-4 py-2.5 text-xs font-semibold text-orange-400">Today</Link>}
+              <Link href={`/home/worksheet?date=${shiftDate(selectedDate, 1)}&view=${view}`} className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-white/65">Next →</Link>
               <Link href="/home/jobs/new" className="rounded-xl bg-orange-500 px-4 py-2.5 text-xs font-bold text-black">+ Job</Link>
             </div>
           </div>
@@ -334,37 +425,35 @@ export default async function DailyOperationsPage({
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard label="Loads" value={rows.length} />
-          <MetricCard label="Live" value={liveLoads.length} highlight />
+          <MetricCard label="Live" value={liveRows.length} highlight />
           <MetricCard label="Incoming" value={incomingLoads.length} />
-          <MetricCard label="Outgoing" value={outgoingLoads.length} />
-          <MetricCard label="Done / exceptions" value={`${completedRows.length} / ${problemLoads.length}`} />
+          <MetricCard label="Rejected" value={rejectedRows.length} danger={rejectedRows.length > 0} />
+          <MetricCard label="Completed" value={completedRows.length} />
         </section>
 
         <section className="flex flex-col gap-3 rounded-[20px] border border-black/10 bg-white p-2 shadow-sm xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex items-center gap-2">
-            <Link href={`/home/worksheet?date=${selectedDate}&view=live`} className={`rounded-xl px-4 py-2.5 text-xs font-semibold ${view === "live" ? "bg-black text-white" : "text-black/45"}`}>
-              Live loads <span className="ml-2 rounded-md bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-black">{operationalRows.length}</span>
-            </Link>
-            <Link href={`/home/worksheet?date=${selectedDate}&view=completed`} className={`rounded-xl px-4 py-2.5 text-xs font-semibold ${view === "completed" ? "bg-black text-white" : "text-black/45"}`}>
-              Completed <span className="ml-2 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">{completedRows.length}</span>
-            </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <WorksheetTab href={`/home/worksheet?date=${selectedDate}&view=live`} active={view === "live"} label="Live" count={liveRows.length} tone="orange" />
+            <WorksheetTab href={`/home/worksheet?date=${selectedDate}&view=rejected`} active={view === "rejected"} label="Rejected" count={rejectedRows.length} tone="red" />
+            <WorksheetTab href={`/home/worksheet?date=${selectedDate}&view=completed`} active={view === "completed"} label="Completed" count={completedRows.length} tone="green" />
+            <WorksheetTab href={`/home/worksheet?date=${selectedDate}&view=cancelled`} active={view === "cancelled"} label="Cancelled" count={cancelledRows.length} tone="grey" />
           </div>
           <WorksheetSearch date={selectedDate} view={view} totalRows={visibleRows.length} />
         </section>
 
         {visibleRows.length === 0 ? (
           <section className="rounded-[26px] border border-dashed border-black/15 bg-white p-12 text-center shadow-sm">
-            <h2 className="text-xl font-semibold text-black">{rows.length === 0 ? "Nothing booked for this date" : view === "completed" ? "No completed loads for this date" : "No live loads for this date"}</h2>
+            <h2 className="text-xl font-semibold text-black">{rows.length === 0 ? "Nothing booked for this date" : viewCopy[view].empty}</h2>
             <p className="mx-auto mt-2 max-w-xl text-sm text-black/45">Booked loads move through Driver transport and receiving-site decisions without duplicate checkpoints.</p>
           </section>
         ) : (
           <section className="overflow-hidden rounded-[26px] border border-black/10 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-black/5 px-5 py-4">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-600">{view === "completed" ? "Completed loads" : "Live receiving board"}</p>
-                <h2 className="mt-1 text-lg font-semibold text-black">{visibleRows.length} load{visibleRows.length === 1 ? "" : "s"}</h2>
+                <p className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${view === "rejected" ? "text-red-600" : "text-orange-600"}`}>{viewCopy[view].eyebrow}</p>
+                <h2 className="mt-1 text-lg font-semibold text-black">{viewCopy[view].heading}</h2>
               </div>
-              <p className="hidden text-xs text-black/35 xl:block">{view === "completed" ? "Final weights and receiving-site tickets" : "Driver arrives → site checks/weighs → Accept or Reject → Complete"}</p>
+              <p className="hidden text-xs text-black/35 xl:block">{viewCopy[view].helper}</p>
             </div>
 
             <div className="overflow-x-auto">
@@ -381,6 +470,7 @@ export default async function DailyOperationsPage({
                     const terminal = ["completed", "rejected", "cancelled"].includes(load.status);
                     const firstLoad = job.loads[0]?.id === load.id;
                     const ownTransport = !load.haulierCounterpartyId;
+                    const rejection = load.status === "rejected" ? rejectionSummary(load.notes) : null;
                     const route = load.direction === "incoming"
                       ? `${job.clientSite?.name ?? "Origin"} → ${load.ownSite?.name ?? job.ownSite?.name ?? "Receiving site"}`
                       : `${load.ownSite?.name ?? job.ownSite?.name ?? "Your site"} → ${load.thirdPartyDestinationSite?.name ?? job.thirdPartyDestinationSite?.name ?? "External facility"}`;
@@ -389,6 +479,7 @@ export default async function DailyOperationsPage({
                       job.clientSite?.name, route, load.direction, load.status, load.ewcCodeSnapshot,
                       load.wasteDescriptionSnapshot, load.haulier?.name, load.driver?.name,
                       load.vehicle?.registrationNumber, load.ticketNumber, load.notes,
+                      rejection?.categoryLabel, rejection?.reason,
                     ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
 
                     return (
@@ -427,7 +518,7 @@ export default async function DailyOperationsPage({
 
                         <Td>
                           {terminal ? (
-                            <div><p className="text-sm font-semibold text-black/70">{load.netWeight ? `${load.netWeight} ${load.weightMetric}` : "—"}</p><p className="mt-1 text-xs text-black/35">Final</p></div>
+                            <div><p className="text-sm font-semibold text-black/70">{load.netWeight ? `${load.netWeight} ${load.weightMetric}` : "—"}</p><p className="mt-1 text-xs text-black/35">{load.status === "rejected" ? "Not finalised" : "Final"}</p></div>
                           ) : load.direction === "incoming" && (load.status === "arrived" || load.status === "accepted") ? (
                             <QuickWeightForm load={load} returnDate={selectedDate} />
                           ) : (
@@ -438,10 +529,11 @@ export default async function DailyOperationsPage({
                         <Td>
                           <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusClasses(load.status)}`}>{formatStatus(load.status)}</span>
                           {load.netWeight && <p className="mt-2 text-xs font-medium text-black/40">Net {load.netWeight} {load.weightMetric}</p>}
+                          {rejection ? <p className="mt-2 max-w-[220px] text-[10px] font-semibold leading-4 text-red-700">{rejection.categoryLabel}</p> : null}
                         </Td>
 
                         <Td>
-                          <div className="flex min-w-[190px] flex-col items-end gap-2">
+                          <div className="flex min-w-[210px] flex-col items-end gap-2">
                             {load.status === "completed" ? (
                               load.ticketNumber ? (
                                 <TicketActions loadId={load.id} ticketNumber={load.ticketNumber} />
@@ -457,13 +549,22 @@ export default async function DailyOperationsPage({
                             ) : load.direction === "incoming" && load.status === "planned" ? (
                               <form action={markLoadArrivedAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white">Mark external carrier arrived</button></form>
                             ) : load.direction === "incoming" && load.status === "arrived" ? (
-                              <form action={acceptLoadAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-orange-500 px-3.5 py-2 text-xs font-bold text-black">Accept load</button></form>
+                              <div className="grid w-full gap-2">
+                                <form action={acceptLoadAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-orange-500 px-3.5 py-2 text-xs font-bold text-black">Accept load</button></form>
+                                <RejectLoadModal loadId={load.id} returnDate={selectedDate} jobNumber={job.jobNumber} loadNumber={load.loadNumber} />
+                              </div>
                             ) : load.direction === "incoming" && load.status === "accepted" ? (
                               <form action={completeIncomingLoadAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white">Complete transaction</button></form>
                             ) : load.direction === "outgoing" && !terminal ? (
                               <form action={completeOutgoingLoadAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white">Complete</button></form>
                             ) : load.status === "rejected" ? (
-                              <span className="inline-flex w-full justify-center rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">Rejected</span>
+                              <div className="w-full rounded-xl border border-red-200 bg-red-50 p-3 text-left">
+                                <p className="m-0 text-[9px] font-bold uppercase tracking-[0.12em] text-red-600">{rejection?.authority === "DRIVER" ? "Driver refusal" : "Receiving-site refusal"}</p>
+                                <p className="mt-1 text-xs font-bold text-red-800">{rejection?.categoryLabel ?? "Rejected"}</p>
+                                <p className="mt-1 line-clamp-4 text-[11px] leading-4 text-red-700">{rejection?.reason ?? "Rejection recorded in operational notes."}</p>
+                              </div>
+                            ) : load.status === "cancelled" ? (
+                              <span className="inline-flex w-full justify-center rounded-lg bg-black/5 px-3 py-2 text-xs font-semibold text-black/45">Cancelled</span>
                             ) : null}
 
                             {!terminal && (load.status === "arrived" || load.status === "accepted") && (
@@ -488,14 +589,6 @@ export default async function DailyOperationsPage({
                                     <label className="flex items-center gap-2 text-[11px] font-medium text-black/50"><input type="checkbox" name="weightIsEstimate" defaultChecked={load.weightIsEstimate} className="size-3.5 accent-orange-500" />Estimated quantity</label>
                                     <button type="submit" className="h-9 rounded-lg bg-black px-3 text-xs font-semibold text-white">Save site details</button>
                                   </form>
-
-                                  {load.status === "arrived" && (
-                                    <form action={rejectLoadAction} className="mt-2 border-t border-black/5 pt-2">
-                                      <input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} />
-                                      <input name="reason" required minLength={3} placeholder="Reason for rejection" className="h-9 w-full rounded-lg border border-red-200 bg-white px-2.5 text-xs" />
-                                      <button type="submit" className="mt-1.5 h-9 w-full rounded-lg bg-red-600 px-3 text-xs font-semibold text-white">Reject load</button>
-                                    </form>
-                                  )}
                                 </div>
                               </details>
                             )}
@@ -515,6 +608,34 @@ export default async function DailyOperationsPage({
         )}
       </div>
     </main>
+  );
+}
+
+function WorksheetTab({
+  href,
+  active,
+  label,
+  count,
+  tone,
+}: {
+  href: string;
+  active: boolean;
+  label: string;
+  count: number;
+  tone: "orange" | "red" | "green" | "grey";
+}) {
+  const countClass =
+    tone === "red"
+      ? "bg-red-100 text-red-800"
+      : tone === "green"
+        ? "bg-emerald-100 text-emerald-800"
+        : tone === "grey"
+          ? "bg-black/10 text-black/55"
+          : "bg-orange-500 text-black";
+  return (
+    <Link href={href} className={`rounded-xl px-4 py-2.5 text-xs font-semibold ${active ? "bg-black text-white" : "text-black/45"}`}>
+      {label} <span className={`ml-2 rounded-md px-1.5 py-0.5 text-[10px] font-bold ${countClass}`}>{count}</span>
+    </Link>
   );
 }
 
@@ -590,8 +711,9 @@ function WeightInput({ label, name, value }: { label: string; name: string; valu
   return <label><FieldLabel>{label}</FieldLabel><input type="number" min="0" step="0.001" name={name} defaultValue={value ?? ""} className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs" /></label>;
 }
 
-function MetricCard({ label, value, highlight = false }: { label: string; value: number | string; highlight?: boolean }) {
-  return <div className={`rounded-[20px] border px-4 py-3.5 shadow-sm ${highlight ? "border-orange-200 bg-orange-50" : "border-black/10 bg-white"}`}><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">{label}</p><p className="mt-1.5 text-2xl font-semibold text-black">{value}</p></div>;
+function MetricCard({ label, value, highlight = false, danger = false }: { label: string; value: number | string; highlight?: boolean; danger?: boolean }) {
+  const cardClass = danger ? "border-red-200 bg-red-50" : highlight ? "border-orange-200 bg-orange-50" : "border-black/10 bg-white";
+  return <div className={`rounded-[20px] border px-4 py-3.5 shadow-sm ${cardClass}`}><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/35">{label}</p><p className={`mt-1.5 text-2xl font-semibold ${danger ? "text-red-700" : "text-black"}`}>{value}</p></div>;
 }
 
 function Th({ children, alignRight = false }: { children: React.ReactNode; alignRight?: boolean }) {

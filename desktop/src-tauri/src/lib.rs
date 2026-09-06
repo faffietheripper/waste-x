@@ -7,6 +7,7 @@ mod local_db;
 mod offline_auth;
 mod operations;
 mod provisioning;
+mod site_rejection;
 mod stage13_guards;
 mod stage13_hash_repair;
 mod stage13_repairs;
@@ -46,6 +47,7 @@ pub fn run() {
             operations::desktop_accept_load,
             operations::desktop_reject_load,
             operations::desktop_complete_load,
+            site_rejection::desktop_reject_site_load,
             tickets::desktop_ticket_status,
             tickets::desktop_issue_ticket,
             ticket_io::desktop_download_ticket_pdf,

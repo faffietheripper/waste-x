@@ -94,6 +94,14 @@ export function AssignmentCard({
         </Text>
       </View>
 
+      {assignment.load.siteRejection ? (
+        <View style={styles.siteRejectionCard}>
+          <Text style={styles.siteRejectionEyebrow}>RECEIVING SITE REJECTED</Text>
+          <Text style={styles.siteRejectionCategory}>{assignment.load.siteRejection.categoryLabel}</Text>
+          <Text style={styles.siteRejectionReason} numberOfLines={3}>{assignment.load.siteRejection.reason}</Text>
+        </View>
+      ) : null}
+
       <View style={styles.assignmentFooter}>
         <View>
           <Text style={styles.footerLabel}>FIELD PROGRESS</Text>
@@ -329,6 +337,33 @@ const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 12,
     lineHeight: 18,
+  },
+  siteRejectionCard: {
+    marginTop: 13,
+    padding: 12,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    backgroundColor: "#fef2f2",
+  },
+  siteRejectionEyebrow: {
+    color: "#b91c1c",
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
+  siteRejectionCategory: {
+    marginTop: 5,
+    color: "#7f1d1d",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  siteRejectionReason: {
+    marginTop: 4,
+    color: "#991b1b",
+    fontSize: 10,
+    lineHeight: 15,
+    fontWeight: "600",
   },
   assignmentFooter: {
     marginTop: 16,

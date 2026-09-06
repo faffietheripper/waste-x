@@ -254,15 +254,14 @@ export default function MobileJobDetailScreen() {
   const workflow = getMobileFieldWorkflowState(assignment);
   const nextAction = getNextMobileFieldWorkflowAction(workflow.step);
   const readOnly = isMobileAssignmentReadOnly(assignment);
-  const terminal = ["completed", "rejected", "cancelled", "canceled"].includes(
-    assignment.load.status.toLowerCase(),
-  );
-  const siteCompleted = assignment.load.status.toLowerCase() === "completed";
+  const loadStatus = assignment.load.status.toLowerCase();
+  const terminal = ["completed", "rejected", "cancelled", "canceled"].includes(loadStatus);
   const atDestination = workflow.step === "ARRIVED_DESTINATION";
+  const siteClosedAtDestination = atDestination && (loadStatus === "completed" || loadStatus === "rejected");
   const canRejectBeforeCollection =
     !readOnly &&
     workflow.step === "ASSIGNED" &&
-    assignment.load.status.toLowerCase() === "planned";
+    loadStatus === "planned";
   const workflowIndex = MOBILE_FIELD_WORKFLOW_STEPS.indexOf(workflow.step);
 
   return (
@@ -306,7 +305,7 @@ export default function MobileJobDetailScreen() {
           <View style={styles.timeline}>
             {MOBILE_FIELD_WORKFLOW_STEPS.map((step, index) => {
               const destinationClosedBySite =
-                siteCompleted &&
+                siteClosedAtDestination &&
                 step === "ARRIVED_DESTINATION" &&
                 index === workflowIndex;
               const completed = index < workflowIndex || destinationClosedBySite;
@@ -415,6 +414,24 @@ export default function MobileJobDetailScreen() {
             </View>
           )}
         </Section>
+
+        {assignment.load.siteRejection ? (
+          <Section title="Receiving-site decision">
+            <View style={styles.siteRejectionCard}>
+              <Text style={styles.siteRejectionEyebrow}>LOAD REJECTED</Text>
+              <Text style={styles.siteRejectionTitle}>{assignment.load.siteRejection.categoryLabel}</Text>
+              <Text selectable style={styles.siteRejectionReason}>{assignment.load.siteRejection.reason}</Text>
+              {assignment.load.siteRejection.rejectedAt ? (
+                <Text style={styles.siteRejectionTime}>
+                  Rejected {new Date(assignment.load.siteRejection.rejectedAt).toLocaleString()}
+                </Text>
+              ) : null}
+              <Text style={styles.siteRejectionHint}>
+                This is the receiving site's final refusal record. It is read-only on Driver Mobile and no normal completed-load ticket is issued.
+              </Text>
+            </View>
+          </Section>
+        ) : null}
 
         <Section title="Route">
           <SiteCard label={assignment.job.direction === "incoming" ? "COLLECTION SITE" : "ORIGIN SITE"} location={assignment.origin} accent />
@@ -612,6 +629,12 @@ const styles = StyleSheet.create({
   completeBlock: { marginTop: 16, padding: 14, borderRadius: 14, backgroundColor: "#f8fafc" },
   completeTitle: { color: "#334155", fontSize: 13, fontWeight: "800" },
   completeBody: { marginTop: 5, color: "#64748b", fontSize: 11, lineHeight: 17 },
+  siteRejectionCard: { padding: 15, borderRadius: 14, borderWidth: 1, borderColor: "#fecaca", backgroundColor: "#fef2f2" },
+  siteRejectionEyebrow: { color: "#b91c1c", fontSize: 8, fontWeight: "900", letterSpacing: 0.9 },
+  siteRejectionTitle: { marginTop: 7, color: "#7f1d1d", fontSize: 17, fontWeight: "900" },
+  siteRejectionReason: { marginTop: 7, color: "#991b1b", fontSize: 12, lineHeight: 18, fontWeight: "700" },
+  siteRejectionTime: { marginTop: 9, color: "#b91c1c", fontSize: 9, fontWeight: "700" },
+  siteRejectionHint: { marginTop: 9, color: "#9f1239", fontSize: 10, lineHeight: 15 },
   siteCard: { padding: 15, borderRadius: 15, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#f1f5f9" },
   siteCardAccent: { backgroundColor: "#fff7ed", borderColor: "#fed7aa" },
   siteTopRow: { flexDirection: "row", justifyContent: "space-between", gap: 10 },

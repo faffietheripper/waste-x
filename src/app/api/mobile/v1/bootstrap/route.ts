@@ -65,12 +65,23 @@ const FIELD_ISSUE_TYPES = [
   "OTHER",
 ] as const;
 
+const SITE_REJECTION_CATEGORY_LABELS = {
+  WASTE_MISMATCH: "Waste does not match booking",
+  CONTAMINATION: "Contamination / unacceptable material",
+  PERMIT_OR_COMPLIANCE: "Permit / compliance issue",
+  UNSAFE_LOAD: "Unsafe load",
+  DOCUMENTATION: "Missing / incorrect paperwork",
+  SITE_CAPACITY: "Site cannot receive this load",
+  OTHER: "Other",
+} as const;
+
 type ActiveFieldWorkflowEventType =
   | "FIELD_COLLECTED"
   | "FIELD_IN_TRANSIT"
   | "FIELD_ARRIVED_DESTINATION";
 type FieldActivityEventType = (typeof FIELD_ACTIVITY_EVENT_TYPES)[number];
 type FieldIssueType = (typeof FIELD_ISSUE_TYPES)[number];
+type SiteRejectionCategory = keyof typeof SITE_REJECTION_CATEGORY_LABELS;
 type FieldWorkflowStep =
   | "ASSIGNED"
   | "COLLECTED"
@@ -96,6 +107,59 @@ function activeFieldEvent(eventType: string): ActiveFieldWorkflowEventType | nul
 
 function isFieldIssueType(value: unknown): value is FieldIssueType {
   return typeof value === "string" && (FIELD_ISSUE_TYPES as readonly string[]).includes(value);
+}
+
+function isSiteRejectionCategory(value: string): value is SiteRejectionCategory {
+  return value in SITE_REJECTION_CATEGORY_LABELS;
+}
+
+function parseSiteRejection(
+  notes: string | null,
+  status: string,
+  completedAt: Date | null,
+) {
+  if (status !== "rejected" || !notes?.trim()) return null;
+
+  const lines = notes
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reverse();
+
+  for (const line of lines) {
+    const modern = line.match(/^\[SITE REJECTED · ([A-Z_]+) · ([^\]]+)\]\s*(.+)$/);
+    if (modern) {
+      const category = isSiteRejectionCategory(modern[1] ?? "")
+        ? (modern[1] as SiteRejectionCategory)
+        : "OTHER";
+      return {
+        category,
+        categoryLabel: SITE_REJECTION_CATEGORY_LABELS[category],
+        reason: (modern[3] ?? "").trim(),
+        rejectedAt: completedAt?.toISOString() ?? null,
+      };
+    }
+
+    // Desktop sends category as a tag inside the existing LOAD_REJECTED reason
+    // so older sync protocol handlers remain compatible. Recover that structured
+    // category here instead of exposing protocol notation to the Driver.
+    const legacy = line.match(/^\[REJECTED · [^\]]+\]\s*(.+)$/);
+    if (legacy) {
+      const detail = (legacy[1] ?? "").trim();
+      const tagged = detail.match(/^\[CATEGORY:([A-Z_]+)\]\s*(.+)$/);
+      const category = tagged && isSiteRejectionCategory(tagged[1] ?? "")
+        ? (tagged[1] as SiteRejectionCategory)
+        : "OTHER";
+      return {
+        category,
+        categoryLabel: SITE_REJECTION_CATEGORY_LABELS[category],
+        reason: (tagged?.[2] ?? detail).trim(),
+        rejectedAt: completedAt?.toISOString() ?? null,
+      };
+    }
+  }
+
+  return null;
 }
 
 function unique(values: Array<string | null | undefined>) {
@@ -214,6 +278,8 @@ export async function GET(request: Request) {
         weightIsEstimate: jobLoads.weightIsEstimate,
         weightSource: jobLoads.weightSource,
         ticketNumber: jobLoads.ticketNumber,
+        loadNotes: jobLoads.notes,
+        loadCompletedAt: jobLoads.completedAt,
       })
       .from(jobLoads)
       .innerJoin(jobs, and(eq(jobLoads.jobId, jobs.id), eq(jobLoads.organisationId, jobs.organisationId)))
@@ -400,6 +466,11 @@ export async function GET(request: Request) {
           weightIsEstimate: row.weightIsEstimate,
           weightSource: row.weightSource,
           ticketNumber: row.ticketNumber,
+          siteRejection: parseSiteRejection(
+            row.loadNotes,
+            row.loadStatus,
+            row.loadCompletedAt,
+          ),
         },
         transport: {
           driverId: effectiveDriverId ?? driver.id,

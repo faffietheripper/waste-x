@@ -19,13 +19,14 @@ import {
 import { useFieldOps } from "@/field-ops/context";
 import { bucketMobileAssignments } from "@/field-ops/presentation";
 
-type Filter = "assigned" | "upcoming" | "completed" | "cancelled";
+type Filter = "assigned" | "upcoming" | "completed" | "rejected" | "cancelled";
 
 const FILTERS: Array<{ key: Filter; label: string }> = [
   { key: "assigned", label: "Assigned" },
   { key: "upcoming", label: "Upcoming" },
   { key: "completed", label: "Completed" },
-  { key: "cancelled", label: "Cancelled / rejected" },
+  { key: "rejected", label: "Rejected" },
+  { key: "cancelled", label: "Cancelled" },
 ];
 
 export default function JobsScreen() {
@@ -53,7 +54,9 @@ export default function JobsScreen() {
         ? buckets.upcoming
         : filter === "completed"
           ? buckets.completed
-          : buckets.cancelled;
+          : filter === "rejected"
+            ? buckets.rejected
+            : buckets.cancelled;
 
   const countFor = (key: Filter) =>
     key === "assigned"
@@ -62,7 +65,9 @@ export default function JobsScreen() {
         ? buckets.upcoming.length
         : key === "completed"
           ? buckets.completed.length
-          : buckets.cancelled.length;
+          : key === "rejected"
+            ? buckets.rejected.length
+            : buckets.cancelled.length;
 
   const openAssignment = (loadId: string) => {
     router.push({ pathname: "/job/[loadId]", params: { loadId } });
