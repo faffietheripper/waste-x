@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration as StdDuration,
 };
@@ -262,7 +263,7 @@ fn next_push_batch(connection: &Connection) -> Result<Vec<QueueRow>, String> {
              FROM local_sync_queue
              WHERE status != 'SYNCED'
              ORDER BY device_sequence
-             LIMIT 250",
+             LIMIT 1000",
         )
         .map_err(|e| e.to_string())?;
 
@@ -289,14 +290,28 @@ fn next_push_batch(connection: &Connection) -> Result<Vec<QueueRow>, String> {
         })
         .map_err(|e| e.to_string())?;
 
+    /* A conflict belongs to the affected entity, not to the entire yard. Keep
+     * later events for that same entity behind its review item, but continue to
+     * upload unrelated jobs/loads. We also send at most one event per entity in
+     * each batch so optimistic versions advance deterministically. */
     let mut batch = Vec::new();
+    let mut blocked_entities: HashSet<(String, String)> = HashSet::new();
+    let mut selected_entities: HashSet<(String, String)> = HashSet::new();
     for row in rows {
         let row = row.map_err(|e| e.to_string())?;
+        let entity_key = (row.entity_type.clone(), row.entity_id.clone());
+        if blocked_entities.contains(&entity_key) || selected_entities.contains(&entity_key) {
+            continue;
+        }
+
         let eligible = row.status == "PENDING"
             || (row.status == "FAILED" && retryable_failure(row.last_error.as_deref()));
         if !eligible {
-            break;
+            blocked_entities.insert(entity_key);
+            continue;
         }
+
+        selected_entities.insert(entity_key);
         batch.push(row);
         if batch.len() >= PUSH_BATCH_SIZE {
             break;
@@ -401,7 +416,7 @@ fn apply_push_results(
         .and_then(Value::as_array)
         .ok_or_else(|| "Waste X Cloud sync push response is missing results.".to_string())?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
-    let mut halt = false;
+    let mut has_review = false;
 
     for event in batch {
         let result = results
@@ -426,12 +441,12 @@ fn apply_push_results(
                 }
                 "CONFLICT" => {
                     counters.pushed_conflicts += 1;
-                    halt = true;
+                    has_review = true;
                     ("CONFLICT", Some(format!("CONFLICT:{reason}")), server_version)
                 }
                 "REJECTED" => {
                     counters.pushed_failed += 1;
-                    halt = true;
+                    has_review = true;
                     ("FAILED", Some(format!("REJECTED:{reason}")), server_version)
                 }
                 _ => {
@@ -456,7 +471,7 @@ fn apply_push_results(
     }
 
     transaction.commit().map_err(|e| e.to_string())?;
-    Ok(halt)
+    Ok(has_review)
 }
 
 fn scalar_string(payload: &Value, key: &str) -> Option<String> {
@@ -878,13 +893,20 @@ fn apply_pull_change(
     if change_type == "DELETE" {
         delete_change(transaction, entity_type, entity_id, &payload)?;
     } else {
+        let fallback_changed_at;
+        let resolved_changed_at = if changed_at.is_empty() {
+            fallback_changed_at = now_iso();
+            fallback_changed_at.as_str()
+        } else {
+            changed_at
+        };
         upsert_change(
             transaction,
             organisation_id,
             entity_type,
             entity_id,
             entity_version,
-            if changed_at.is_empty() { &now_iso() } else { changed_at },
+            resolved_changed_at,
             &payload,
         )?;
     }
@@ -1016,10 +1038,14 @@ async fn run_sync(app: &AppHandle) -> Result<DesktopSyncRunResult, String> {
             break;
         }
 
-        let halt = apply_push_results(&mut connection, &batch, &body, &mut counters)?;
-        if halt {
-            set_metadata(&connection, "sync_last_error", "Sync stopped at a conflict or permanently rejected event. Later device events remain queued in order.")?;
-            break;
+        let has_review = apply_push_results(&mut connection, &batch, &body, &mut counters)?;
+        if has_review {
+            set_metadata(
+                &connection,
+                "sync_last_error",
+                "One or more loads need sync review. Unrelated jobs and loads will continue syncing.",
+            )?;
+            continue;
         }
     }
 
@@ -1093,7 +1119,22 @@ async fn run_sync(app: &AppHandle) -> Result<DesktopSyncRunResult, String> {
     let success_at = now_iso();
     set_metadata(&connection, "sync_last_success_at", &success_at)?;
     if metadata(&connection, "sync_auth_required")?.as_deref() != Some("true") {
-        clear_metadata(&connection, "sync_last_error")?;
+        let reviews = count(
+            &connection,
+            "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'CONFLICT' OR (status = 'FAILED' AND NOT (COALESCE(last_error, '') LIKE 'NETWORK:%' OR COALESCE(last_error, '') LIKE 'RETRYABLE:%' OR COALESCE(last_error, '') LIKE 'INTERRUPTED:%'))",
+        )? + count(
+            &connection,
+            "SELECT COUNT(*) FROM local_sync_remote_conflict WHERE resolved_at IS NULL",
+        )?;
+        if reviews == 0 {
+            clear_metadata(&connection, "sync_last_error")?;
+        } else {
+            set_metadata(
+                &connection,
+                "sync_last_error",
+                "Some items need sync review. Unrelated jobs and loads continue syncing normally.",
+            )?;
+        }
     }
 
     let status = sync_status(&connection, false)?;

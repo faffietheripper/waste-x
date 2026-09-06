@@ -18,7 +18,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@waste-x/operations-core": ["./packages/operations-core/src/index.ts"]
     }
   },
   "include": [

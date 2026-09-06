@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, State};
 const DB_FILE_NAME: &str = "waste-x-local.db";
 const KEYRING_SERVICE: &str = "com.wastex.desktop.local-database";
 const KEYRING_ACCOUNT: &str = "database-key-v1";
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 pub struct LocalDb {
     connection: Mutex<Connection>,
@@ -95,6 +95,16 @@ fn apply_schema_migrations(connection: &mut Connection) -> rusqlite::Result<()> 
         transaction.execute(
             "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
             params![2_i64],
+        )?;
+        transaction.commit()?;
+    }
+
+    if current_version < 3 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V3)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
+            params![3_i64],
         )?;
         transaction.commit()?;
     }
@@ -474,4 +484,53 @@ CREATE INDEX IF NOT EXISTS local_sync_remote_conflict_entity_idx
     ON local_sync_remote_conflict(entity_type, entity_id, resolved_at);
 CREATE INDEX IF NOT EXISTS local_sync_queue_entity_state_idx
     ON local_sync_queue(entity_type, entity_id, status, device_sequence);
+"#;
+
+const MIGRATION_V3: &str = r#"
+ALTER TABLE local_ticket ADD COLUMN status TEXT NOT NULL DEFAULT 'ISSUED';
+ALTER TABLE local_ticket ADD COLUMN issued_by_user_id TEXT;
+ALTER TABLE local_ticket ADD COLUMN issued_by_device_id TEXT;
+ALTER TABLE local_ticket ADD COLUMN issued_at TEXT;
+ALTER TABLE local_ticket ADD COLUMN source_entity_version INTEGER;
+ALTER TABLE local_ticket ADD COLUMN sync_event_id TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS local_ticket_load_unique
+    ON local_ticket(organisation_id, job_load_id);
+CREATE UNIQUE INDEX IF NOT EXISTS local_ticket_number_unique
+    ON local_ticket(organisation_id, local_ticket_number)
+    WHERE local_ticket_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS local_ticket_sync_event_idx
+    ON local_ticket(sync_event_id);
+
+CREATE TABLE IF NOT EXISTS local_ticket_document (
+    ticket_id TEXT PRIMARY KEY,
+    template_version INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    pdf_bytes BLOB NOT NULL,
+    sha256 TEXT NOT NULL,
+    byte_length INTEGER NOT NULL,
+    generated_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(ticket_id) REFERENCES local_ticket(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS local_print_event (
+    id TEXT PRIMARY KEY,
+    ticket_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('PRINT','REPRINT')),
+    printer_id TEXT,
+    printer_name TEXT NOT NULL,
+    pdf_sha256 TEXT NOT NULL,
+    result TEXT NOT NULL CHECK(result IN ('SUCCESS','FAILED','CANCELLED')),
+    submitted_by_user_id TEXT,
+    desktop_device_id TEXT,
+    os_job_reference TEXT,
+    output_path TEXT,
+    error_text TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(ticket_id) REFERENCES local_ticket(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS local_print_event_ticket_idx
+    ON local_print_event(ticket_id, created_at);
 "#;

@@ -25,7 +25,7 @@ const FILTERS: Array<{ key: Filter; label: string }> = [
   { key: "assigned", label: "Assigned" },
   { key: "upcoming", label: "Upcoming" },
   { key: "completed", label: "Completed" },
-  { key: "cancelled", label: "Cancelled" },
+  { key: "cancelled", label: "Cancelled / rejected" },
 ];
 
 export default function JobsScreen() {

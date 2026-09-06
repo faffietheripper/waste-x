@@ -7,7 +7,14 @@ mod local_db;
 mod offline_auth;
 mod operations;
 mod provisioning;
+mod stage13_guards;
+mod stage13_hash_repair;
+mod stage13_repairs;
 mod sync_engine;
+mod sync_review;
+mod ticket_io;
+mod tickets;
+mod vehicle_tare;
 mod working_set;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -16,6 +23,9 @@ pub fn run() {
         .setup(|app| {
             let local_db = local_db::initialise(app.handle())?;
             app.manage(local_db);
+            stage13_guards::initialise(app.handle())?;
+            stage13_repairs::run(app.handle())?;
+            stage13_hash_repair::run(app.handle())?;
             app.manage(offline_auth::DesktopAuthState::default());
             app.manage(sync_engine::SyncEngineState::default());
             Ok(())
@@ -36,8 +46,14 @@ pub fn run() {
             operations::desktop_accept_load,
             operations::desktop_reject_load,
             operations::desktop_complete_load,
+            tickets::desktop_ticket_status,
+            tickets::desktop_issue_ticket,
+            ticket_io::desktop_download_ticket_pdf,
+            ticket_io::desktop_print_ticket,
+            vehicle_tare::desktop_vehicle_tare,
             sync_engine::desktop_sync_status,
             sync_engine::desktop_sync_now,
+            sync_review::desktop_sync_review_items,
             cloud_access::desktop_cloud_context,
             cloud_access::desktop_cloud_catalogue,
             bridge_client::desktop_bridge_status,

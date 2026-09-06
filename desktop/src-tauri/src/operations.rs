@@ -802,7 +802,7 @@ pub fn desktop_complete_load(
     let mut connection = open_local_connection(&app)?;
     let actor = actor_context(&connection)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
-    let load = local_load(&transaction, input.load_id.trim(), &actor.organisation_id)?;
+    let mut load = local_load(&transaction, input.load_id.trim(), &actor.organisation_id)?;
 
     if load.direction == "incoming" && load.status != "accepted" {
         return Err("Incoming loads must be accepted before completion.".to_string());
@@ -823,16 +823,82 @@ pub fn desktop_complete_load(
         }
     }
 
+    /* Finalise weights + Complete is one receiving-site transaction. The React
+     * screen saves the visible values immediately before this command so they
+     * are already present in the encrypted load record. If that save is still
+     * only a local PENDING LOAD_DETAILS_UPDATED event, collapse it into the
+     * completion event instead of creating two Cloud mutations that can race on
+     * entity versions. A details event that has already started syncing is left
+     * alone and normal ordered replay continues. */
+    let latest_local_event: Option<(String, String, Option<i64>, String)> = transaction
+        .query_row(
+            "SELECT event_id, event_type, base_version, status
+             FROM local_sync_queue
+             WHERE entity_type = 'job_load'
+               AND entity_id = ?1
+               AND device_id = ?2
+             ORDER BY device_sequence DESC
+             LIMIT 1",
+            params![load.id, actor.device_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if let Some((event_id, event_type, base_version, status)) = latest_local_event {
+        if event_type == "LOAD_DETAILS_UPDATED" && status == "PENDING" {
+            if let Some(base_version) = base_version {
+                transaction
+                    .execute(
+                        "UPDATE local_sync_queue
+                         SET status = 'SYNCED',
+                             last_error = 'LOCAL_COALESCED:LOAD_COMPLETED carries the final site details',
+                             updated_at = datetime('now')
+                         WHERE event_id = ?1 AND status = 'PENDING'",
+                        params![event_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                load.entity_version = base_version;
+            }
+        }
+    }
+
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut updated_payload = load.payload.clone();
     let object = payload_object(&mut updated_payload)?;
     object.insert("status".to_string(), Value::String("completed".to_string()));
     object.insert("completedAt".to_string(), Value::String(now.clone()));
+    object.insert("weightSource".to_string(), Value::String("weighbridge".to_string()));
     if load.direction == "outgoing" && (object.get("movementAt").is_none() || object.get("movementAt") == Some(&Value::Null)) {
         object.insert("movementAt".to_string(), Value::String(now));
     }
 
-    let result = enqueue_load_event(&transaction, &actor, &load, "LOAD_COMPLETED", &json!({}), &updated_payload, "completed", load.gross_weight.as_deref(), load.tare_weight.as_deref(), load.net_weight.as_deref())?;
+    let gross = load.gross_weight.as_ref().and_then(|value| value.parse::<f64>().ok());
+    let tare = load.tare_weight.as_ref().and_then(|value| value.parse::<f64>().ok());
+    let completion_payload = json!({
+        "driverId": value_string(&load.payload, "driverId"),
+        "vehicleId": value_string(&load.payload, "vehicleId"),
+        "wasteDescription": value_string(&load.payload, "wasteDescriptionSnapshot"),
+        "grossWeight": gross,
+        "tareWeight": tare,
+        "netWeight": net,
+        "weightMetric": value_string(&load.payload, "weightMetric").unwrap_or_else(|| "Tonnes".to_string()),
+        "weightIsEstimate": load.payload.get("weightIsEstimate").and_then(Value::as_bool).unwrap_or(false),
+        "notes": value_string(&load.payload, "notes"),
+    });
+
+    let result = enqueue_load_event(
+        &transaction,
+        &actor,
+        &load,
+        "LOAD_COMPLETED",
+        &completion_payload,
+        &updated_payload,
+        "completed",
+        load.gross_weight.as_deref(),
+        load.tare_weight.as_deref(),
+        load.net_weight.as_deref(),
+    )?;
     transaction.commit().map_err(|e| e.to_string())?;
     Ok(result)
 }

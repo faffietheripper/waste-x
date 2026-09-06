@@ -3,31 +3,29 @@ export type MobileDriverScopeResolutionV1 =
   | "NO_DRIVER_MATCH"
   | "AMBIGUOUS_DRIVER_MATCH";
 
+/**
+ * Driver progress is intentionally small. The Driver confirms only physical
+ * transport milestones they directly control. Site acceptance/rejection,
+ * weights, completion and receiving-site ticketing belong to Web/Desktop.
+ *
+ * The one exception is a pre-collection refusal: while still ASSIGNED the
+ * Driver may reject the booked collection if the waste/site is unsuitable.
+ * That is recorded as FIELD_COLLECTION_REJECTED and becomes unavailable as
+ * soon as FIELD_COLLECTED has been recorded.
+ */
 export type MobileFieldWorkflowStepV1 =
   | "ASSIGNED"
-  | "STARTED"
-  | "EN_ROUTE"
-  | "ARRIVED_COLLECTION"
   | "COLLECTED"
   | "IN_TRANSIT"
-  | "ARRIVED_DESTINATION"
-  | "DELIVERED";
+  | "ARRIVED_DESTINATION";
 
 export type MobileFieldWorkflowEventTypeV1 =
-  | "FIELD_JOB_STARTED"
-  | "FIELD_EN_ROUTE"
-  | "FIELD_ARRIVED_COLLECTION"
   | "FIELD_COLLECTED"
   | "FIELD_IN_TRANSIT"
-  | "FIELD_ARRIVED_DESTINATION"
-  | "FIELD_DELIVERED";
-
-export type MobileCollectionConfirmationKindV1 =
-  | "WASTE"
-  | "QUANTITY"
-  | "MANUAL_WEIGHT";
+  | "FIELD_ARRIVED_DESTINATION";
 
 export type MobileFieldActivityEventTypeV1 =
+  | "FIELD_COLLECTION_REJECTED"
   | "FIELD_DELIVERY_NOTE_ADDED"
   | "FIELD_ISSUE_REPORTED";
 
@@ -50,12 +48,6 @@ export interface MobileFieldWorkflowStateV1 {
   step: MobileFieldWorkflowStepV1;
   updatedAt: string | null;
   lastEventType: MobileFieldWorkflowEventTypeV1 | null;
-}
-
-export interface MobileCollectionChecksV1 {
-  wasteConfirmedAt: string | null;
-  quantityConfirmedAt: string | null;
-  manualWeightRecordedAt: string | null;
 }
 
 export interface MobileDriverIdentityV1 {
@@ -100,6 +92,7 @@ export interface MobileAssignmentV1 {
     weightMetric: "Grams" | "Kilograms" | "Tonnes";
     weightIsEstimate?: boolean;
     weightSource?: "manual" | "weighbridge" | "imported" | null;
+    /** Read-only on Driver Mobile. Issued by receiving-site Web/Desktop. */
     ticketNumber: string | null;
   };
   transport: {
@@ -115,21 +108,16 @@ export interface MobileAssignmentV1 {
   origin: MobileAssignmentLocationV1 | null;
   destination: MobileAssignmentLocationV1 | null;
   /**
-   * Driver-facing field progress is deliberately separate from the canonical
-   * waste/compliance load status. Older cached snapshots may not have this
-   * field, so Mobile must treat a missing value as ASSIGNED.
+   * Driver-facing progress is separate from the canonical site/compliance load
+   * status. Missing/legacy state is normalised to the simplified workflow by
+   * the clients/API rather than giving the Driver site authority.
    */
   workflow?: MobileFieldWorkflowStateV1;
   /**
-   * Collection confirmations are hydrated from immutable LOAD_DETAILS_UPDATED
-   * event metadata. They are optional for backwards compatibility with older
-   * encrypted Mobile snapshots.
-   */
-  collectionChecks?: MobileCollectionChecksV1;
-  /**
-   * Delivery notes and field issues are immutable field events attached to the
-   * same job_load ID. Cloud bootstrap rehydrates these events so they remain
-   * visible after a successful sync/refresh.
+   * Driver collection refusals, arrival notes and field issues stay attached
+   * to the same immutable load. Only FIELD_COLLECTION_REJECTED is a terminal
+   * Driver decision, and it is valid solely before collection. Site acceptance
+   * and destination rejection remain Web/Desktop authority.
    */
   fieldActivity?: MobileFieldActivityV1[];
 }

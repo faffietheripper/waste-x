@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "check": "tsc -b --pretty false",
+    "check": "npm run icons && tsc -b --pretty false",
     "tauri": "tauri",
-    "icons": "tauri icon app-icon.png",
+    "icons": "tauri icon app-icon.svg",
     "tauri:dev": "tauri dev",
     "tauri:build": "npm run icons && tauri build"
   },

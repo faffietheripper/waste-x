@@ -7,7 +7,6 @@ import {
   asSyncEventId,
   asUserId,
   type MobileAssignmentV1,
-  type MobileCollectionConfirmationKindV1,
   type MobileFieldActivityEventTypeV1,
   type MobileFieldIssueTypeV1,
   type MobileFieldWorkflowEventTypeV1,
@@ -15,7 +14,6 @@ import {
   type SyncPushRequestV1,
   type SyncPushResponseV1,
 } from "@waste-x/contracts";
-import { calculateNetWeight } from "@waste-x/operations-core";
 
 import {
   getLocalMobileAssignmentWorkingSet,
@@ -23,11 +21,9 @@ import {
 } from "@/assignments/local-working-set";
 import {
   applyMobileFieldWorkflowEvent,
-  getMobileCollectionChecks,
   getMobileFieldWorkflowState,
   getNextMobileFieldWorkflowAction,
   isMobileAssignmentReadOnly,
-  isMobileCollectionReady,
   isMobileFieldWorkflowEventType,
 } from "@/field-ops/workflow";
 import { wasteXMobileApi } from "@/platform/api";
@@ -38,10 +34,13 @@ import {
   getOrCreateDeviceId,
 } from "@/storage/secure";
 
+/**
+ * Driver Mobile is deliberately not a site-operations client. It may record
+ * only transport milestones, a pre-collection refusal, and ancillary
+ * notes/issues. Waste acceptance at the receiving site, weights, completion
+ * and receiving-site ticketing remain Web/Desktop authority.
+ */
 export type MobileJobLoadEventType =
-  | "LOAD_ARRIVED"
-  | "LOAD_DETAILS_UPDATED"
-  | "LOAD_COMPLETED"
   | MobileFieldWorkflowEventTypeV1
   | MobileFieldActivityEventTypeV1;
 
@@ -62,18 +61,8 @@ export type MobileSyncStatus = {
   lastError: string | null;
 };
 
-type MobileLoadDetailsPayload = {
-  driverId?: string | null;
-  vehicleId?: string | null;
-  wasteDescription?: string;
-  grossWeight?: number | null;
-  tareWeight?: number | null;
-  netWeight?: number | null;
-  weightMetric?: "Grams" | "Kilograms" | "Tonnes";
-  weightIsEstimate?: boolean;
-  ticketNumber?: string | null;
-  notes?: string | null;
-  fieldConfirmation?: MobileCollectionConfirmationKindV1;
+type MobileCollectionRejectionPayload = {
+  reason: string;
 };
 
 type MobileDeliveryNotePayload = {
@@ -108,6 +97,7 @@ type AssignmentRow = {
 };
 
 const MOBILE_FIELD_ACTIVITY_EVENT_TYPES = new Set<MobileFieldActivityEventTypeV1>([
+  "FIELD_COLLECTION_REJECTED",
   "FIELD_DELIVERY_NOTE_ADDED",
   "FIELD_ISSUE_REPORTED",
 ]);
@@ -168,55 +158,6 @@ function parseAssignment(value: string): MobileAssignmentV1 {
   return JSON.parse(value) as MobileAssignmentV1;
 }
 
-function numberToDbString(value: number | null | undefined) {
-  return value === undefined ? undefined : value === null ? null : value.toFixed(3);
-}
-
-function validateCollectionDetails(
-  assignment: MobileAssignmentV1,
-  payload: MobileLoadDetailsPayload,
-) {
-  if (!payload.fieldConfirmation) return;
-
-  const workflow = getMobileFieldWorkflowState(assignment);
-  if (workflow.step !== "ARRIVED_COLLECTION") {
-    throw new Error("Waste and quantity can only be confirmed after arriving at collection.");
-  }
-
-  if (payload.fieldConfirmation === "WASTE") {
-    if (!payload.wasteDescription?.trim()) {
-      throw new Error("Confirm the waste description before continuing.");
-    }
-    return;
-  }
-
-  if (payload.fieldConfirmation === "QUANTITY") {
-    if (
-      typeof payload.netWeight !== "number" ||
-      !Number.isFinite(payload.netWeight) ||
-      payload.netWeight <= 0 ||
-      !payload.weightMetric
-    ) {
-      throw new Error("Enter a valid waste quantity greater than zero.");
-    }
-    return;
-  }
-
-  if (payload.fieldConfirmation === "MANUAL_WEIGHT") {
-    if (
-      typeof payload.grossWeight !== "number" ||
-      typeof payload.tareWeight !== "number" ||
-      !payload.weightMetric
-    ) {
-      throw new Error("Enter gross and tare weights before saving manual weight.");
-    }
-    const netWeight = calculateNetWeight(payload.grossWeight, payload.tareWeight);
-    if (netWeight <= 0) {
-      throw new Error("Net weight must be greater than zero.");
-    }
-  }
-}
-
 function validateFieldActivity(
   assignment: MobileAssignmentV1,
   eventType: MobileFieldActivityEventTypeV1,
@@ -224,16 +165,33 @@ function validateFieldActivity(
 ) {
   const workflow = getMobileFieldWorkflowState(assignment);
 
+  if (eventType === "FIELD_COLLECTION_REJECTED") {
+    const reason = (payload as Partial<MobileCollectionRejectionPayload> | null)?.reason;
+    if (workflow.step !== "ASSIGNED") {
+      throw new Error("A collection can only be rejected before it has been marked collected.");
+    }
+    if (assignment.load.status.toLowerCase() !== "planned") {
+      throw new Error("This load is no longer awaiting Driver collection.");
+    }
+    if (typeof reason !== "string" || reason.trim().length < 3) {
+      throw new Error("Enter a reason before rejecting this collection.");
+    }
+    if (reason.trim().length > 2000) {
+      throw new Error("Collection rejection reasons must be 2,000 characters or fewer.");
+    }
+    return;
+  }
+
   if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
     const note = (payload as Partial<MobileDeliveryNotePayload> | null)?.note;
     if (workflow.step !== "ARRIVED_DESTINATION") {
-      throw new Error("Delivery notes can be added after arriving at the destination.");
+      throw new Error("Arrival notes can be added after reaching the destination.");
     }
     if (typeof note !== "string" || note.trim().length < 2) {
-      throw new Error("Enter a delivery note before saving.");
+      throw new Error("Enter an arrival note before saving.");
     }
     if (note.trim().length > 2000) {
-      throw new Error("Delivery notes must be 2,000 characters or fewer.");
+      throw new Error("Arrival notes must be 2,000 characters or fewer.");
     }
     return;
   }
@@ -268,70 +226,18 @@ function applyLocalProjection(
     next = applyMobileFieldWorkflowEvent(next, eventType, occurredAt);
   }
 
-  if (eventType === "LOAD_ARRIVED") {
-    next.load.status = "arrived";
-    next.load.movementAt = next.load.movementAt ?? occurredAt;
-  }
-
-  if (eventType === "LOAD_COMPLETED") {
-    next.load.status = "completed";
-  }
-
-  if (eventType === "LOAD_DETAILS_UPDATED" && payload && typeof payload === "object") {
-    const details = payload as MobileLoadDetailsPayload;
-
-    if (details.grossWeight !== undefined) {
-      next.load.grossWeight = numberToDbString(details.grossWeight);
-    }
-    if (details.tareWeight !== undefined) {
-      next.load.tareWeight = numberToDbString(details.tareWeight);
-    }
-    if (details.netWeight !== undefined) {
-      next.load.netWeight = numberToDbString(details.netWeight) ?? null;
-    }
-    if (
-      typeof details.grossWeight === "number" &&
-      typeof details.tareWeight === "number"
-    ) {
-      next.load.netWeight = calculateNetWeight(
-        details.grossWeight,
-        details.tareWeight,
-      ).toFixed(3);
-    }
-    if (details.weightMetric !== undefined) {
-      next.load.weightMetric = details.weightMetric;
-    }
-    if (details.weightIsEstimate !== undefined) {
-      next.load.weightIsEstimate = details.weightIsEstimate;
-    }
-    if (
-      details.grossWeight !== undefined ||
-      details.tareWeight !== undefined ||
-      details.netWeight !== undefined
-    ) {
-      next.load.weightSource = "manual";
-    }
-    if (details.ticketNumber !== undefined) {
-      next.load.ticketNumber = details.ticketNumber;
-    }
-    if (details.wasteDescription !== undefined) {
-      next.load.wasteDescription = details.wasteDescription;
-    }
-
-    if (details.fieldConfirmation) {
-      const checks = getMobileCollectionChecks(next);
-      next.collectionChecks = { ...checks };
-      if (details.fieldConfirmation === "WASTE") {
-        next.collectionChecks.wasteConfirmedAt = occurredAt;
-      }
-      if (details.fieldConfirmation === "QUANTITY") {
-        next.collectionChecks.quantityConfirmedAt = occurredAt;
-      }
-      if (details.fieldConfirmation === "MANUAL_WEIGHT") {
-        next.collectionChecks.manualWeightRecordedAt = occurredAt;
-        next.collectionChecks.quantityConfirmedAt = occurredAt;
-      }
-    }
+  if (eventType === "FIELD_COLLECTION_REJECTED") {
+    const rejection = payload as MobileCollectionRejectionPayload;
+    next.load.status = "rejected";
+    next.fieldActivity = [
+      ...(next.fieldActivity ?? []),
+      {
+        eventType,
+        occurredAt,
+        text: rejection.reason.trim(),
+        issueType: null,
+      },
+    ];
   }
 
   if (eventType === "FIELD_DELIVERY_NOTE_ADDED") {
@@ -397,10 +303,6 @@ export async function queueMobileJobLoadEvent(input: {
 
   let payload = input.payload ?? {};
 
-  if (input.eventType === "LOAD_DETAILS_UPDATED" && payload && typeof payload === "object") {
-    validateCollectionDetails(assignment, payload as MobileLoadDetailsPayload);
-  }
-
   if (isMobileFieldActivityEventType(input.eventType)) {
     validateFieldActivity(assignment, input.eventType, payload);
   }
@@ -409,10 +311,7 @@ export async function queueMobileJobLoadEvent(input: {
     const current = getMobileFieldWorkflowState(assignment);
     const action = getNextMobileFieldWorkflowAction(current.step);
     if (!action || action.eventType !== input.eventType) {
-      throw new Error("This field action is not valid for the load's current workflow step.");
-    }
-    if (input.eventType === "FIELD_COLLECTED" && !isMobileCollectionReady(assignment)) {
-      throw new Error("Confirm the waste and quantity before marking this load collected.");
+      throw new Error("This Driver action is not valid for the load's current transport step.");
     }
     payload = {
       ...(payload && typeof payload === "object" ? payload : {}),
@@ -675,8 +574,8 @@ export async function syncPendingMobileEvents(
     try {
       await refreshMobileAssignmentWorkingSet();
     } catch {
-      // The Cloud event result remains authoritative and durable. A bootstrap
-      // refresh can be retried independently without replaying applied events.
+      // Applied events are durable. The working-set refresh can be retried
+      // independently without replaying Driver events.
     }
   }
 

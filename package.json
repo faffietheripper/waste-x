@@ -31,7 +31,7 @@
     "mobile:android": "npm --prefix mobile run android",
     "mobile:prebuild": "npm --prefix mobile run prebuild",
     "mobile:check": "npm --prefix mobile run check",
-    "mobile:certify": "npm run mobile:check && npx tsc --noEmit && npm run desktop:bridge:check && npm --prefix mobile exec -- expo config --type public"
+    "mobile:certify": "node scripts/run-mobile-certify.cjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.4.1",

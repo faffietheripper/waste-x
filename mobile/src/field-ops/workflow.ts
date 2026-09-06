@@ -1,6 +1,5 @@
 import type {
   MobileAssignmentV1,
-  MobileCollectionChecksV1,
   MobileFieldWorkflowEventTypeV1,
   MobileFieldWorkflowStateV1,
   MobileFieldWorkflowStepV1,
@@ -15,57 +14,29 @@ export type MobileFieldWorkflowAction = {
 };
 
 const ACTIONS: Record<
-  Exclude<MobileFieldWorkflowStepV1, "DELIVERED">,
+  Exclude<MobileFieldWorkflowStepV1, "ARRIVED_DESTINATION">,
   MobileFieldWorkflowAction
 > = {
   ASSIGNED: {
-    eventType: "FIELD_JOB_STARTED",
-    fromStep: "ASSIGNED",
-    toStep: "STARTED",
-    label: "Start job",
-    helper: "Begin this assigned load on this phone.",
-  },
-  STARTED: {
-    eventType: "FIELD_EN_ROUTE",
-    fromStep: "STARTED",
-    toStep: "EN_ROUTE",
-    label: "Mark en route",
-    helper: "Record that you are travelling to the collection point.",
-  },
-  EN_ROUTE: {
-    eventType: "FIELD_ARRIVED_COLLECTION",
-    fromStep: "EN_ROUTE",
-    toStep: "ARRIVED_COLLECTION",
-    label: "Arrive at collection",
-    helper: "Record arrival at the collection/origin site.",
-  },
-  ARRIVED_COLLECTION: {
     eventType: "FIELD_COLLECTED",
-    fromStep: "ARRIVED_COLLECTION",
+    fromStep: "ASSIGNED",
     toStep: "COLLECTED",
     label: "Mark collected",
-    helper: "Confirm the waste and quantity before recording collection.",
+    helper: "Confirm that you have collected this assigned load.",
   },
   COLLECTED: {
     eventType: "FIELD_IN_TRANSIT",
     fromStep: "COLLECTED",
     toStep: "IN_TRANSIT",
     label: "Mark in transit",
-    helper: "Record departure from collection with the load in transit.",
+    helper: "Confirm that the collected load is travelling to the destination.",
   },
   IN_TRANSIT: {
     eventType: "FIELD_ARRIVED_DESTINATION",
     fromStep: "IN_TRANSIT",
     toStep: "ARRIVED_DESTINATION",
-    label: "Arrive at destination",
-    helper: "Record arrival at the receiving/delivery destination.",
-  },
-  ARRIVED_DESTINATION: {
-    eventType: "FIELD_DELIVERED",
-    fromStep: "ARRIVED_DESTINATION",
-    toStep: "DELIVERED",
-    label: "Confirm delivery",
-    helper: "Add any delivery note you need, then record the driver journey as delivered.",
+    label: "Arrived at destination",
+    helper: "Hand the load over to the receiving site for acceptance or rejection.",
   },
 };
 
@@ -73,13 +44,9 @@ const EVENT_TO_STEP: Record<
   MobileFieldWorkflowEventTypeV1,
   MobileFieldWorkflowStepV1
 > = {
-  FIELD_JOB_STARTED: "STARTED",
-  FIELD_EN_ROUTE: "EN_ROUTE",
-  FIELD_ARRIVED_COLLECTION: "ARRIVED_COLLECTION",
   FIELD_COLLECTED: "COLLECTED",
   FIELD_IN_TRANSIT: "IN_TRANSIT",
   FIELD_ARRIVED_DESTINATION: "ARRIVED_DESTINATION",
-  FIELD_DELIVERED: "DELIVERED",
 };
 
 const TERMINAL_LOAD_STATUSES = new Set([
@@ -111,13 +78,61 @@ export function fieldWorkflowStepForEvent(
   return EVENT_TO_STEP[eventType];
 }
 
+/**
+ * Existing development/test devices can contain the earlier seven-step field
+ * workflow. Collapse those values into the new transport-only model rather
+ * than deleting cached work or forcing a simulator/device reset.
+ */
+export function normaliseMobileFieldWorkflowStep(
+  value: unknown,
+): MobileFieldWorkflowStepV1 {
+  switch (value) {
+    case "COLLECTED":
+      return "COLLECTED";
+    case "IN_TRANSIT":
+      return "IN_TRANSIT";
+    case "ARRIVED_DESTINATION":
+    case "DELIVERED":
+      return "ARRIVED_DESTINATION";
+    case "ASSIGNED":
+    case "STARTED":
+    case "EN_ROUTE":
+    case "ARRIVED_COLLECTION":
+    default:
+      return "ASSIGNED";
+  }
+}
+
 export function getMobileFieldWorkflowState(
   assignment: MobileAssignmentV1,
 ): MobileFieldWorkflowStateV1 {
-  if (assignment.workflow) return assignment.workflow;
+  if (assignment.workflow) {
+    const raw = assignment.workflow as unknown as {
+      step?: unknown;
+      updatedAt?: string | null;
+      lastEventType?: unknown;
+    };
+    const step = normaliseMobileFieldWorkflowStep(raw.step);
+    const lastEventType =
+      typeof raw.lastEventType === "string" &&
+      isMobileFieldWorkflowEventType(raw.lastEventType)
+        ? raw.lastEventType
+        : null;
+    return {
+      step,
+      updatedAt: raw.updatedAt ?? null,
+      lastEventType,
+    };
+  }
 
   return {
-    step: assignment.load.status === "completed" ? "DELIVERED" : "ASSIGNED",
+    // Completed legacy records can safely be treated as having reached the
+    // destination. Rejected cannot: a Driver may now reject while still
+    // ASSIGNED before collecting anything. Site-rejected loads with a real
+    // journey retain their explicit workflow history from Cloud.
+    step: assignment.load.status === "completed"
+      ? "ARRIVED_DESTINATION"
+      : "ASSIGNED",
     updatedAt: assignment.load.movementAt,
     lastEventType: null,
   };
@@ -126,32 +141,14 @@ export function getMobileFieldWorkflowState(
 export function isMobileAssignmentReadOnly(assignment: MobileAssignmentV1) {
   return (
     TERMINAL_LOAD_STATUSES.has(assignment.load.status.toLowerCase()) ||
-    NON_OPERATIONAL_JOB_STATUSES.has(assignment.job.status.toLowerCase()) ||
-    getMobileFieldWorkflowState(assignment).step === "DELIVERED"
+    NON_OPERATIONAL_JOB_STATUSES.has(assignment.job.status.toLowerCase())
   );
-}
-
-export function getMobileCollectionChecks(
-  assignment: MobileAssignmentV1,
-): MobileCollectionChecksV1 {
-  return (
-    assignment.collectionChecks ?? {
-      wasteConfirmedAt: null,
-      quantityConfirmedAt: null,
-      manualWeightRecordedAt: null,
-    }
-  );
-}
-
-export function isMobileCollectionReady(assignment: MobileAssignmentV1) {
-  const checks = getMobileCollectionChecks(assignment);
-  return Boolean(checks.wasteConfirmedAt && checks.quantityConfirmedAt);
 }
 
 export function getNextMobileFieldWorkflowAction(
   step: MobileFieldWorkflowStepV1,
 ): MobileFieldWorkflowAction | null {
-  return step === "DELIVERED" ? null : ACTIONS[step];
+  return step === "ARRIVED_DESTINATION" ? null : ACTIONS[step];
 }
 
 export function applyMobileFieldWorkflowEvent(
@@ -168,7 +165,7 @@ export function applyMobileFieldWorkflowEvent(
 
   if (!action || action.eventType !== eventType) {
     throw new Error(
-      `Waste X refused an out-of-order field action from ${humanFieldWorkflowStep(current.step)}.`,
+      `Waste X refused an out-of-order Driver action from ${humanFieldWorkflowStep(current.step)}.`,
     );
   }
 
@@ -187,30 +184,18 @@ export function humanFieldWorkflowStep(step: MobileFieldWorkflowStepV1) {
   switch (step) {
     case "ASSIGNED":
       return "Assigned";
-    case "STARTED":
-      return "Job started";
-    case "EN_ROUTE":
-      return "En route";
-    case "ARRIVED_COLLECTION":
-      return "At collection";
     case "COLLECTED":
       return "Collected";
     case "IN_TRANSIT":
       return "In transit";
     case "ARRIVED_DESTINATION":
       return "At destination";
-    case "DELIVERED":
-      return "Delivered";
   }
 }
 
 export const MOBILE_FIELD_WORKFLOW_STEPS: MobileFieldWorkflowStepV1[] = [
   "ASSIGNED",
-  "STARTED",
-  "EN_ROUTE",
-  "ARRIVED_COLLECTION",
   "COLLECTED",
   "IN_TRANSIT",
   "ARRIVED_DESTINATION",
-  "DELIVERED",
 ];

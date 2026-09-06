@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 
-import { clientDevices, syncChangeFeed } from "@/db/client-sync-schema";
+import { clientDevices } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
   jobLoadFieldStates,
@@ -20,36 +20,30 @@ import {
   handleClientApiError,
 } from "@/lib/client-api/http";
 import { processSyncEvent, syncPushSchema } from "@/lib/client-api/sync";
-import { preflightSyncEvent } from "@/lib/client-api/sync-preflight";
-import { prepareJobLoadWasteReceipt } from "@/modules/digital-waste-tracking/data-access/prepareJobLoadWasteReceipt";
 import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 
 export const dynamic = "force-dynamic";
 
 const SHA256_HEX = /^[a-f0-9]{64}$/i;
+
+/**
+ * Driver Mobile is transport execution only. It may refuse an unsuitable
+ * collection before collection starts, but it cannot change load details,
+ * weights, receiving-site acceptance/completion or ticket fields.
+ */
 const MOBILE_EVENT_TYPES = new Set([
-  "LOAD_ARRIVED",
-  "LOAD_DETAILS_UPDATED",
-  "LOAD_COMPLETED",
-  "FIELD_JOB_STARTED",
-  "FIELD_EN_ROUTE",
-  "FIELD_ARRIVED_COLLECTION",
+  "FIELD_COLLECTION_REJECTED",
   "FIELD_COLLECTED",
   "FIELD_IN_TRANSIT",
   "FIELD_ARRIVED_DESTINATION",
-  "FIELD_DELIVERED",
   "FIELD_DELIVERY_NOTE_ADDED",
   "FIELD_ISSUE_REPORTED",
 ]);
 
 const FIELD_EVENT_STEPS: Record<JobLoadFieldEventType, JobLoadFieldStep> = {
-  FIELD_JOB_STARTED: "STARTED",
-  FIELD_EN_ROUTE: "EN_ROUTE",
-  FIELD_ARRIVED_COLLECTION: "ARRIVED_COLLECTION",
   FIELD_COLLECTED: "COLLECTED",
   FIELD_IN_TRANSIT: "IN_TRANSIT",
   FIELD_ARRIVED_DESTINATION: "ARRIVED_DESTINATION",
-  FIELD_DELIVERED: "DELIVERED",
 };
 
 function isFieldWorkflowEvent(value: string): value is JobLoadFieldEventType {
@@ -61,19 +55,12 @@ async function resolveMobileDriver(context: {
   organisationId: string;
 }) {
   const user = await database.query.users.findFirst({
-    where: and(
-      eq(users.id, context.userId),
-      eq(users.organisationId, context.organisationId),
-    ),
+    where: and(eq(users.id, context.userId), eq(users.organisationId, context.organisationId)),
     columns: { id: true, email: true },
   });
 
   if (!user) {
-    throw new ClientApiAuthError(
-      "ACCOUNT_UNAVAILABLE",
-      403,
-      "This Waste X account is unavailable.",
-    );
+    throw new ClientApiAuthError("ACCOUNT_UNAVAILABLE", 403, "This Waste X account is unavailable.");
   }
 
   const matches = await database
@@ -102,20 +89,13 @@ async function resolveMobileDriver(context: {
   return matches[0]!.id;
 }
 
-async function isAssignedLoad(
-  organisationId: string,
-  driverId: string,
-  loadId: string,
-) {
+async function isAssignedLoad(organisationId: string, driverId: string, loadId: string) {
   const [assignment] = await database
     .select({ loadId: jobLoads.id })
     .from(jobLoads)
     .innerJoin(
       jobs,
-      and(
-        eq(jobLoads.jobId, jobs.id),
-        eq(jobLoads.organisationId, jobs.organisationId),
-      ),
+      and(eq(jobLoads.jobId, jobs.id), eq(jobLoads.organisationId, jobs.organisationId)),
     )
     .where(
       and(
@@ -128,10 +108,16 @@ async function isAssignedLoad(
       ),
     )
     .limit(1);
-
   return Boolean(assignment);
 }
 
+/**
+ * The canonical change-feed row is now published by processSyncEvent with the
+ * fieldWorkflow object already embedded. This mirror exists only for Cloud
+ * queries/certification and must not emit a second job_load change. Keeping the
+ * publication atomic prevents Desktop from observing canonical `arrived`
+ * before the Driver-arrival proof that authorises it.
+ */
 async function ensureFieldStateMirror({
   organisationId,
   entityId,
@@ -150,110 +136,45 @@ async function ensureFieldStateMirror({
   const step = FIELD_EVENT_STEPS[eventType];
   const occurred = new Date(occurredAt);
 
-  await database.transaction(async (tx) => {
-    const existing = await tx.query.jobLoadFieldStates.findFirst({
-      where: and(
-        eq(jobLoadFieldStates.jobLoadId, entityId),
-        eq(jobLoadFieldStates.organisationId, organisationId),
-      ),
-    });
-
-    if (
-      existing?.step === step &&
-      existing.lastEventType === eventType &&
-      existing.occurredAt?.toISOString() === occurred.toISOString()
-    ) {
-      return;
-    }
-
-    const load = await tx.query.jobLoads.findFirst({
-      where: and(
-        eq(jobLoads.id, entityId),
-        eq(jobLoads.organisationId, organisationId),
-      ),
-    });
-    if (!load) throw new Error("MOBILE_FIELD_MIRROR_LOAD_NOT_FOUND");
-
-    const parentJob = await tx.query.jobs.findFirst({
-      where: and(
-        eq(jobs.id, load.jobId),
-        eq(jobs.organisationId, organisationId),
-      ),
-      columns: { ownSiteId: true },
-    });
-
-    const now = new Date();
-    await tx
-      .insert(jobLoadFieldStates)
-      .values({
-        jobLoadId: entityId,
+  await database
+    .insert(jobLoadFieldStates)
+    .values({
+      jobLoadId: entityId,
+      organisationId,
+      step,
+      lastEventType: eventType,
+      occurredAt: occurred,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: jobLoadFieldStates.jobLoadId,
+      set: {
         organisationId,
         step,
         lastEventType: eventType,
         occurredAt: occurred,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: jobLoadFieldStates.jobLoadId,
-        set: {
-          organisationId,
-          step,
-          lastEventType: eventType,
-          occurredAt: occurred,
-          updatedAt: now,
-        },
-      });
-
-    await tx.insert(syncChangeFeed).values({
-      organisationId,
-      siteId: load.ownSiteId ?? parentJob?.ownSiteId ?? null,
-      entityType: "job_load",
-      entityId,
-      entityVersion,
-      changeType: "UPSERT",
-      payload: {
-        ...load,
-        fieldWorkflow: {
-          step,
-          updatedAt: occurredAt,
-          lastEventType: eventType,
-        },
+        updatedAt: new Date(),
       },
-      changedAt: now,
     });
-  });
 }
 
 async function runPostApplyHooks({
   organisationId,
-  userId,
   entityId,
-  eventType,
 }: {
   organisationId: string;
-  userId: string;
   entityId: string;
-  eventType: string;
 }) {
   const load = await database.query.jobLoads.findFirst({
-    where: and(
-      eq(jobLoads.id, entityId),
-      eq(jobLoads.organisationId, organisationId),
-    ),
-    columns: { id: true, jobId: true, direction: true, status: true },
+    where: and(eq(jobLoads.id, entityId), eq(jobLoads.organisationId, organisationId)),
+    columns: { id: true, jobId: true },
   });
-
   if (!load) return;
 
   await syncJobStatus(load.jobId, organisationId);
-
   const parentJob = await database.query.jobs.findFirst({
-    where: and(
-      eq(jobs.id, load.jobId),
-      eq(jobs.organisationId, organisationId),
-    ),
+    where: and(eq(jobs.id, load.jobId), eq(jobs.organisationId, organisationId)),
   });
-
   if (parentJob) {
     await recordSyncChange({
       organisationId,
@@ -262,25 +183,6 @@ async function runPostApplyHooks({
       entityId: parentJob.id,
       payload: parentJob,
     });
-  }
-
-  if (
-    eventType === "LOAD_COMPLETED" &&
-    load.direction === "incoming" &&
-    load.status === "completed"
-  ) {
-    try {
-      await prepareJobLoadWasteReceipt({
-        organisationId,
-        jobLoadId: load.id,
-        receivedByUserId: userId,
-      });
-    } catch (error) {
-      console.error("[MOBILE_SYNC] Could not auto-prepare DWT receipt", {
-        jobLoadId: load.id,
-        error,
-      });
-    }
   }
 }
 
@@ -336,24 +238,15 @@ export async function POST(request: Request) {
     }
 
     if (parsed.data.deviceId !== context.deviceId) {
-      return clientApiError(
-        "DEVICE_MISMATCH",
-        403,
-        "The sync batch does not belong to this Waste X Mobile device.",
-      );
+      return clientApiError("DEVICE_MISMATCH", 403, "The sync batch does not belong to this Waste X Mobile device.");
     }
 
     const driverId = await resolveMobileDriver(context);
-    const orderedEvents = [...parsed.data.events].sort(
-      (left, right) => left.deviceSequence - right.deviceSequence,
-    );
-
+    const orderedEvents = [...parsed.data.events].sort((left, right) => left.deviceSequence - right.deviceSequence);
     const results = [];
+
     for (const event of orderedEvents) {
-      if (
-        event.entityType !== "job_load" ||
-        !MOBILE_EVENT_TYPES.has(event.eventType)
-      ) {
+      if (event.entityType !== "job_load" || !MOBILE_EVENT_TYPES.has(event.eventType)) {
         results.push({
           eventId: event.eventId,
           status: "REJECTED" as const,
@@ -373,9 +266,7 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const preflightResult = await preflightSyncEvent(context, event);
-      const eventResult =
-        preflightResult ?? (await processSyncEvent(context, event));
+      const eventResult = await processSyncEvent(context, event);
 
       if (
         (eventResult.status === "APPLIED" || eventResult.status === "DUPLICATE") &&
@@ -390,10 +281,7 @@ export async function POST(request: Request) {
             entityVersion: eventResult.entityVersion,
           });
         } catch (error) {
-          console.error("[MOBILE_SYNC] Field-state mirror pending", {
-            eventId: event.eventId,
-            error,
-          });
+          console.error("[MOBILE_SYNC] Driver-state mirror pending", { eventId: event.eventId, error });
           results.push({
             eventId: event.eventId,
             status: "RETRYABLE_ERROR" as const,
@@ -408,17 +296,9 @@ export async function POST(request: Request) {
 
       if (eventResult.status === "APPLIED") {
         try {
-          await runPostApplyHooks({
-            organisationId: context.organisationId,
-            userId: context.userId,
-            entityId: event.entityId,
-            eventType: event.eventType,
-          });
+          await runPostApplyHooks({ organisationId: context.organisationId, entityId: event.entityId });
         } catch (error) {
-          console.error("[MOBILE_SYNC] Post-apply hook failed", {
-            eventId: event.eventId,
-            error,
-          });
+          console.error("[MOBILE_SYNC] Post-apply hook failed", { eventId: event.eventId, error });
         }
       }
     }

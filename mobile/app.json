@@ -32,7 +32,7 @@
         "expo-dev-client",
         {
           "launchMode": "most-recent",
-          "defaultLaunchURL": "http://localhost:8081"
+          "defaultLaunchURL": "http://127.0.0.1:8081"
         }
       ],
       [

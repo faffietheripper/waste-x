@@ -7,6 +7,7 @@ import { devicePlatformSchema } from "@waste-x/validation";
 import { mobileApiBaseUrl, wasteXMobileApi } from "@/platform/api";
 import { initialiseMobileDatabase } from "@/storage/database";
 import { getOrCreateDeviceId } from "@/storage/secure";
+import { quarantineLegacyDriverIssuedTickets } from "@/tickets/authority-migration";
 
 export type MobileFoundationStatus = {
   deviceId: string;
@@ -31,6 +32,11 @@ export async function bootMobileFoundation(): Promise<MobileFoundationStatus> {
   const platform = mobilePlatform();
   const deviceId = await getOrCreateDeviceId();
   const database = await initialiseMobileDatabase(deviceId, platform);
+
+  // Early Stage 13 development briefly allowed Driver-issued management tickets.
+  // Quarantine only those explicitly stamped experimental records before any
+  // field screen or sync loop can expose/replay them.
+  await quarantineLegacyDriverIssuedTickets();
 
   // Touch the shared API client as a compile/runtime proof that Mobile is wired
   // to the same framework-free client package. Network calls start with device
