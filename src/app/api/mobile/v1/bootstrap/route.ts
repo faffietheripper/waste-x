@@ -140,14 +140,20 @@ function parseSiteRejection(
       };
     }
 
-    // Stage 13 site rejections were stored as a generic REJECTED operational
-    // note. Keep them visible on existing Driver devices after this MVP update.
+    // Desktop sends category as a tag inside the existing LOAD_REJECTED reason
+    // so older sync protocol handlers remain compatible. Recover that structured
+    // category here instead of exposing protocol notation to the Driver.
     const legacy = line.match(/^\[REJECTED · [^\]]+\]\s*(.+)$/);
     if (legacy) {
+      const detail = (legacy[1] ?? "").trim();
+      const tagged = detail.match(/^\[CATEGORY:([A-Z_]+)\]\s*(.+)$/);
+      const category = tagged && isSiteRejectionCategory(tagged[1] ?? "")
+        ? (tagged[1] as SiteRejectionCategory)
+        : "OTHER";
       return {
-        category: "OTHER" as const,
-        categoryLabel: SITE_REJECTION_CATEGORY_LABELS.OTHER,
-        reason: (legacy[1] ?? "").trim(),
+        category,
+        categoryLabel: SITE_REJECTION_CATEGORY_LABELS[category],
+        reason: (tagged?.[2] ?? detail).trim(),
         rejectedAt: completedAt?.toISOString() ?? null,
       };
     }
