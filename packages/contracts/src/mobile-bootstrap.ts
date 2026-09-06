@@ -37,6 +37,22 @@ export type MobileFieldIssueTypeV1 =
   | "SAFETY"
   | "OTHER";
 
+export type MobileSiteRejectionCategoryV1 =
+  | "WASTE_MISMATCH"
+  | "CONTAMINATION"
+  | "PERMIT_OR_COMPLIANCE"
+  | "UNSAFE_LOAD"
+  | "DOCUMENTATION"
+  | "SITE_CAPACITY"
+  | "OTHER";
+
+export interface MobileSiteRejectionV1 {
+  category: MobileSiteRejectionCategoryV1;
+  categoryLabel: string;
+  reason: string;
+  rejectedAt: string | null;
+}
+
 export interface MobileFieldActivityV1 {
   eventType: MobileFieldActivityEventTypeV1;
   occurredAt: string;
@@ -94,6 +110,12 @@ export interface MobileAssignmentV1 {
     weightSource?: "manual" | "weighbridge" | "imported" | null;
     /** Read-only on Driver Mobile. Issued by receiving-site Web/Desktop. */
     ticketNumber: string | null;
+    /**
+     * Present only when the receiving site has refused the load after Driver
+     * destination arrival. Driver pre-collection refusal remains fieldActivity
+     * and is intentionally a different authority/event.
+     */
+    siteRejection?: MobileSiteRejectionV1 | null;
   };
   transport: {
     driverId: string;
