@@ -502,11 +502,60 @@ async function applyJobLoadEvent(
       } else if (["completed", "rejected", "cancelled"].includes(load.status)) {
         throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
       }
-      const netWeight = Number(load.netWeight ?? "0");
-      if (!Number.isFinite(netWeight) || netWeight <= 0) throw new SyncBusinessRuleError("NET_WEIGHT_REQUIRED");
+
+      /* Final site weights and completion are one receiving-site transaction.
+       * Older clients may still send an empty payload; in that case Cloud uses
+       * the already-persisted fields exactly as before. New Desktop builds send
+       * the visible final values here so a single optimistic event can both
+       * finalise the weighbridge record and complete the load. */
+      const parsed = loadDetailsPayloadSchema.safeParse(event.payload);
+      if (!parsed.success) throw new SyncBusinessRuleError("INVALID_LOAD_DETAILS");
+      const data = parsed.data;
+      const driverId = data.driverId === undefined ? load.driverId : data.driverId;
+      const vehicleId = data.vehicleId === undefined ? load.vehicleId : data.vehicleId;
+      await validateDriver(tx, context.organisationId, driverId, load.haulierCounterpartyId);
+      await validateVehicle(tx, context.organisationId, vehicleId, load.haulierCounterpartyId);
+
+      const wasteDescription = data.wasteDescription ?? load.wasteDescriptionSnapshot;
+      if (!wasteDescription?.trim()) throw new SyncBusinessRuleError("WASTE_DESCRIPTION_REQUIRED");
+
+      let grossWeight = data.grossWeight === undefined
+        ? (load.grossWeight === null ? null : Number(load.grossWeight))
+        : data.grossWeight;
+      let tareWeight = data.tareWeight === undefined
+        ? (load.tareWeight === null ? null : Number(load.tareWeight))
+        : data.tareWeight;
+      let netWeight = data.netWeight === undefined
+        ? (load.netWeight === null ? null : Number(load.netWeight))
+        : data.netWeight;
+      if (grossWeight !== null && tareWeight !== null) {
+        if (grossWeight < tareWeight) throw new SyncBusinessRuleError("GROSS_BELOW_TARE");
+        netWeight = grossWeight - tareWeight;
+      }
+      if (netWeight === null || !Number.isFinite(netWeight) || netWeight <= 0) {
+        throw new SyncBusinessRuleError("NET_WEIGHT_REQUIRED");
+      }
+
+      const weightChanged =
+        data.grossWeight !== undefined ||
+        data.tareWeight !== undefined ||
+        data.netWeight !== undefined;
+
       await tx.update(jobLoads).set({
+        driverId,
+        vehicleId,
+        wasteDescriptionSnapshot: wasteDescription,
+        grossWeight: toDbDecimal(grossWeight),
+        tareWeight: toDbDecimal(tareWeight),
+        netWeight: toDbDecimal(netWeight),
+        weightMetric: data.weightMetric ?? load.weightMetric,
+        weightIsEstimate: data.weightIsEstimate ?? load.weightIsEstimate,
+        weightSource: weightChanged ? "weighbridge" : load.weightSource,
+        notes: data.notes === undefined ? load.notes : data.notes,
         status: "completed",
-        movementAt: load.movementAt ?? (load.direction === "outgoing" ? new Date(event.occurredAt) : load.movementAt),
+        movementAt:
+          load.movementAt ??
+          (load.direction === "outgoing" ? new Date(event.occurredAt) : load.movementAt),
         completedAt: new Date(event.occurredAt),
         updatedAt: now,
       }).where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
