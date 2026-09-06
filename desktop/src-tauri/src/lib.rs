@@ -10,6 +10,7 @@ mod provisioning;
 mod stage13_guards;
 mod stage13_repairs;
 mod sync_engine;
+mod sync_review;
 mod tickets;
 mod vehicle_tare;
 mod working_set;
@@ -47,6 +48,7 @@ pub fn run() {
             vehicle_tare::desktop_vehicle_tare,
             sync_engine::desktop_sync_status,
             sync_engine::desktop_sync_now,
+            sync_review::desktop_sync_review_items,
             cloud_access::desktop_cloud_context,
             cloud_access::desktop_cloud_catalogue,
             bridge_client::desktop_bridge_status,
