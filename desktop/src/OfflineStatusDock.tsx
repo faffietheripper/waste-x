@@ -56,11 +56,27 @@ type BridgeStatus = {
   error: string | null;
 };
 
+type SyncReviewItem = {
+  source: "LOCAL_EVENT" | "CLOUD_CHANGE";
+  itemId: string;
+  jobNumber: string | null;
+  loadNumber: number | null;
+  entityType: string;
+  entityId: string;
+  eventType: string | null;
+  status: string;
+  reason: string;
+  baseVersion: number | null;
+  serverVersion: number | null;
+  occurredAt: string | null;
+};
+
 type DockState = {
   auth: AuthStatus | null;
   sync: SyncStatus | null;
   cloud: CloudContext | null;
   bridge: BridgeStatus | null;
+  reviews: SyncReviewItem[];
 };
 
 function relativeTime(value: string | null) {
@@ -84,8 +100,15 @@ function ageDays(value: string | null) {
   return Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
 }
 
+function reviewLabel(item: SyncReviewItem) {
+  const load = item.jobNumber
+    ? `${item.jobNumber}${item.loadNumber !== null ? ` · Load ${item.loadNumber}` : ""}`
+    : item.entityId;
+  return `${load} · ${item.eventType ?? item.source}`;
+}
+
 export function OfflineStatusDock() {
-  const [state, setState] = useState<DockState>({ auth: null, sync: null, cloud: null, bridge: null });
+  const [state, setState] = useState<DockState>({ auth: null, sync: null, cloud: null, bridge: null, reviews: [] });
 
   useEffect(() => {
     let cancelled = false;
@@ -97,15 +120,16 @@ export function OfflineStatusDock() {
           invoke<BridgeStatus>("desktop_bridge_status"),
         ]);
         if (!auth.unlocked) {
-          if (!cancelled) setState({ auth, sync: null, cloud: null, bridge });
+          if (!cancelled) setState({ auth, sync: null, cloud: null, bridge, reviews: [] });
           return;
         }
 
-        const [sync, cloud] = await Promise.all([
+        const [sync, cloud, reviews] = await Promise.all([
           invoke<SyncStatus>("desktop_sync_status"),
           invoke<CloudContext>("desktop_cloud_context"),
+          invoke<SyncReviewItem[]>("desktop_sync_review_items"),
         ]);
-        if (!cancelled) setState({ auth, sync, cloud, bridge });
+        if (!cancelled) setState({ auth, sync, cloud, bridge, reviews });
       } catch {
         if (!cancelled) setState((current) => current);
       }
@@ -137,7 +161,7 @@ export function OfflineStatusDock() {
     const queued = (sync?.pending ?? 0) + (sync?.retryableFailed ?? 0);
     const bootstrapAge = ageDays(cloud?.lastBootstrapAt ?? null);
 
-    if (review > 0) return { tone: "problem", title: "Sync review required", detail: `${review} item${review === 1 ? "" : "s"} need review. Later physical work remains safely queued.`, queued };
+    if (review > 0) return { tone: "problem", title: "Sync review required", detail: `${review} item${review === 1 ? "" : "s"} need review. Open Details to see the exact job, event and Cloud reason.`, queued };
     if (sync?.authRequired) return { tone: "warning", title: "Cloud sign-in required", detail: "Local operations remain available, but upload is paused until an online sign-in renews this device session.", queued };
     if (bootstrapAge !== null && bootstrapAge >= 14) return { tone: "problem", title: "Offline working set is stale", detail: `Last Cloud bootstrap was ${bootstrapAge} days ago. Existing local work is preserved; reconnect before relying on new reference data.`, queued };
     if (sync?.running) return { tone: "syncing", title: "Syncing with Waste X Cloud", detail: queued > 0 ? `${queued} local change${queued === 1 ? "" : "s"} waiting for acknowledgement.` : "Checking for Cloud changes…", queued };
@@ -179,6 +203,19 @@ export function OfflineStatusDock() {
               <span><strong>Last bootstrap</strong> {relativeTime(state.cloud?.lastBootstrapAt ?? null)}</span>
               <span><strong>Bridge</strong> {state.bridge?.reachable ? `PID ${state.bridge.pid ?? "—"} · v${state.bridge.version ?? "—"}` : "Not running"}</span>
               <span><strong>Bridge DB</strong> {state.bridge?.databaseReady ? `SQLCipher ${state.bridge.cipherVersion ?? "—"} · schema v${state.bridge.schemaVersion ?? "—"}` : state.bridge?.error ?? "Unavailable"}</span>
+              {state.reviews.length ? (
+                <>
+                  <span><strong>Review items</strong> {state.reviews.length}</span>
+                  {state.reviews.map((item) => (
+                    <span key={`${item.source}:${item.itemId}`}>
+                      <strong>{reviewLabel(item)}</strong> {item.status} · {item.reason}
+                      {item.baseVersion !== null || item.serverVersion !== null
+                        ? ` · local/base v${item.baseVersion ?? "—"} → Cloud v${item.serverVersion ?? "—"}`
+                        : ""}
+                    </span>
+                  ))}
+                </>
+              ) : <span><strong>Review items</strong> None</span>}
             </div>
           </details>
         </div>
