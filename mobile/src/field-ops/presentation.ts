@@ -10,8 +10,9 @@ const COMPLETED_STATUSES = new Set([
 const CANCELLED_STATUSES = new Set([
   "cancelled",
   "canceled",
-  "rejected",
 ]);
+
+const REJECTED_STATUSES = new Set(["rejected"]);
 
 function localDateKey(date: Date) {
   const year = date.getFullYear();
@@ -58,6 +59,13 @@ export function isCompletedAssignment(assignment: MobileAssignmentV1) {
   return COMPLETED_STATUSES.has(assignment.load.status.toLowerCase());
 }
 
+export function isRejectedAssignment(assignment: MobileAssignmentV1) {
+  return (
+    REJECTED_STATUSES.has(assignment.load.status.toLowerCase()) ||
+    REJECTED_STATUSES.has(assignment.job.status.toLowerCase())
+  );
+}
+
 export function isCancelledAssignment(assignment: MobileAssignmentV1) {
   return (
     CANCELLED_STATUSES.has(assignment.load.status.toLowerCase()) ||
@@ -69,6 +77,7 @@ export type MobileAssignmentBuckets = {
   today: MobileAssignmentV1[];
   upcoming: MobileAssignmentV1[];
   completed: MobileAssignmentV1[];
+  rejected: MobileAssignmentV1[];
   cancelled: MobileAssignmentV1[];
 };
 
@@ -80,9 +89,14 @@ export function bucketMobileAssignments(
   const today: MobileAssignmentV1[] = [];
   const upcoming: MobileAssignmentV1[] = [];
   const completed: MobileAssignmentV1[] = [];
+  const rejected: MobileAssignmentV1[] = [];
   const cancelled: MobileAssignmentV1[] = [];
 
   for (const assignment of assignments) {
+    if (isRejectedAssignment(assignment)) {
+      rejected.push(assignment);
+      continue;
+    }
     if (isCancelledAssignment(assignment)) {
       cancelled.push(assignment);
       continue;
@@ -112,9 +126,10 @@ export function bucketMobileAssignments(
   today.sort(sort);
   upcoming.sort(sort);
   completed.sort(sort);
+  rejected.sort(sort);
   cancelled.sort(sort);
 
-  return { today, upcoming, completed, cancelled };
+  return { today, upcoming, completed, rejected, cancelled };
 }
 
 export function humanStatus(value: string) {
