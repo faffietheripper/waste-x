@@ -18,6 +18,16 @@ type DesktopTicketState = {
   syncState: string | null;
 };
 
+type TicketFileResult = {
+  ok: boolean;
+  action: "DOWNLOAD" | "PRINT" | "REPRINT";
+  ticketNumber: string;
+  path: string | null;
+  printerName: string | null;
+  jobReference: string | null;
+  message: string;
+};
+
 function fileSize(bytes: number | null) {
   if (bytes === null) return "—";
   if (bytes < 1024) return `${bytes} B`;
@@ -36,7 +46,10 @@ export function TicketPanel({
 }) {
   const [ticket, setTicket] = useState<DesktopTicketState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [printBusy, setPrintBusy] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function refresh() {
     const next = await invoke<DesktopTicketState>("desktop_ticket_status", {
@@ -55,6 +68,7 @@ export function TicketPanel({
         if (!cancelled) {
           setTicket(next);
           setError(null);
+          setNotice(null);
         }
       })
       .catch((reason) => {
@@ -68,6 +82,7 @@ export function TicketPanel({
   async function issueTicket() {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const issued = await invoke<DesktopTicketState>("desktop_issue_ticket", {
         input: { loadId },
@@ -79,6 +94,39 @@ export function TicketPanel({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function downloadTicket() {
+    setDownloadBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await invoke<TicketFileResult>("desktop_download_ticket_pdf", {
+        input: { loadId },
+      });
+      setNotice(result.path ? `${result.message} ${result.path}` : result.message);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDownloadBusy(false);
+    }
+  }
+
+  async function printTicket() {
+    setPrintBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await invoke<TicketFileResult>("desktop_print_ticket", {
+        input: { loadId },
+      });
+      const printer = result.printerName ? ` ${result.printerName}.` : "";
+      setNotice(`${result.message}${printer}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPrintBusy(false);
     }
   }
 
@@ -100,6 +148,7 @@ export function TicketPanel({
       </div>
 
       {error ? <div className="ticket-error">{error}</div> : null}
+      {notice ? <div className="ticket-notice">{notice}</div> : null}
 
       {ticket?.ticketNumber ? (
         <div className="ticket-issued-card">
@@ -118,9 +167,28 @@ export function TicketPanel({
               <code>{ticket.pdfSha256}</code>
             </div>
           ) : null}
+          <div className="ticket-document-actions">
+            <button
+              className="ticket-secondary-action"
+              disabled={disabled || printBusy || downloadBusy || !ticket.pdfGenerated}
+              onClick={() => void printTicket()}
+              type="button"
+            >
+              {printBusy ? "Sending to printer…" : "Print ticket"}
+            </button>
+            <button
+              className="ticket-secondary-action"
+              disabled={disabled || printBusy || downloadBusy || !ticket.pdfGenerated}
+              onClick={() => void downloadTicket()}
+              type="button"
+            >
+              {downloadBusy ? "Saving PDF…" : "Download PDF"}
+            </button>
+          </div>
           <p className="small-copy">
-            Print and reprint consume these exact stored PDF bytes. A reprint never creates a new
-            ticket number or changes the SHA-256.
+            Printing and reprinting consume these exact stored PDF bytes. Repeat prints are recorded
+            as reprints and never create a new ticket number or change the SHA-256. Download saves a
+            copy to the operator's Downloads folder.
           </p>
         </div>
       ) : (
