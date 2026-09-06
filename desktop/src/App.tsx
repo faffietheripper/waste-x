@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { RejectLoadModal, type SiteRejectionCategory } from "./RejectLoadModal";
 import { TicketPanel } from "./TicketPanel";
 
 type LocalDbStatus = { ready: boolean; encrypted: boolean; schemaVersion: number; cipherVersion: string; tableCount: number };
@@ -11,6 +12,7 @@ type OpsReference = { id: string; label: string; haulierCounterpartyId: string |
 type WeightMetric = "Grams" | "Kilograms" | "Tonnes";
 type TareSource = "LOAD" | "VEHICLE_MASTER" | "MANUAL" | null;
 type VehicleTareResult = { vehicleId: string; tareWeightKg: number | null };
+type LoadView = "live" | "rejected" | "completed" | "cancelled";
 
 type DailyLoad = {
   id: string;
@@ -55,6 +57,64 @@ type EditState = {
   weightMetric: WeightMetric;
   notes: string;
 };
+
+type RejectionSummary = {
+  authority: "RECEIVING_SITE" | "DRIVER";
+  categoryLabel: string;
+  reason: string;
+};
+
+const SITE_REJECTION_LABELS: Record<string, string> = {
+  WASTE_MISMATCH: "Waste does not match booking",
+  CONTAMINATION: "Contamination / unacceptable material",
+  PERMIT_OR_COMPLIANCE: "Permit / compliance issue",
+  UNSAFE_LOAD: "Unsafe load",
+  DOCUMENTATION: "Missing / incorrect paperwork",
+  SITE_CAPACITY: "Site cannot receive this load",
+  OTHER: "Other",
+};
+
+function parseRejection(notes: string | null): RejectionSummary | null {
+  if (!notes?.trim()) return null;
+  const lines = notes.split("\n").map((line) => line.trim()).filter(Boolean).reverse();
+  for (const line of lines) {
+    const site = line.match(/^\[SITE REJECTED · ([A-Z_]+) · [^\]]+\]\s*(.+)$/);
+    if (site) {
+      return {
+        authority: "RECEIVING_SITE",
+        categoryLabel: SITE_REJECTION_LABELS[site[1] ?? ""] ?? SITE_REJECTION_LABELS.OTHER,
+        reason: (site[2] ?? "").trim(),
+      };
+    }
+    const driver = line.match(/^\[DRIVER COLLECTION REJECTED · [^\]]+\]\s*(.+)$/);
+    if (driver) {
+      return {
+        authority: "DRIVER",
+        categoryLabel: "Driver refused collection",
+        reason: (driver[1] ?? "").trim(),
+      };
+    }
+    const legacy = line.match(/^\[REJECTED · [^\]]+\]\s*(.+)$/);
+    if (legacy) {
+      const detail = (legacy[1] ?? "").trim();
+      const tagged = detail.match(/^\[CATEGORY:([A-Z_]+)\]\s*(.+)$/);
+      const category = tagged?.[1] ?? "OTHER";
+      return {
+        authority: "RECEIVING_SITE",
+        categoryLabel: SITE_REJECTION_LABELS[category] ?? SITE_REJECTION_LABELS.OTHER,
+        reason: (tagged?.[2] ?? detail).trim(),
+      };
+    }
+  }
+  return null;
+}
+
+function loadBelongsToView(load: DailyLoad, view: LoadView) {
+  if (view === "rejected") return load.status === "rejected";
+  if (view === "completed") return load.status === "completed";
+  if (view === "cancelled") return load.status === "cancelled";
+  return !["completed", "rejected", "cancelled"].includes(load.status);
+}
 
 function weightMetric(value: string): WeightMetric {
   return value === "Grams" || value === "Kilograms" || value === "Tonnes" ? value : "Tonnes";
@@ -141,6 +201,8 @@ export function App() {
   const [cloudQuery, setCloudQuery] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
   const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
+  const [loadView, setLoadView] = useState<LoadView>("live");
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [edit, setEdit] = useState<EditState | null>(null);
   const [tareSource, setTareSource] = useState<TareSource>(null);
   const [email, setEmail] = useState("");
@@ -155,6 +217,24 @@ export function App() {
     () => operations?.loads.find((load) => load.id === selectedLoadId) ?? null,
     [operations, selectedLoadId],
   );
+  const visibleLoads = useMemo(
+    () => (operations?.loads ?? []).filter((load) => loadBelongsToView(load, loadView)),
+    [operations, loadView],
+  );
+  const loadCounts = useMemo(() => {
+    const loads = operations?.loads ?? [];
+    return {
+      live: loads.filter((load) => loadBelongsToView(load, "live")).length,
+      rejected: loads.filter((load) => loadBelongsToView(load, "rejected")).length,
+      completed: loads.filter((load) => loadBelongsToView(load, "completed")).length,
+      cancelled: loads.filter((load) => loadBelongsToView(load, "cancelled")).length,
+    };
+  }, [operations]);
+  const rejection = useMemo(
+    () => selectedLoad?.status === "rejected" ? parseRejection(selectedLoad.notes) : null,
+    [selectedLoad],
+  );
+  const selectedTerminal = Boolean(selectedLoad && ["completed", "rejected", "cancelled"].includes(selectedLoad.status));
   const availableDrivers = useMemo(
     () => operations?.drivers.filter((driver) => driver.haulierCounterpartyId === (selectedLoad?.haulierCounterpartyId ?? null)) ?? [],
     [operations, selectedLoad],
@@ -231,6 +311,13 @@ export function App() {
     })();
   }, []);
   useEffect(() => { if (!email && auth?.email) setEmail(auth.email); }, [auth?.email, email]);
+  useEffect(() => {
+    if (!operations) return;
+    const currentIsVisible = Boolean(selectedLoadId && operations.loads.some((load) => load.id === selectedLoadId && loadBelongsToView(load, loadView)));
+    if (!currentIsVisible) {
+      setSelectedLoadId(operations.loads.find((load) => loadBelongsToView(load, loadView))?.id ?? null);
+    }
+  }, [loadView, operations, selectedLoadId]);
   useEffect(() => {
     let cancelled = false;
     if (!selectedLoad) {
@@ -390,11 +477,24 @@ export function App() {
     await run(() => invoke(command, { input: { loadId: selectedLoad.id } }), success);
   }
 
-  async function rejectLoad() {
-    if (!selectedLoad) return;
-    const reason = window.prompt("Why is this incoming load being rejected?");
-    if (!reason) return;
-    await run(() => invoke("desktop_reject_load", { input: { loadId: selectedLoad.id, reason } }), "Load rejected locally and queued for Cloud sync.");
+  async function rejectLoad(category: SiteRejectionCategory, reason: string) {
+    if (!selectedLoad) return false;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await invoke("desktop_reject_site_load", {
+        input: { loadId: selectedLoad.id, category, reason },
+      });
+      setLoadView("rejected");
+      await refreshLocalState();
+      setMessage("Load rejected locally with the receiving-site reason recorded. Cloud sync will update the Driver copy.");
+      return true;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleCloudSearch(event: FormEvent<HTMLFormElement>) { event.preventDefault(); await fetchCloudCatalogue(cloudQuery, 0); }
@@ -443,35 +543,64 @@ export function App() {
 
           <section className="operations-header"><div><span className="eyebrow">Daily Operations · Offline Guaranteed</span><h2>{summary?.jobLoads ?? 0} local loads ready</h2></div><div className="ops-meta"><span>{summary?.jobs ?? 0} jobs</span><span>{operations?.pendingEvents ?? 0} local events</span><button className="secondary-button" disabled={busy || !sync?.cloudReachable} onClick={() => run(() => invoke("desktop_refresh_bootstrap"), "Cloud working set reconciled with encrypted SQLite.")}>Reconcile working set</button></div></section>
 
+          <section className="load-view-tabs" aria-label="Load views">
+            {([
+              ["live", "Live", loadCounts.live],
+              ["rejected", "Rejected", loadCounts.rejected],
+              ["completed", "Completed", loadCounts.completed],
+              ["cancelled", "Cancelled", loadCounts.cancelled],
+            ] as Array<[LoadView, string, number]>).map(([value, label, count]) => (
+              <button
+                type="button"
+                key={value}
+                className={loadView === value ? "active" : ""}
+                onClick={() => setLoadView(value)}
+              >
+                {label} <span>{count}</span>
+              </button>
+            ))}
+          </section>
+
           <section className="operations-layout">
             <div className="load-list">
-              {operations?.loads.map((load) => <button key={load.id} className={`load-row ${selectedLoadId === load.id ? "selected" : ""}`} onClick={() => setSelectedLoadId(load.id)}><div className="load-title"><strong>{load.jobNumber || "Job"} · Load {load.loadNumber ?? "—"}</strong><span className={`status-pill status-${load.status}`}>{load.status}</span></div><span>{load.direction} · {load.jobDate ?? "No date"} · {load.ewcCode ?? "No EWC"}</span><span>{load.wasteDescription || "Waste description required"}</span><span className="load-foot">Net {load.netWeight ?? "—"} {load.weightMetric}{load.ticketNumber ? ` · Ticket ${load.ticketNumber}` : load.status === "completed" ? " · Site ticket ready" : ""}{load.pendingEvents > 0 ? ` · ${load.pendingEvents} local change${load.pendingEvents === 1 ? "" : "s"}` : ""}</span></button>)}
-              {!operations?.loads.length ? <div className="empty-state">No operational loads are cached on this Desktop.</div> : null}
+              {visibleLoads.map((load) => <button key={load.id} className={`load-row ${selectedLoadId === load.id ? "selected" : ""}`} onClick={() => setSelectedLoadId(load.id)}><div className="load-title"><strong>{load.jobNumber || "Job"} · Load {load.loadNumber ?? "—"}</strong><span className={`status-pill status-${load.status}`}>{load.status}</span></div><span>{load.direction} · {load.jobDate ?? "No date"} · {load.ewcCode ?? "No EWC"}</span><span>{load.wasteDescription || "Waste description required"}</span><span className="load-foot">Net {load.netWeight ?? "—"} {load.weightMetric}{load.ticketNumber ? ` · Ticket ${load.ticketNumber}` : load.status === "completed" ? " · Site ticket ready" : ""}{load.pendingEvents > 0 ? ` · ${load.pendingEvents} local change${load.pendingEvents === 1 ? "" : "s"}` : ""}</span></button>)}
+              {!visibleLoads.length ? <div className="empty-state">No {loadView} loads are cached on this Desktop.</div> : null}
             </div>
 
             <div className="load-editor">
               {selectedLoad && edit ? (
                 <>
                   <div className="editor-heading"><div><span className="eyebrow">Selected load</span><h3>{selectedLoad.jobNumber} · Load {selectedLoad.loadNumber ?? "—"}</h3></div><span className={`status-pill status-${selectedLoad.status}`}>{selectedLoad.status}</span></div>
+
+                  {selectedLoad.status === "rejected" ? (
+                    <div className="site-rejection-record">
+                      <span>REJECTION RECORD</span>
+                      <strong>{rejection?.authority === "DRIVER" ? "Driver refused collection" : "Receiving site rejected load"}</strong>
+                      <b>{rejection?.categoryLabel ?? "Reason recorded in load notes"}</b>
+                      <p>{rejection?.reason ?? "Open the notes below to review the recorded rejection detail."}</p>
+                      <small>This load is terminal and cannot receive a normal completed-load ticket.</small>
+                    </div>
+                  ) : null}
+
                   <form className="editor-form" onSubmit={saveDetails}>
-                    <label><span>Driver</span><select value={edit.driverId} onChange={(e) => setEdit({ ...edit, driverId: e.target.value })}><option value="">Select driver</option>{availableDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.label}</option>)}</select></label>
-                    <label><span>Vehicle</span><select value={edit.vehicleId} onChange={(e) => void handleVehicleChange(e.target.value)}><option value="">Select vehicle</option>{availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}</option>)}</select></label>
-                    <label className="wide"><span>Waste description</span><input value={edit.wasteDescription} onChange={(e) => setEdit({ ...edit, wasteDescription: e.target.value })} /></label>
-                    <label><span>Gross · weighbridge reading</span><input disabled={incomingWeightLocked} inputMode="decimal" value={edit.grossWeight} onChange={(e) => { const grossWeight = e.target.value; setEdit({ ...edit, grossWeight, netWeight: calculatedNetWeight(grossWeight, edit.tareWeight) }); }} /></label>
-                    <label><span>Tare · editable</span><input disabled={incomingWeightLocked} inputMode="decimal" value={edit.tareWeight} onChange={(e) => { const tareWeight = e.target.value; setTareSource("MANUAL"); setEdit({ ...edit, tareWeight, netWeight: calculatedNetWeight(edit.grossWeight, tareWeight) }); }} /><small className="small-copy">{tareSource === "VEHICLE_MASTER" ? "Loaded from the selected vehicle's stored tare." : tareSource === "LOAD" ? "Using the tare already saved on this load." : tareSource === "MANUAL" ? "Operator-adjusted tare for this load." : "No stored vehicle tare — enter the actual tare."}</small></label>
+                    <label><span>Driver</span><select disabled={selectedTerminal} value={edit.driverId} onChange={(e) => setEdit({ ...edit, driverId: e.target.value })}><option value="">Select driver</option>{availableDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.label}</option>)}</select></label>
+                    <label><span>Vehicle</span><select disabled={selectedTerminal} value={edit.vehicleId} onChange={(e) => void handleVehicleChange(e.target.value)}><option value="">Select vehicle</option>{availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.label}</option>)}</select></label>
+                    <label className="wide"><span>Waste description</span><input disabled={selectedTerminal} value={edit.wasteDescription} onChange={(e) => setEdit({ ...edit, wasteDescription: e.target.value })} /></label>
+                    <label><span>Gross · weighbridge reading</span><input disabled={selectedTerminal || incomingWeightLocked} inputMode="decimal" value={edit.grossWeight} onChange={(e) => { const grossWeight = e.target.value; setEdit({ ...edit, grossWeight, netWeight: calculatedNetWeight(grossWeight, edit.tareWeight) }); }} /></label>
+                    <label><span>Tare · editable</span><input disabled={selectedTerminal || incomingWeightLocked} inputMode="decimal" value={edit.tareWeight} onChange={(e) => { const tareWeight = e.target.value; setTareSource("MANUAL"); setEdit({ ...edit, tareWeight, netWeight: calculatedNetWeight(edit.grossWeight, tareWeight) }); }} /><small className="small-copy">{tareSource === "VEHICLE_MASTER" ? "Loaded from the selected vehicle's stored tare." : tareSource === "LOAD" ? "Using the tare already saved on this load." : tareSource === "MANUAL" ? "Operator-adjusted tare for this load." : "No stored vehicle tare — enter the actual tare."}</small></label>
                     <label><span>Net · calculated</span><input readOnly inputMode="decimal" value={edit.netWeight} /><small className="small-copy">Gross − tare. Waste X recalculates this automatically.</small></label>
-                    <label><span>Metric</span><select disabled={incomingWeightLocked} value={edit.weightMetric} onChange={(e) => handleMetricChange(e.target.value as WeightMetric)}><option>Tonnes</option><option>Kilograms</option><option>Grams</option></select></label>
-                    {incomingWeightLocked ? <p className="wide small-copy">Weight entry unlocks after the Driver reaches the destination and the load is handed to the receiving site.</p> : null}
-                    <label className="wide"><span>Site ticket</span><input disabled value={selectedLoad.ticketNumber ?? (selectedLoad.status === "completed" ? "Ready to generate below" : "Available after site completion")} /></label>
-                    <label className="wide"><span>Notes</span><textarea rows={3} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
-                    <button disabled={busy || ["completed", "rejected", "cancelled"].includes(selectedLoad.status)}>Save site details</button>
+                    <label><span>Metric</span><select disabled={selectedTerminal || incomingWeightLocked} value={edit.weightMetric} onChange={(e) => handleMetricChange(e.target.value as WeightMetric)}><option>Tonnes</option><option>Kilograms</option><option>Grams</option></select></label>
+                    {incomingWeightLocked && !selectedTerminal ? <p className="wide small-copy">Weight entry unlocks after the Driver reaches the destination and the load is handed to the receiving site.</p> : null}
+                    <label className="wide"><span>Site ticket</span><input disabled value={selectedLoad.ticketNumber ?? (selectedLoad.status === "completed" ? "Ready to generate below" : selectedLoad.status === "rejected" ? "Not issued for rejected loads" : "Available after site completion")} /></label>
+                    <label className="wide"><span>Notes</span><textarea disabled={selectedTerminal} rows={3} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
+                    <button disabled={busy || selectedTerminal}>Save site details</button>
                   </form>
 
                   <div className="action-row">
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" && selectedLoad.haulierCounterpartyId ? <button disabled={busy} onClick={() => loadAction("desktop_mark_load_arrived", "External-haulier arrival recorded locally and queued for sync.")}>Mark external carrier arrived</button> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" && !selectedLoad.haulierCounterpartyId ? <span className="small-copy">Waiting for the assigned Driver to mark Arrived at destination on Mobile.</span> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button disabled={busy} onClick={() => loadAction("desktop_accept_load", "Load accepted locally and queued for sync.")}>Accept</button> : null}
-                    {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button className="danger-button" disabled={busy} onClick={rejectLoad}>Reject</button> : null}
+                    {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button className="danger-button" disabled={busy} onClick={() => setRejectModalOpen(true)}>Reject load</button> : null}
                     {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? <button disabled={busy} onClick={() => void completeSelectedLoad()}>Finalise weights + Complete Load</button> : null}
                   </div>
 
@@ -484,6 +613,17 @@ export function App() {
           </section>
         </>
       )}
+
+      {selectedLoad ? (
+        <RejectLoadModal
+          open={rejectModalOpen && selectedLoad.status === "arrived"}
+          jobNumber={selectedLoad.jobNumber}
+          loadNumber={selectedLoad.loadNumber}
+          busy={busy}
+          onClose={() => setRejectModalOpen(false)}
+          onConfirm={rejectLoad}
+        />
+      ) : null}
       {message ? <div className="toast">{message}</div> : null}
     </main>
   );
