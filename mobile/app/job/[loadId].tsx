@@ -40,6 +40,7 @@ import {
   syncPendingMobileEvents,
   type MobileSyncStatus,
 } from "@/sync/mobile-sync";
+import { openMobileTicketPdf } from "@/tickets/ticket-document";
 
 export default function MobileJobDetailScreen() {
   const router = useRouter();
@@ -52,6 +53,7 @@ export default function MobileJobDetailScreen() {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [rejectBusy, setRejectBusy] = useState(false);
+  const [ticketBusy, setTicketBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -200,6 +202,23 @@ export default function MobileJobDetailScreen() {
     }
   }
 
+  async function openTicketDocument() {
+    if (!assignment?.load.ticketNumber) return;
+    setTicketBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await openMobileTicketPdf(assignment.load.id);
+      setMessage("Ticket PDF opened securely. Use the viewer's share/save controls if you want to keep a copy on this device.");
+      const refreshedAuth = await getMobileAuthSnapshot();
+      setAuth(refreshedAuth);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setTicketBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.screen}>
@@ -238,6 +257,7 @@ export default function MobileJobDetailScreen() {
   const terminal = ["completed", "rejected", "cancelled", "canceled"].includes(
     assignment.load.status.toLowerCase(),
   );
+  const siteCompleted = assignment.load.status.toLowerCase() === "completed";
   const atDestination = workflow.step === "ARRIVED_DESTINATION";
   const canRejectBeforeCollection =
     !readOnly &&
@@ -285,8 +305,12 @@ export default function MobileJobDetailScreen() {
           </Text>
           <View style={styles.timeline}>
             {MOBILE_FIELD_WORKFLOW_STEPS.map((step, index) => {
-              const completed = index < workflowIndex;
-              const current = index === workflowIndex;
+              const destinationClosedBySite =
+                siteCompleted &&
+                step === "ARRIVED_DESTINATION" &&
+                index === workflowIndex;
+              const completed = index < workflowIndex || destinationClosedBySite;
+              const current = index === workflowIndex && !destinationClosedBySite;
               return (
                 <View key={step} style={styles.timelineRow}>
                   <View style={[styles.timelineDot, completed && styles.timelineDotComplete, current && styles.timelineDotCurrent]}>
@@ -294,7 +318,7 @@ export default function MobileJobDetailScreen() {
                   </View>
                   <View style={styles.flexOne}>
                     <Text style={[styles.timelineLabel, (completed || current) && styles.timelineLabelActive]}>{humanFieldWorkflowStep(step)}</Text>
-                    {current && workflow.updatedAt ? <Text style={styles.timelineTime}>{new Date(workflow.updatedAt).toLocaleString()}</Text> : null}
+                    {(current || destinationClosedBySite) && workflow.updatedAt ? <Text style={styles.timelineTime}>{new Date(workflow.updatedAt).toLocaleString()}</Text> : null}
                   </View>
                 </View>
               );
@@ -436,6 +460,26 @@ export default function MobileJobDetailScreen() {
               </View>
               <Text style={styles.documentBody}>
                 Issued by the receiving site after its final transaction. This Driver copy is read-only; Mobile cannot issue, edit or renumber it.
+              </Text>
+              <Pressable
+                disabled={ticketBusy || !auth?.onlineAuthenticated}
+                onPress={() => void openTicketDocument()}
+                style={[
+                  styles.documentAction,
+                  (ticketBusy || !auth?.onlineAuthenticated) && styles.documentActionDisabled,
+                ]}
+              >
+                {ticketBusy ? <ActivityIndicator color="#ffffff" /> : null}
+                <Text style={styles.documentActionText}>
+                  {ticketBusy
+                    ? "Opening ticket PDF…"
+                    : auth?.onlineAuthenticated
+                      ? "View / download ticket PDF"
+                      : "Connect to view ticket PDF"}
+                </Text>
+              </Pressable>
+              <Text style={styles.documentHint}>
+                Waste X creates a short-lived secure viewer link. The PDF uses the same receiving-site ticket renderer as the Web app; use the viewer's share/save controls to download a copy.
               </Text>
             </View>
           </Section>
@@ -594,6 +638,10 @@ const styles = StyleSheet.create({
   receivedBadge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 999, backgroundColor: "#dcfce7" },
   receivedBadgeText: { color: "#15803d", fontSize: 8, fontWeight: "900" },
   documentBody: { marginTop: 10, color: "#166534", fontSize: 11, lineHeight: 17 },
+  documentAction: { marginTop: 13, minHeight: 48, borderRadius: 13, backgroundColor: "#166534", flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  documentActionDisabled: { opacity: 0.42 },
+  documentActionText: { color: "#ffffff", fontSize: 12, fontWeight: "900", textAlign: "center" },
+  documentHint: { marginTop: 9, color: "#4d7c5d", fontSize: 9, lineHeight: 14 },
   notesCard: { padding: 14, borderRadius: 13, backgroundColor: "#fff7ed" },
   notesText: { color: "#7c2d12", fontSize: 13, lineHeight: 20 },
   localFirstCard: { marginTop: 24, padding: 16, borderRadius: 17, backgroundColor: "#111827", flexDirection: "row", gap: 12 },
