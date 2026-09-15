@@ -8,6 +8,7 @@ import {
   wasteReceipts,
 } from "@/db/schema";
 import { getWasteTrackingOrganisationSettings } from "../data-access/getWasteTrackingOrganisationSettings";
+import { canonicaliseDwtContainer } from "./containerTypes";
 import type {
   ReceiveMovementInput,
   ReceiveMovementInputWasteItem,
@@ -118,12 +119,17 @@ function parseHazardousComponents(value: string | null | undefined) {
 function mapReceiptItem(
   item: typeof wasteReceiptItems.$inferSelect,
 ): ReceiveMovementInputWasteItem {
+  const container = canonicaliseDwtContainer({
+    typeOfContainers: item.typeOfContainers,
+    numberOfContainers: item.numberOfContainers,
+  });
+
   return {
     ewcCodes: parseStringArray(item.ewcCodes),
     wasteDescription: item.wasteDescription,
     physicalForm: item.physicalForm,
-    numberOfContainers: item.numberOfContainers,
-    typeOfContainers: item.typeOfContainers,
+    numberOfContainers: container.numberOfContainers,
+    typeOfContainers: container.code,
     weight: {
       metric: item.weightMetric,
       amount: Number(item.weightAmount),

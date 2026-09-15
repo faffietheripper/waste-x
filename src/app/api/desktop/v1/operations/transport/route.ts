@@ -21,6 +21,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/* WASTE_X_DESKTOP_CLIENT_STABLE_MASTER_IDS_V1 */
+
 const nullableText = z.string().trim().max(4000).nullable().optional();
 
 const driverDataSchema = z.object({
@@ -45,7 +47,7 @@ const vehicleDataSchema = z.object({
 const mutationSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("driver.create"),
-    data: driverDataSchema.omit({ id: true }),
+    data: driverDataSchema,
   }),
   z.object({
     operation: z.literal("driver.update"),
@@ -61,7 +63,7 @@ const mutationSchema = z.discriminatedUnion("operation", [
   }),
   z.object({
     operation: z.literal("vehicle.create"),
-    data: vehicleDataSchema.omit({ id: true }),
+    data: vehicleDataSchema,
   }),
   z.object({
     operation: z.literal("vehicle.update"),
@@ -314,33 +316,52 @@ export async function POST(request: Request) {
       }
 
       if (mutation.operation === "driver.create") {
-        const [created] = await database
-          .insert(drivers)
-          .values({
-            organisationId: context.organisationId,
-            haulierCounterpartyId: haulierId,
-            name: data.name.trim(),
-            telephone: nullable(data.telephone),
-            email: nullable(data.email),
-            defaultVehicleId,
-            isActive: true,
-            notes: nullable(data.notes),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .returning({ id: drivers.id });
+        const requestedId = data.id ?? null;
+        const existingRequested = requestedId
+          ? await database.query.drivers.findFirst({
+              where: and(
+                eq(drivers.id, requestedId),
+                eq(drivers.organisationId, context.organisationId),
+              ),
+              columns: { id: true },
+            })
+          : null;
 
-        if (!created) {
-          return clientApiError(
-            "DRIVER_CREATE_FAILED",
-            500,
-            "Waste X could not create the Driver.",
-          );
+        if (existingRequested) {
+          // Response-loss safe: retrying the same locally-generated id is a duplicate success.
+          changedType = "driver";
+          changedId = existingRequested.id;
+          action = "created";
+        } else {
+          const [created] = await database
+            .insert(drivers)
+            .values({
+              ...(requestedId ? { id: requestedId } : {}),
+              organisationId: context.organisationId,
+              haulierCounterpartyId: haulierId,
+              name: data.name.trim(),
+              telephone: nullable(data.telephone),
+              email: nullable(data.email),
+              defaultVehicleId,
+              isActive: true,
+              notes: nullable(data.notes),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .returning({ id: drivers.id });
+
+          if (!created) {
+            return clientApiError(
+              "DRIVER_CREATE_FAILED",
+              500,
+              "Waste X could not create the Driver.",
+            );
+          }
+
+          changedType = "driver";
+          changedId = created.id;
+          action = "created";
         }
-
-        changedType = "driver";
-        changedId = created.id;
-        action = "created";
       } else {
         const existing = await database.query.drivers.findFirst({
           where: and(
@@ -460,20 +481,34 @@ export async function POST(request: Request) {
         }
       }
 
-      const duplicate = await database.query.vehicles.findFirst({
-        where:
-          mutation.operation === "vehicle.update"
-            ? and(
-                eq(vehicles.organisationId, context.organisationId),
-                eq(vehicles.registrationNumber, registrationNumber),
-                ne(vehicles.id, mutation.data.id),
-              )
-            : and(
-                eq(vehicles.organisationId, context.organisationId),
-                eq(vehicles.registrationNumber, registrationNumber),
-              ),
-        columns: { id: true },
-      });
+      const requestedVehicleId =
+        mutation.operation === "vehicle.create" ? data.id ?? null : null;
+      const existingRequestedVehicle = requestedVehicleId
+        ? await database.query.vehicles.findFirst({
+            where: and(
+              eq(vehicles.id, requestedVehicleId),
+              eq(vehicles.organisationId, context.organisationId),
+            ),
+            columns: { id: true },
+          })
+        : null;
+
+      const duplicate = existingRequestedVehicle
+        ? null
+        : await database.query.vehicles.findFirst({
+            where:
+              mutation.operation === "vehicle.update"
+                ? and(
+                    eq(vehicles.organisationId, context.organisationId),
+                    eq(vehicles.registrationNumber, registrationNumber),
+                    ne(vehicles.id, mutation.data.id),
+                  )
+                : and(
+                    eq(vehicles.organisationId, context.organisationId),
+                    eq(vehicles.registrationNumber, registrationNumber),
+                  ),
+            columns: { id: true },
+          });
 
       if (duplicate) {
         return clientApiError(
@@ -484,32 +519,40 @@ export async function POST(request: Request) {
       }
 
       if (mutation.operation === "vehicle.create") {
-        const [created] = await database
-          .insert(vehicles)
-          .values({
-            organisationId: context.organisationId,
-            haulierCounterpartyId: haulierId,
-            registrationNumber,
-            vehicleType: nullable(data.vehicleType),
-            tareWeightKg: tare.value,
-            isActive: true,
-            notes: nullable(data.notes),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .returning({ id: vehicles.id });
+        if (existingRequestedVehicle) {
+          // Response-loss safe: retrying the same locally-generated id is a duplicate success.
+          changedType = "vehicle";
+          changedId = existingRequestedVehicle.id;
+          action = "created";
+        } else {
+          const [created] = await database
+            .insert(vehicles)
+            .values({
+              ...(requestedVehicleId ? { id: requestedVehicleId } : {}),
+              organisationId: context.organisationId,
+              haulierCounterpartyId: haulierId,
+              registrationNumber,
+              vehicleType: nullable(data.vehicleType),
+              tareWeightKg: tare.value,
+              isActive: true,
+              notes: nullable(data.notes),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .returning({ id: vehicles.id });
 
-        if (!created) {
-          return clientApiError(
-            "VEHICLE_CREATE_FAILED",
-            500,
-            "Waste X could not create the Vehicle.",
-          );
+          if (!created) {
+            return clientApiError(
+              "VEHICLE_CREATE_FAILED",
+              500,
+              "Waste X could not create the Vehicle.",
+            );
+          }
+
+          changedType = "vehicle";
+          changedId = created.id;
+          action = "created";
         }
-
-        changedType = "vehicle";
-        changedId = created.id;
-        action = "created";
       } else {
         const existing = await database.query.vehicles.findFirst({
           where: and(

@@ -1,17 +1,18 @@
 import Link from "next/link";
 /* WASTE_X_OWN_CARRIER_DRIVER_DWT_V1 */
 import { redirect } from "next/navigation";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
-import { jobs, jobTemplates, users } from "@/db/schema";
+import { ewcCodes, jobs, jobTemplates, users } from "@/db/schema";
 import { getSoloMasterData } from "@/modules/master-data/core/getSoloMasterData";
 import { getStage2Readiness } from "@/modules/master-data/core/getStage2Readiness";
 import {
   canManageOwnCarrierDwtSettings,
 } from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
 import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingOrganisationSettings";
+import { listPermitEwcAcceptances } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 
 import BookJobForm from "./components/BookJobForm";
 import type {
@@ -231,6 +232,67 @@ export default async function NewJobPage({
     );
   }
 
+  const permitAcceptanceList = await listPermitEwcAcceptances({
+    organisationId: currentUser.organisationId,
+    siteId: masterData.receivingSite.id,
+    permitId: masterData.primaryPermit.id,
+  });
+
+  const exactPermitIds = new Set(
+    permitAcceptanceList.exactEwcCodeIds,
+  );
+
+  const regulatoryEwcAcceptances =
+    permitAcceptanceList.regulatory.filter(
+      (row) =>
+        !exactPermitIds.has(
+          row.acceptedEwcCodeId,
+        ),
+    );
+
+  const acceptedEwcCodeIds = Array.from(
+    new Set([
+      ...permitAcceptanceList.exactEwcCodeIds,
+      ...regulatoryEwcAcceptances.map(
+        (item) =>
+          item.acceptedEwcCodeId,
+      ),
+    ]),
+  );
+
+  const acceptedEwcCodes =
+    acceptedEwcCodeIds.length === 0
+      ? []
+      : await database
+          .select({
+            id: ewcCodes.id,
+            code: ewcCodes.code,
+            description:
+              ewcCodes.description,
+            isHazardous:
+              ewcCodes.isHazardous,
+          })
+          .from(ewcCodes)
+          .where(
+            and(
+              inArray(
+                ewcCodes.id,
+                acceptedEwcCodeIds,
+              ),
+              eq(
+                ewcCodes.isActive,
+                true,
+              ),
+              eq(
+                ewcCodes.classificationUsable,
+                true,
+              ),
+            ),
+          )
+          .orderBy(
+            asc(ewcCodes.code),
+          );
+
   const data: BookJobFormData = {
     receivingSite: {
       id: masterData.receivingSite.id,
@@ -242,13 +304,9 @@ export default async function NewJobPage({
       id: masterData.primaryPermit.id,
       permitNumber: masterData.primaryPermit.permitNumber,
     },
-    permittedEwcCodeIds: masterData.permittedEwcCodes.map((item) => item.id),
-    permittedEwcCodes: masterData.permittedEwcCodes.map((item) => ({
-      id: item.id,
-      code: item.code,
-      description: item.description,
-      isHazardous: item.isHazardous,
-    })),
+    acceptedEwcCodeIds,
+    acceptedEwcCodes,
+    regulatoryEwcAcceptances,
     ownCarrierDwt: {
       registrationNumber:
         dwtSettings?.ownCarrierRegistrationNumber ?? "",

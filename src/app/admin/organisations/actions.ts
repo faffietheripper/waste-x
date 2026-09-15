@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import { database } from "@/db/database";
 import { departments, organisations, users } from "@/db/schema";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
+import { recordPlatformAdminAuditEvent } from "@/lib/admin/recordPlatformAdminAudit";
 import { createDefaultSiteForOrganisation } from "@/modules/sites/data-access/createDefaultSiteForOrganisation";
 
 type DepartmentType = "generator" | "carrier" | "manager" | "compliance";
@@ -153,6 +154,23 @@ export async function approveOrganisation(formData: FormData) {
 
   await createDefaultSiteForOrganisation({ organisationId: orgId });
 
+  await recordPlatformAdminAuditEvent({
+    organisationId: orgId,
+    entityType: "organisation",
+    entityId: orgId,
+    action: "ADMIN_ORGANISATION_APPROVED",
+    previousState: {
+      status: organisation.status,
+      capabilities: currentCapabilities,
+      operatingMode: organisation.operatingMode,
+    },
+    newState: {
+      status: "ACTIVE",
+      capabilities: approvedCapabilities,
+      operatingMode: organisation.operatingMode,
+    },
+  });
+
   revalidatePath("/admin");
   revalidatePath("/admin/organisations");
   revalidatePath(`/admin/organisations/${orgId}`);
@@ -164,10 +182,39 @@ export async function rejectOrganisation(formData: FormData) {
   const orgId = String(formData.get("orgId") ?? "").trim();
   if (!orgId) throw new Error("Missing organisation ID");
 
+  const organisation = await database.query.organisations.findFirst({
+    where: eq(organisations.id, orgId),
+    columns: {
+      id: true,
+      status: true,
+      capabilities: true,
+      operatingMode: true,
+    },
+  });
+
+  if (!organisation) throw new Error("Organisation not found");
+
   await database
     .update(organisations)
     .set({ status: "REJECTED" })
     .where(eq(organisations.id, orgId));
+
+  await recordPlatformAdminAuditEvent({
+    organisationId: orgId,
+    entityType: "organisation",
+    entityId: orgId,
+    action: "ADMIN_ORGANISATION_REJECTED",
+    previousState: {
+      status: organisation.status,
+      capabilities: organisation.capabilities,
+      operatingMode: organisation.operatingMode,
+    },
+    newState: {
+      status: "REJECTED",
+      capabilities: organisation.capabilities,
+      operatingMode: organisation.operatingMode,
+    },
+  });
 
   revalidatePath("/admin");
   revalidatePath("/admin/organisations");

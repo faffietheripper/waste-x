@@ -113,6 +113,7 @@ fn version_map(bootstrap: &Value) -> HashMap<(String, String), i64> {
     versions
 }
 
+/* WASTE_X_DESKTOP_OFFLINE_JOB_BOOTSTRAP_PROTECTION_V1 */
 fn has_unsynced_local_change(
     transaction: &Transaction<'_>,
     entity_type: &str,
@@ -121,10 +122,17 @@ fn has_unsynced_local_change(
     let found: Option<i64> = transaction
         .query_row(
             "SELECT 1
-             FROM local_sync_queue
+             FROM (
+               SELECT entity_type, entity_id
+               FROM local_sync_queue
+               WHERE status IN ('PENDING','SENDING','CONFLICT','FAILED')
+               UNION ALL
+               SELECT entity_type, entity_id
+               FROM local_cloud_mutation_queue
+               WHERE status IN ('PENDING','SENDING','FAILED')
+             ) local_change
              WHERE entity_type = ?1
                AND entity_id = ?2
-               AND status IN ('PENDING','SENDING','CONFLICT','FAILED')
              LIMIT 1",
             params![entity_type, entity_id],
             |row| row.get(0),
@@ -175,6 +183,8 @@ pub fn local_db_apply_bootstrap(app: AppHandle, bootstrap: Value) -> Result<Boot
     let ewcs = array(&bootstrap, "ewcCodes")?;
     let permits = array(&bootstrap, "permits")?;
     let permit_ewcs = array(&bootstrap, "permitEwcCodes")?;
+    let regulatory_acceptance_rules =
+        array(&bootstrap, "regulatoryAcceptanceRules")?;
 
     let mut connection = open_local_connection(&app)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -202,6 +212,8 @@ pub fn local_db_apply_bootstrap(app: AppHandle, bootstrap: Value) -> Result<Boot
         "local_counterparty_site",
         "local_counterparty",
         "local_permit_ewc_snapshot",
+        "local_permit_ewc_equivalence_snapshot",
+        "local_regulatory_acceptance_rule_snapshot",
         "local_permit",
     ] {
         transaction
@@ -324,6 +336,84 @@ pub fn local_db_apply_bootstrap(app: AppHandle, bootstrap: Value) -> Result<Boot
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![format!("{permit_id}:{ewc_code_id}"), organisation_id, permit_id, ewc_code_id, bool_int(row, "isActive", true), payload_json(row)?, generated_at],
         ).map_err(|e| e.to_string())?;
+    }
+
+    for row in regulatory_acceptance_rules {
+        let rule_id = required_text(row, "ruleId")?;
+        let activation_id = required_text(row, "activationId")?;
+        let selection_id = required_text(row, "siteRuleSelectionId")?;
+
+        transaction
+            .execute(
+                "INSERT INTO local_regulatory_acceptance_rule_snapshot (
+                    id,
+                    organisation_id,
+                    site_id,
+                    permit_id,
+                    activation_id,
+                    site_rule_selection_id,
+                    rule_id,
+                    rule_key,
+                    authority_id,
+                    authority_code,
+                    authority_type,
+                    rule_type,
+                    regulator,
+                    jurisdiction,
+                    reference,
+                    qualifying_authorisation_ref,
+                    actual_ewc_code_id,
+                    underlying_authorisation_ewc_code_id,
+                    requires_underlying_permit_code,
+                    requires_manual_confirmation,
+                    authority_conditions_confirmed,
+                    site_rule_confirmed,
+                    activation_valid_from,
+                    activation_valid_until,
+                    authority_valid_from,
+                    authority_valid_until,
+                    active,
+                    payload_json,
+                    updated_at
+                 )
+                 VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                    ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+                 )",
+                params![
+                    format!("{activation_id}:{selection_id}:{rule_id}"),
+                    organisation_id,
+                    required_text(row, "siteId")?,
+                    required_text(row, "permitId")?,
+                    activation_id,
+                    selection_id,
+                    rule_id,
+                    required_text(row, "ruleKey")?,
+                    required_text(row, "authorityId")?,
+                    required_text(row, "authorityCode")?,
+                    required_text(row, "authorityType")?,
+                    required_text(row, "ruleType")?,
+                    required_text(row, "regulator")?,
+                    required_text(row, "jurisdiction")?,
+                    required_text(row, "reference")?,
+                    text(row, "qualifyingAuthorisationRef"),
+                    required_text(row, "actualEwcCodeId")?,
+                    text(row, "underlyingAuthorisationEwcCodeId"),
+                    bool_int(row, "requiresUnderlyingPermitCode", false),
+                    bool_int(row, "requiresManualConfirmation", true),
+                    if text(row, "conditionsConfirmedAt").is_some() { 1 } else { 0 },
+                    if text(row, "siteRuleConfirmedAt").is_some() { 1 } else { 0 },
+                    text(row, "activationValidFrom"),
+                    text(row, "activationValidUntil"),
+                    text(row, "authorityValidFrom"),
+                    text(row, "authorityValidUntil"),
+                    1_i64,
+                    payload_json(row)?,
+                    generated_at,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
     }
 
     let mut jobs_written = 0_usize;

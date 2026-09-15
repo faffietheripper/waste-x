@@ -82,6 +82,12 @@ type JobOptions = {
     permitNumber: string;
   };
   permittedEwcCodeIds: string[];
+  regulatoryAcceptanceAuthorities: Array<{
+    acceptedEwcCodeId: string;
+    permittedEwcCode: string;
+    basis: string;
+    reference: string;
+  }>;
   clients: Client[];
   clientSites: ClientSite[];
   hauliers: Haulier[];
@@ -161,6 +167,13 @@ export function CreateJobPanel({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  /* WASTE_X_DESKTOP_CREATE_ACTION_TOAST_V1 */
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(null), 7000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
   const [direction, setDirection] =
     useState<JobDirection>("incoming");
   const [jobDate, setJobDate] = useState(londonToday);
@@ -173,6 +186,10 @@ export function CreateJobPanel({
   const [destinationSiteId, setDestinationSiteId] = useState("");
 
   const [materialProfileId, setMaterialProfileId] = useState("");
+  const [
+    additionalMaterialProfileIds,
+    setAdditionalMaterialProfileIds,
+  ] = useState<string[]>([]);
 
   const [transportMode, setTransportMode] =
     useState<TransportMode>("own");
@@ -201,8 +218,6 @@ export function CreateJobPanel({
   });
 
   async function fetchOptions() {
-    if (!cloudReachable) return;
-
     setLoading(true);
     setMessage(null);
 
@@ -212,7 +227,6 @@ export function CreateJobPanel({
       );
       setOptions(result);
     } catch (error) {
-      setOptions(null);
       setMessage(
         error instanceof Error ? error.message : String(error),
       );
@@ -222,11 +236,7 @@ export function CreateJobPanel({
   }
 
   useEffect(() => {
-    if (cloudReachable) {
-      void fetchOptions();
-    } else {
-      setOptions(null);
-    }
+    void fetchOptions();
   }, [cloudReachable]);
 
   const clientSites = useMemo(
@@ -263,6 +273,31 @@ export function CreateJobPanel({
       (material) => material.id === materialProfileId,
     ) ?? null;
 
+  const additionalMaterials = additionalMaterialProfileIds.map(
+    (id) =>
+      options?.materials.find((material) => material.id === id) ??
+      null,
+  );
+  const selectedWasteItemIds = [
+    materialProfileId,
+    ...additionalMaterialProfileIds,
+  ].filter(Boolean);
+  const wasteItemsAreUnique =
+    new Set(selectedWasteItemIds).size ===
+    selectedWasteItemIds.length;
+  const additionalWasteItemsAccepted =
+    direction !== "incoming" ||
+    additionalMaterialProfileIds.every((id, index) => {
+      const material = additionalMaterials[index];
+      return Boolean(
+        id &&
+          material &&
+          options?.permittedEwcCodeIds.includes(
+            material.ewcCodeId,
+          ),
+      );
+    });
+
   const selectedFacility =
     options?.facilities.find(
       (facility) => facility.id === destinationSiteId,
@@ -293,6 +328,8 @@ export function CreateJobPanel({
     Number(plannedLoads) <= 100 &&
     Boolean(materialProfileId) &&
     ownPermitMatch &&
+    additionalWasteItemsAccepted &&
+    wasteItemsAreUnique &&
     (direction === "incoming"
       ? Boolean(clientId && clientSiteId)
       : Boolean(destinationSiteId && destinationPermitMatch)) &&
@@ -307,6 +344,7 @@ export function CreateJobPanel({
     } else {
       setClientId("");
       setClientSiteId("");
+      setAdditionalMaterialProfileIds([]);
     }
   }
 
@@ -355,13 +393,6 @@ export function CreateJobPanel({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!cloudReachable) {
-      setMessage(
-        "Waste X Cloud is required to create a new Job. Existing site operations remain available offline.",
-      );
-      return;
-    }
-
     if (!requiredReady) {
       setMessage(
         "Complete the required Job, route, material and transport details first.",
@@ -374,7 +405,7 @@ export function CreateJobPanel({
 
     try {
       const created = await invoke<DesktopCreatedJob>(
-        "desktop_create_job",
+        "desktop_create_job_local",
         {
           input: {
             direction,
@@ -406,12 +437,26 @@ export function CreateJobPanel({
             vehicleId: nullable(vehicleId),
 
             materialProfileId,
+            materialProfileIds:
+              direction === "incoming"
+                ? [
+                    materialProfileId,
+                    ...additionalMaterialProfileIds.filter(Boolean),
+                  ]
+                : [materialProfileId],
             pricing: pricingPayload(),
           },
         },
       );
 
-      await invoke("desktop_refresh_bootstrap");
+      if (cloudReachable) {
+        try {
+          await invoke("desktop_sync_job_mutations");
+        } catch {
+          // The Job is already encrypted locally and automatic sync will retry.
+        }
+      }
+
       await onCreated(created);
     } catch (error) {
       setMessage(
@@ -420,31 +465,6 @@ export function CreateJobPanel({
     } finally {
       setBusy(false);
     }
-  }
-
-  if (!cloudReachable) {
-    return (
-      <section className="pilot-screen pilot-scroll-screen">
-        <div className="pilot-page-heading">
-          <div>
-            <span className="eyebrow">Site operations</span>
-            <h1>Create Job</h1>
-            <p>
-              Incoming and outgoing Jobs are created against the
-              canonical Waste X Cloud record.
-            </p>
-          </div>
-        </div>
-
-        <div className="pilot-create-offline">
-          <strong>Connect to Waste X Cloud to create a Job.</strong>
-          <span>
-            Existing cached Loads, weights and site operations remain
-            available offline.
-          </span>
-        </div>
-      </section>
-    );
   }
 
   return (
@@ -469,9 +489,16 @@ export function CreateJobPanel({
           ) : null}
         </div>
       </div>
-
-      {message ? (
-        <div className="pilot-create-message">{message}</div>
+{message ? (
+        <div className="pilot-action-toast error" role="alert" aria-live="assertive">
+          <div>
+            <strong>Action unsuccessful</strong>
+            <span>{message}</span>
+          </div>
+          <button type="button" onClick={() => setMessage(null)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
       ) : null}
 
       {loading && !options ? (
@@ -675,6 +702,12 @@ export function CreateJobPanel({
                       options.permittedEwcCodeIds.includes(
                         material.ewcCodeId,
                       );
+                    const regulatory =
+                      options.regulatoryAcceptanceAuthorities.find(
+                        (item) =>
+                          item.acceptedEwcCodeId ===
+                          material.ewcCodeId,
+                      );
 
                     return (
                       <option
@@ -683,9 +716,11 @@ export function CreateJobPanel({
                       >
                         {material.isFavourite ? "★ " : ""}
                         {material.name} · {material.ewcCode}
-                        {ownAllowed
-                          ? ""
-                          : " · NOT ON SITE PERMIT"}
+                        {regulatory
+                          ? ` · REGULATORY AUTHORITY · ${regulatory.basis.replaceAll("_", " ")}`
+                          : ownAllowed
+                            ? " · EXACT PERMIT MATCH"
+                            : " · NOT AUTHORISED"}
                       </option>
                     );
                   })}
@@ -724,6 +759,141 @@ export function CreateJobPanel({
                     </span>
                   ) : null}
                 </div>
+              </div>
+            ) : null}
+
+            {direction === "incoming" ? (
+              <div className="pilot-material-check good">
+                <div>
+                  <strong>
+                    Additional waste items on this same lorry
+                  </strong>
+                  <span>
+                    One physical journey stays one Load. Each item is
+                    checked independently against this receiving site.
+                  </span>
+                </div>
+
+                <div className="pilot-material-checks">
+                  <button
+                    type="button"
+                    disabled={
+                      !materialProfileId ||
+                      additionalMaterialProfileIds.length >= 7
+                    }
+                    onClick={() =>
+                      setAdditionalMaterialProfileIds((current) => [
+                        ...current,
+                        "",
+                      ])
+                    }
+                  >
+                    + Add waste item
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {direction === "incoming" &&
+            additionalMaterialProfileIds.length > 0 ? (
+              <div className="pilot-create-grid one">
+                {additionalMaterialProfileIds.map((value, index) => {
+                  const selected = additionalMaterials[index];
+                  const regulatory = selected
+                    ? options.regulatoryAcceptanceAuthorities.find(
+                        (item) =>
+                          item.acceptedEwcCodeId ===
+                          selected.ewcCodeId,
+                      )
+                    : null;
+
+                  return (
+                    <label key={`waste-item-${index}`}>
+                      <span>Waste item {index + 2}</span>
+                      <div className="inline-form-row">
+                        <select
+                          value={value}
+                          required
+                          onChange={(event) =>
+                            setAdditionalMaterialProfileIds((current) =>
+                              current.map((row, rowIndex) =>
+                                rowIndex === index
+                                  ? event.target.value
+                                  : row,
+                              ),
+                            )
+                          }
+                        >
+                          <option value="">
+                            Choose waste item {index + 2}
+                          </option>
+                          {options.materials.map((material) => {
+                            const accepted =
+                              options.permittedEwcCodeIds.includes(
+                                material.ewcCodeId,
+                              );
+                            const itemRegulatory =
+                              options.regulatoryAcceptanceAuthorities.find(
+                                (item) =>
+                                  item.acceptedEwcCodeId ===
+                                  material.ewcCodeId,
+                              );
+                            const alreadySelected =
+                              selectedWasteItemIds.includes(material.id) &&
+                              material.id !== value;
+
+                            return (
+                              <option
+                                key={material.id}
+                                value={material.id}
+                                disabled={alreadySelected}
+                              >
+                                {material.name} · {material.ewcCode}
+                                {itemRegulatory
+                                  ? ` · REGULATORY AUTHORITY · ${itemRegulatory.basis.replaceAll("_", " ")}`
+                                  : accepted
+                                    ? " · EXACT PERMIT MATCH"
+                                    : " · NOT AUTHORISED"}
+                              </option>
+                            );
+                          })}
+                        </select>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAdditionalMaterialProfileIds((current) =>
+                              current.filter(
+                                (_, rowIndex) => rowIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+
+                      {selected ? (
+                        <small>
+                          {selected.ewcCode} ·{" "}
+                          {regulatory
+                            ? "Regulatory authority"
+                            : options.permittedEwcCodeIds.includes(
+                                  selected.ewcCodeId,
+                                )
+                              ? "Exact permit match"
+                              : "Not authorised"}
+                        </small>
+                      ) : null}
+                    </label>
+                  );
+                })}
+
+                {!wasteItemsAreUnique ? (
+                  <small>
+                    Each Waste Item must use a different Material Profile.
+                  </small>
+                ) : null}
               </div>
             ) : null}
           </section>
@@ -1132,9 +1302,9 @@ export function CreateJobPanel({
               </strong>
 
               <span>
-                Creates the canonical Job and{" "}
-                {Number(plannedLoads) || 0} planned{" "}
-                {Number(plannedLoads) === 1 ? "Load" : "Loads"}.
+                Saves the Job and {Number(plannedLoads) || 0} planned{" "}
+                {Number(plannedLoads) === 1 ? "Load" : "Loads"} to encrypted
+                local storage first. Cloud sync follows automatically.
               </span>
             </div>
 
@@ -1142,7 +1312,11 @@ export function CreateJobPanel({
               type="submit"
               disabled={busy || !requiredReady}
             >
-              {busy ? "Creating Job…" : "Create Job"}
+              {busy
+                ? "Creating Job…"
+                : cloudReachable
+                  ? "Create Job"
+                  : "Create Job offline"}
             </button>
           </div>
         </form>

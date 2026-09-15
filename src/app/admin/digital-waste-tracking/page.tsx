@@ -8,6 +8,8 @@ import { database } from "@/db/database";
 import {
   carrierAssignments,
   incidents,
+  jobLoads,
+  jobLoadWasteItems,
   organisations,
   users,
   wasteListings,
@@ -16,6 +18,16 @@ import {
   wasteTrackingSubmissions,
 } from "@/db/schema";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
+
+type DwtWasteItemSummary = {
+  itemNumber: number;
+  description: string | null;
+  factualEwc: string | null;
+  weight: string | null;
+  acceptance: string | null;
+  authorisationEwc: string | null;
+  source: "canonical" | "payload";
+};
 
 /*
   DWT CONTROL ROOM
@@ -39,6 +51,8 @@ export default async function AdminDigitalWasteTrackingPage() {
     assignmentRows,
     receiptRows,
     incidentRows,
+    loadRows,
+    canonicalWasteItemRows,
   ] = await Promise.all([
     database
       .select()
@@ -52,6 +66,33 @@ export default async function AdminDigitalWasteTrackingPage() {
     database.select().from(carrierAssignments),
     database.select().from(wasteReceipts),
     database.select().from(incidents),
+    database
+      .select({
+        id: jobLoads.id,
+        jobId: jobLoads.jobId,
+        loadNumber: jobLoads.loadNumber,
+        status: jobLoads.status,
+        completedAt: jobLoads.completedAt,
+      })
+      .from(jobLoads),
+    database
+      .select({
+        jobLoadId: jobLoadWasteItems.jobLoadId,
+        itemNumber: jobLoadWasteItems.itemNumber,
+        ewcCodeSnapshot: jobLoadWasteItems.ewcCodeSnapshot,
+        wasteDescriptionSnapshot: jobLoadWasteItems.wasteDescriptionSnapshot,
+        weightAmount: jobLoadWasteItems.weightAmount,
+        weightMetric: jobLoadWasteItems.weightMetric,
+        permitEwcMatchType: jobLoadWasteItems.permitEwcMatchType,
+        permitEwcBasis: jobLoadWasteItems.permitEwcBasis,
+        permitEwcReference: jobLoadWasteItems.permitEwcReference,
+        permitEwcCodeSnapshot: jobLoadWasteItems.permitEwcCodeSnapshot,
+        regulatoryRuleKeySnapshot:
+          jobLoadWasteItems.regulatoryRuleKeySnapshot,
+        qualifyingAuthorisationRefSnapshot:
+          jobLoadWasteItems.qualifyingAuthorisationRefSnapshot,
+      })
+      .from(jobLoadWasteItems),
   ]);
 
   const organisationById = new Map(
@@ -71,6 +112,52 @@ export default async function AdminDigitalWasteTrackingPage() {
 
   const settingsByOrganisationId = new Map(
     settings.map((setting) => [setting.organisationId, setting]),
+  );
+
+  const loadById = new Map(loadRows.map((load) => [load.id, load]));
+
+  const canonicalWasteItemsByLoadId = new Map<
+    string,
+    DwtWasteItemSummary[]
+  >();
+
+  for (const item of canonicalWasteItemRows) {
+    const current = canonicalWasteItemsByLoadId.get(item.jobLoadId) ?? [];
+
+    const acceptanceParts = [
+      item.permitEwcMatchType
+        ? formatStatus(item.permitEwcMatchType)
+        : null,
+      item.permitEwcBasis ??
+        item.regulatoryRuleKeySnapshot ??
+        item.permitEwcReference ??
+        item.qualifyingAuthorisationRefSnapshot,
+    ].filter(isNonEmptyString);
+
+    current.push({
+      itemNumber: item.itemNumber,
+      description: item.wasteDescriptionSnapshot,
+      factualEwc: item.ewcCodeSnapshot,
+      weight:
+        item.weightAmount === null || item.weightAmount === undefined
+          ? null
+          : `${item.weightAmount} ${item.weightMetric}`,
+      acceptance:
+        acceptanceParts.length > 0 ? acceptanceParts.join(" · ") : null,
+      authorisationEwc: item.permitEwcCodeSnapshot,
+      source: "canonical",
+    });
+
+    canonicalWasteItemsByLoadId.set(item.jobLoadId, current);
+  }
+
+  Array.from(canonicalWasteItemsByLoadId.values()).forEach(
+    (items: DwtWasteItemSummary[]) => {
+      items.sort(
+        (a: DwtWasteItemSummary, b: DwtWasteItemSummary) =>
+          a.itemNumber - b.itemNumber,
+      );
+    },
   );
 
   const acceptedStatuses = ["accepted", "accepted_with_warnings"];
@@ -130,6 +217,18 @@ export default async function AdminDigitalWasteTrackingPage() {
       ["rejected", "failed"].includes(group.latest.status),
   );
 
+  const acceptedByJobLoadId = new Set(
+    acceptedSubmissions
+      .map((submission) => cleanString(submission.jobLoadId))
+      .filter(isNonEmptyString),
+  );
+
+  const acceptedByReceiptId = new Set(
+    acceptedSubmissions
+      .map((submission) => cleanString(submission.receiptId))
+      .filter(isNonEmptyString),
+  );
+
   const acceptedByAssignmentId = new Set(
     acceptedSubmissions
       .map((submission) => cleanString(submission.assignmentId))
@@ -187,6 +286,8 @@ export default async function AdminDigitalWasteTrackingPage() {
 
   const readyForDwtReceipts = confirmedReceipts
     .filter((receipt) => {
+      const jobLoadId = cleanString(receipt.jobLoadId);
+      const receiptId = cleanString(receipt.id);
       const assignmentId = cleanString(receipt.assignmentId);
 
       const listingId =
@@ -194,6 +295,13 @@ export default async function AdminDigitalWasteTrackingPage() {
         receipt.listingId === undefined
           ? null
           : String(receipt.listingId);
+
+      const canonicalLoad = jobLoadId ? loadById.get(jobLoadId) : null;
+      const canonicalLoadComplete = Boolean(
+        canonicalLoad &&
+          (canonicalLoad.status === "completed" ||
+            canonicalLoad.completedAt),
+      );
 
       const assignmentComplete = assignmentId
         ? completedAssignmentById.has(assignmentId)
@@ -204,23 +312,28 @@ export default async function AdminDigitalWasteTrackingPage() {
         : false;
 
       const alreadySubmitted =
+        (jobLoadId ? acceptedByJobLoadId.has(jobLoadId) : false) ||
+        (receiptId ? acceptedByReceiptId.has(receiptId) : false) ||
         (assignmentId
           ? acceptedByAssignmentId.has(assignmentId)
           : false) ||
         (listingId ? acceptedByListingId.has(listingId) : false);
 
-      const hasUnresolvedIncident =
-        (assignmentId
+      const hasUnresolvedLegacyIncident =
+        !jobLoadId &&
+        ((assignmentId
           ? unresolvedIncidentByAssignmentId.has(assignmentId)
           : false) ||
-        (listingId
-          ? unresolvedIncidentByListingId.has(listingId)
-          : false);
+          (listingId
+            ? unresolvedIncidentByListingId.has(listingId)
+            : false));
 
       return (
-        (assignmentComplete || listingComplete) &&
+        (canonicalLoadComplete ||
+          assignmentComplete ||
+          listingComplete) &&
         !alreadySubmitted &&
-        !hasUnresolvedIncident
+        !hasUnresolvedLegacyIncident
       );
     })
     .slice(0, 8);
@@ -292,6 +405,10 @@ export default async function AdminDigitalWasteTrackingPage() {
         submission.payloadSnapshot,
       );
 
+      const canonicalWasteItems = submission.jobLoadId
+        ? canonicalWasteItemsByLoadId.get(submission.jobLoadId) ?? []
+        : [];
+
       return {
         id: submission.id,
         status: submission.status,
@@ -306,6 +423,8 @@ export default async function AdminDigitalWasteTrackingPage() {
           submittedBy?.email ??
           "System",
         listingName: listing?.name ?? null,
+        jobLoadId: submission.jobLoadId,
+        receiptId: submission.receiptId,
         listingId: submission.listingId,
         assignmentId: submission.assignmentId,
         submittedAt: submission.submittedAt,
@@ -319,11 +438,12 @@ export default async function AdminDigitalWasteTrackingPage() {
         errorsCount: getJsonArrayLength(
           submission.validationErrors,
         ),
-        description: payloadSummary.description,
-        ewcCodes: payloadSummary.ewcCodes,
+        wasteItems:
+          canonicalWasteItems.length > 0
+            ? canonicalWasteItems
+            : payloadSummary.wasteItems,
         carrierName: payloadSummary.carrierName,
         receiverName: payloadSummary.receiverName,
-        weight: payloadSummary.weight,
       };
     });
 
@@ -357,14 +477,14 @@ export default async function AdminDigitalWasteTrackingPage() {
               </Link>
 
               <Link
-                href="/admin/audit/compliance"
+                href="/admin/audit?q=dwt"
                 className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-bold text-white transition hover:border-red-500 hover:text-red-400"
               >
                 Compliance audit
               </Link>
 
               <Link
-                href="/admin/audit/live"
+                href="/admin/audit"
                 className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 text-sm font-bold text-white transition hover:border-red-500 hover:text-red-400"
               >
                 Live activity
@@ -611,8 +731,8 @@ export default async function AdminDigitalWasteTrackingPage() {
       <Panel
         eyebrow="Movement Register"
         title="DWT movement groups"
-        description="One movement can have multiple attempts. Attempts remain grouped for audit visibility."
-        actionHref="/admin/audit/chain"
+        description="One canonical Job Load/receipt can have multiple attempts. Historical rejected attempts remain visible, while the latest attempt represents the current submission state."
+        actionHref="/admin/audit?q=dwt"
         actionLabel="Chain of custody"
       >
         <div className="grid gap-4 md:grid-cols-3">
@@ -666,6 +786,17 @@ export default async function AdminDigitalWasteTrackingPage() {
                             ID: {submission.wasteTrackingId}
                           </Pill>
                         ) : null}
+
+                        {submission.jobLoadId ? (
+                          <Link
+                            href={`/admin/loads/${submission.jobLoadId}`}
+                            className="rounded-full border border-black/10 bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-black/60 transition hover:border-red-300 hover:text-red-600"
+                          >
+                            Load {loadById.get(submission.jobLoadId)?.loadNumber ?? ""}
+                          </Link>
+                        ) : submission.receiptId ? (
+                          <Pill>Receipt: {submission.receiptId.slice(0, 8)}</Pill>
+                        ) : null}
                       </div>
 
                       <h3 className="mt-3 text-sm font-black text-black">
@@ -686,7 +817,7 @@ export default async function AdminDigitalWasteTrackingPage() {
                     <div className="flex flex-wrap gap-2">
                       {submission.listingId ? (
                         <Link
-                          href={`/admin/audit/chain/${submission.listingId}`}
+                          href={`/admin/audit?q=${encodeURIComponent(String(submission.listingId))}`}
                           className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
                         >
                           Chain
@@ -694,7 +825,7 @@ export default async function AdminDigitalWasteTrackingPage() {
                       ) : null}
 
                       <Link
-                        href={`/admin/audit/entity?entityId=${encodeURIComponent(
+                        href={`/admin/audit?q=${encodeURIComponent(
                           group.entityId,
                         )}`}
                         className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
@@ -794,17 +925,38 @@ export default async function AdminDigitalWasteTrackingPage() {
                       </TableCell>
 
                       <TableCell>
-                        <div className="max-w-[20rem]">
-                          <p className="truncate font-bold text-black">
-                            {submission.description ||
-                              "No description"}
-                          </p>
-                          <p className="mt-1 text-xs text-black/35">
-                            EWC:{" "}
-                            {submission.ewcCodes || "—"} •{" "}
-                            {submission.weight || "No weight"}
-                          </p>
-                          <p className="mt-1 text-xs text-black/35">
+                        <div className="max-w-[28rem] space-y-2">
+                          {submission.wasteItems.length === 0 ? (
+                            <p className="text-xs font-semibold text-black/35">
+                              No waste-item summary available
+                            </p>
+                          ) : (
+                            submission.wasteItems.map((item) => (
+                              <div
+                                key={`${submission.id}:${item.itemNumber}`}
+                                className="rounded-xl border border-black/10 bg-black/[0.02] p-2.5"
+                              >
+                                <p className="text-xs font-black text-black">
+                                  Item {item.itemNumber} · Factual EWC:{" "}
+                                  {item.factualEwc ?? "—"}
+                                </p>
+                                <p className="mt-1 text-xs text-black/50">
+                                  {item.description ?? "No description"} ·{" "}
+                                  {item.weight ?? "No weight"}
+                                </p>
+                                {item.acceptance ? (
+                                  <p className="mt-1 text-[10px] font-semibold text-black/35">
+                                    Acceptance: {item.acceptance}
+                                    {item.authorisationEwc
+                                      ? ` · Authorisation EWC ${item.authorisationEwc}`
+                                      : ""}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))
+                          )}
+
+                          <p className="text-xs text-black/35">
                             {submission.carrierName ||
                               "Carrier not recorded"}{" "}
                             →{" "}
@@ -849,18 +1001,29 @@ export default async function AdminDigitalWasteTrackingPage() {
 
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-2">
-                          {submission.listingId ? (
+                          {submission.jobLoadId ? (
                             <Link
-                              href={`/admin/audit/chain/${submission.listingId}`}
+                              href={`/admin/loads/${submission.jobLoadId}`}
                               className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
                             >
-                              Chain
+                              Load
+                            </Link>
+                          ) : null}
+
+                          {submission.listingId ? (
+                            <Link
+                              href={`/admin/audit?q=${encodeURIComponent(String(submission.listingId))}`}
+                              className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/60 transition hover:border-red-300 hover:text-red-600"
+                            >
+                              Legacy audit
                             </Link>
                           ) : null}
 
                           <Link
-                            href={`/admin/audit/entity?entityId=${encodeURIComponent(
-                              submission.assignmentId ??
+                            href={`/admin/audit?q=${encodeURIComponent(
+                              submission.jobLoadId ??
+                                submission.receiptId ??
+                                submission.assignmentId ??
                                 String(
                                   submission.listingId ??
                                     submission.id,
@@ -1077,6 +1240,7 @@ function ReadyReceiptCard({
   receipt: {
     id: string;
     organisationId: string;
+    jobLoadId: string | null;
     assignmentId: string | null;
     listingId: number | null;
     status: string;
@@ -1104,14 +1268,19 @@ function ReadyReceiptCard({
         {formatDateTime(receipt.receivedAt)}
       </p>
 
-      {receipt.assignmentId ? (
+      {receipt.jobLoadId ? (
         <Link
-          href={`/admin/audit/entity?entityId=${encodeURIComponent(
-            receipt.assignmentId,
-          )}`}
+          href={`/admin/loads/${receipt.jobLoadId}`}
           className="mt-3 inline-flex rounded-full bg-black px-3 py-1.5 text-xs font-black text-white transition hover:bg-red-600"
         >
-          Inspect →
+          Inspect Load →
+        </Link>
+      ) : receipt.assignmentId ? (
+        <Link
+          href={`/admin/audit?q=${encodeURIComponent(receipt.assignmentId)}`}
+          className="mt-3 inline-flex rounded-full bg-black px-3 py-1.5 text-xs font-black text-white transition hover:bg-red-600"
+        >
+          Legacy audit →
         </Link>
       ) : null}
     </div>
@@ -1245,6 +1414,8 @@ function buildMovementGroups(submissions: SubmissionRow[]) {
       groups.set(key, {
         key,
         entityId:
+          submission.jobLoadId ??
+          submission.receiptId ??
           submission.assignmentId ??
           String(
             submission.listingId ??
@@ -1276,6 +1447,14 @@ function buildMovementGroups(submissions: SubmissionRow[]) {
 }
 
 function getMovementKey(submission: SubmissionRow) {
+  if (submission.jobLoadId) {
+    return `job-load:${submission.jobLoadId}`;
+  }
+
+  if (submission.receiptId) {
+    return `receipt:${submission.receiptId}`;
+  }
+
   if (submission.assignmentId) {
     return `assignment:${submission.assignmentId}`;
   }
@@ -1370,23 +1549,42 @@ function getPayloadSummary(value: unknown) {
 
   if (!isRecord(parsed)) {
     return {
-      description: null,
-      ewcCodes: null,
+      wasteItems: [] as DwtWasteItemSummary[],
       carrierName: null,
       receiverName: null,
-      weight: null,
     };
   }
 
-  const wasteItems = parsed.wasteItems;
+  const rawWasteItems = Array.isArray(parsed.wasteItems)
+    ? parsed.wasteItems
+    : [];
 
-  const firstWasteItem =
-    Array.isArray(wasteItems) && isRecord(wasteItems[0])
-      ? wasteItems[0]
-      : null;
+  const wasteItems: DwtWasteItemSummary[] = [];
 
-  const ewcCodes = firstWasteItem?.ewcCodes;
-  const weight = firstWasteItem?.weight;
+  rawWasteItems.forEach((rawItem, index) => {
+    if (!isRecord(rawItem)) return;
+
+    const rawEwcCodes = Array.isArray(rawItem.ewcCodes)
+      ? rawItem.ewcCodes
+          .filter((code): code is string => typeof code === "string")
+          .map((code) => code.trim())
+          .filter(Boolean)
+      : [];
+
+    wasteItems.push({
+      itemNumber: index + 1,
+      description:
+        typeof rawItem.wasteDescription === "string"
+          ? rawItem.wasteDescription
+          : null,
+      factualEwc:
+        rawEwcCodes.length > 0 ? rawEwcCodes.join(", ") : null,
+      weight: formatPayloadWeight(rawItem.weight),
+      acceptance: null,
+      authorisationEwc: null,
+      source: "payload",
+    });
+  });
 
   const carrier = isRecord(parsed.carrier)
     ? parsed.carrier
@@ -1397,26 +1595,15 @@ function getPayloadSummary(value: unknown) {
     : null;
 
   return {
-    description:
-      typeof firstWasteItem?.wasteDescription === "string"
-        ? firstWasteItem.wasteDescription
-        : null,
-
-    ewcCodes: Array.isArray(ewcCodes)
-      ? ewcCodes.join(", ")
-      : null,
-
+    wasteItems,
     carrierName:
       typeof carrier?.organisationName === "string"
         ? carrier.organisationName
         : null,
-
     receiverName:
       typeof receiver?.siteName === "string"
         ? receiver.siteName
         : null,
-
-    weight: formatPayloadWeight(weight),
   };
 }
 

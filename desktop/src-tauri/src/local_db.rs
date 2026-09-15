@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, State};
 const DB_FILE_NAME: &str = "waste-x-local.db";
 const KEYRING_SERVICE: &str = "com.wastex.desktop.local-database";
 const KEYRING_ACCOUNT: &str = "database-key-v1";
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 pub struct LocalDb {
     connection: Mutex<Connection>,
@@ -105,6 +105,47 @@ fn apply_schema_migrations(connection: &mut Connection) -> rusqlite::Result<()> 
         transaction.execute(
             "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
             params![3_i64],
+        )?;
+        transaction.commit()?;
+    }
+
+    if current_version < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V4)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
+            params![4_i64],
+        )?;
+        transaction.commit()?;
+    }
+
+
+    if current_version < 5 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V5)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
+            params![5_i64],
+        )?;
+        transaction.commit()?;
+    }
+
+    if current_version < 6 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V6)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
+            params![6_i64],
+        )?;
+        transaction.commit()?;
+    }
+
+    if current_version < 7 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V7)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_schema_migration (version, applied_at) VALUES (?1, datetime('now'))",
+            params![7_i64],
         )?;
         transaction.commit()?;
     }
@@ -533,4 +574,157 @@ CREATE TABLE IF NOT EXISTS local_print_event (
 );
 CREATE INDEX IF NOT EXISTS local_print_event_ticket_idx
     ON local_print_event(ticket_id, created_at);
+"#;
+
+/* WASTE_X_LOCAL_SUPPORT_SCHEMA_V4 */
+const MIGRATION_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS local_support_ticket (
+    id TEXT PRIMARY KEY,
+    organisation_id TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    status TEXT NOT NULL,
+    assigned_to_user_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS local_support_ticket_org_updated_idx
+    ON local_support_ticket(organisation_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS local_support_message (
+    id TEXT PRIMARY KEY,
+    organisation_id TEXT NOT NULL,
+    ticket_id TEXT NOT NULL,
+    sender_user_id TEXT NOT NULL,
+    sender_name TEXT,
+    sender_role TEXT,
+    author_kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(ticket_id) REFERENCES local_support_ticket(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS local_support_message_ticket_idx
+    ON local_support_message(ticket_id, created_at);
+
+CREATE TABLE IF NOT EXISTS local_support_queue (
+    mutation_id TEXT PRIMARY KEY,
+    organisation_id TEXT NOT NULL,
+    ticket_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    operation TEXT NOT NULL CHECK(operation IN ('ticket.create','ticket.reply')),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING'
+      CHECK(status IN ('PENDING','SENDING','SYNCED','FAILED')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS local_support_queue_status_idx
+    ON local_support_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS local_support_queue_ticket_idx
+    ON local_support_queue(ticket_id, created_at);
+"#;
+
+/* WASTE_X_DESKTOP_EWC_EQUIVALENCE_LOCAL_SCHEMA_V1 */
+const MIGRATION_V5: &str = r#"
+CREATE TABLE IF NOT EXISTS local_permit_ewc_equivalence_snapshot (
+    id TEXT PRIMARY KEY,
+    organisation_id TEXT NOT NULL,
+    permit_id TEXT NOT NULL,
+    permitted_ewc_code_id TEXT NOT NULL,
+    accepted_ewc_code_id TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    valid_from TEXT,
+    valid_until TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS local_permit_ewc_equivalence_lookup_idx
+    ON local_permit_ewc_equivalence_snapshot(
+        organisation_id,
+        permit_id,
+        accepted_ewc_code_id,
+        active
+    );
+"#;
+
+/* WASTE_X_DESKTOP_REGULATORY_RULE_SCOPE_LOCAL_SCHEMA_V1 */
+const MIGRATION_V6: &str = r#"
+CREATE TABLE IF NOT EXISTS local_regulatory_acceptance_rule_snapshot (
+    id TEXT PRIMARY KEY,
+    organisation_id TEXT NOT NULL,
+    site_id TEXT NOT NULL,
+    permit_id TEXT NOT NULL,
+    activation_id TEXT NOT NULL,
+    site_rule_selection_id TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    rule_key TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    authority_code TEXT NOT NULL,
+    authority_type TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    regulator TEXT NOT NULL,
+    jurisdiction TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    qualifying_authorisation_ref TEXT,
+    actual_ewc_code_id TEXT NOT NULL,
+    underlying_authorisation_ewc_code_id TEXT,
+    requires_underlying_permit_code INTEGER NOT NULL DEFAULT 0,
+    requires_manual_confirmation INTEGER NOT NULL DEFAULT 1,
+    authority_conditions_confirmed INTEGER NOT NULL DEFAULT 0,
+    site_rule_confirmed INTEGER NOT NULL DEFAULT 0,
+    activation_valid_from TEXT,
+    activation_valid_until TEXT,
+    authority_valid_from TEXT,
+    authority_valid_until TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS local_reg_acceptance_lookup_idx
+    ON local_regulatory_acceptance_rule_snapshot (
+        organisation_id,
+        site_id,
+        permit_id,
+        actual_ewc_code_id,
+        regulator,
+        active
+    );
+CREATE INDEX IF NOT EXISTS local_reg_acceptance_underlying_idx
+    ON local_regulatory_acceptance_rule_snapshot (
+        permit_id,
+        underlying_authorisation_ewc_code_id
+    );
+"#;
+
+/* WASTE_X_LOCAL_CLOUD_MUTATION_QUEUE_V7 */
+const MIGRATION_V7: &str = r#"
+CREATE TABLE IF NOT EXISTS local_cloud_mutation_queue (
+    mutation_id TEXT PRIMARY KEY,
+    organisation_id TEXT NOT NULL,
+    mutation_kind TEXT NOT NULL CHECK(mutation_kind IN ('transport','job','partner')),
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING'
+      CHECK(status IN ('PENDING','SENDING','SYNCED','FAILED')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS local_cloud_mutation_queue_status_idx
+    ON local_cloud_mutation_queue(organisation_id, mutation_kind, status, created_at);
+
+CREATE INDEX IF NOT EXISTS local_cloud_mutation_queue_entity_idx
+    ON local_cloud_mutation_queue(organisation_id, entity_type, entity_id, created_at);
 "#;

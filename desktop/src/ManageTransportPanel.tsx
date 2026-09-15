@@ -143,12 +143,17 @@ export function ManageTransportPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    if (!cloudReachable) {
-      setData(null);
-      return;
-    }
+  /* WASTE_X_DESKTOP_MANAGE_ACTION_TOAST_V1 */
+  useEffect(() => {
+    if (!message && !error) return;
+    const timer = window.setTimeout(() => {
+      setMessage(null);
+      setError(null);
+    }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [message, error]);
 
+  async function load() {
     setLoading(true);
     setError(null);
 
@@ -157,7 +162,6 @@ export function ManageTransportPanel({
         await invoke<TransportData>("desktop_transport_master_data"),
       );
     } catch (reason) {
-      setData(null);
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setLoading(false);
@@ -282,7 +286,7 @@ export function ManageTransportPanel({
 
     try {
       const result = await invoke<MutationResponse>(
-        "desktop_mutate_transport_master_data",
+        "desktop_mutate_transport_local",
         { input },
       );
 
@@ -299,7 +303,13 @@ export function ManageTransportPanel({
             },
       );
 
-      await invoke("desktop_refresh_bootstrap");
+      if (cloudReachable) {
+        try {
+          await invoke("desktop_sync_transport_mutations");
+        } catch {
+          // Local change is already durable and will retry automatically.
+        }
+      }
       await onMasterDataChanged();
 
       setMessage(
@@ -327,7 +337,7 @@ export function ManageTransportPanel({
     const result = await mutate({
       operation: driverDraft.id ? "driver.update" : "driver.create",
       data: {
-        ...(driverDraft.id ? { id: driverDraft.id } : {}),
+        id: driverDraft.id ?? crypto.randomUUID(),
         name: driverDraft.name,
         telephone: optional(driverDraft.telephone),
         email: optional(driverDraft.email),
@@ -355,7 +365,7 @@ export function ManageTransportPanel({
         ? "vehicle.update"
         : "vehicle.create",
       data: {
-        ...(vehicleDraft.id ? { id: vehicleDraft.id } : {}),
+        id: vehicleDraft.id ?? crypto.randomUUID(),
         registrationNumber: vehicleDraft.registrationNumber,
         vehicleType: optional(vehicleDraft.vehicleType),
         haulierCounterpartyId: optional(
@@ -383,28 +393,6 @@ export function ManageTransportPanel({
       (vehicle) => vehicle.id === selectedVehicleId,
     ) ?? null;
 
-  if (!cloudReachable) {
-    return (
-      <section className="pilot-screen pilot-scroll-screen">
-        <div className="pilot-page-heading">
-          <div>
-            <span className="eyebrow">Site master data</span>
-            <h1>Manage</h1>
-            <p>Drivers and Vehicles are canonical Cloud records.</p>
-          </div>
-        </div>
-
-        <div className="pilot-create-offline">
-          <strong>Connect to Waste X Cloud to manage master data.</strong>
-          <span>
-            Existing cached Drivers and Vehicles remain available to
-            site operations while offline.
-          </span>
-        </div>
-      </section>
-    );
-  }
-
   return (
     <section className="pilot-screen pilot-manage-screen">
       <div className="pilot-page-heading">
@@ -421,8 +409,7 @@ export function ManageTransportPanel({
           Mobile access & DWT administration remain on Web.
         </div>
       </div>
-
-      <div className="pilot-manage-tabs">
+<div className="pilot-manage-tabs">
         <button
           type="button"
           className={tab === "drivers" ? "active" : ""}
@@ -471,18 +458,37 @@ export function ManageTransportPanel({
       </div>
 
       {message ? (
-        <div className="pilot-manage-message good">{message}</div>
+        <div className="pilot-action-toast success" role="status" aria-live="polite">
+          <div>
+            <strong>Action completed</strong>
+            <span>{message}</span>
+          </div>
+          <button type="button" onClick={() => setMessage(null)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
       ) : null}
 
       {error ? (
-        <div className="pilot-manage-message bad">{error}</div>
+        <div className="pilot-action-toast error" role="alert" aria-live="assertive">
+          <div>
+            <strong>Action unsuccessful</strong>
+            <span>{error}</span>
+          </div>
+          <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
       ) : null}
 
       {tab === "hauliers" || tab === "sites" ? (
         <ManagePartnersPanel
           tab={tab}
           cloudReachable={cloudReachable}
-          onMasterDataChanged={onMasterDataChanged}
+          onMasterDataChanged={async () => {
+            await load();
+            await onMasterDataChanged();
+          }}
         />
       ) : loading && !data ? (
         <div className="empty-state">Loading master data…</div>

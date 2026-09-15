@@ -11,14 +11,15 @@ import {
 } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
+  auditEvents,
   drivers,
+  jobLoadWasteItems,
   jobLoads,
   jobs,
-  permitEwcCodes,
-  sitePermits,
   sites,
   vehicles,
 } from "@/db/schema";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 import { type ClientApiContext } from "./auth";
 
 export const syncEventSchema = z.object({
@@ -55,6 +56,23 @@ class SyncBusinessRuleError extends Error {
   }
 }
 
+/*
+ * WASTE_X_DESKTOP_COMPLETION_PAYLOAD_COMPAT_V1
+ *
+ * Desktop stores decimal weights as strings in its encrypted working-set
+ * payload. Older multi-item completion events therefore sent "8.200" rather
+ * than 8.2 for Waste Item allocations. Accept that exact wire-compatible
+ * representation at the Cloud boundary and normalise it to a number.
+ */
+const syncWasteItemWeightAmountSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed ? Number(trimmed) : value;
+  },
+  z.number().nonnegative().nullable().optional(),
+);
+
 const loadDetailsPayloadSchema = z.object({
   driverId: z.string().min(1).nullable().optional(),
   vehicleId: z.string().min(1).nullable().optional(),
@@ -65,7 +83,45 @@ const loadDetailsPayloadSchema = z.object({
   weightMetric: z.enum(["Grams", "Kilograms", "Tonnes"]).optional(),
   weightIsEstimate: z.boolean().optional(),
   notes: z.string().trim().nullable().optional(),
+  wasteItems: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        weightAmount: syncWasteItemWeightAmountSchema,
+        weightIsEstimate: z.boolean().optional(),
+      }),
+    )
+    .max(12)
+    .optional(),
 });
+
+const manualSiteArrivalReasonSchema = z.enum([
+  "DRIVER_NO_MOBILE_ACCESS",
+  "DRIVER_DEVICE_UNAVAILABLE",
+  "CONNECTIVITY_ISSUE",
+  "SITE_CONFIRMED_PHYSICAL_ARRIVAL",
+  "OTHER",
+]);
+
+const loadArrivedPayloadSchema = z.object({
+  arrivalMode: z
+    .enum(["external_carrier", "manual_site_fallback"])
+    .optional(),
+  manualArrivalReason: manualSiteArrivalReasonSchema.optional(),
+  manualArrivalNote: z.string().trim().max(2000).nullable().optional(),
+  physicalArrivalConfirmed: z.boolean().optional(),
+});
+
+const MANUAL_SITE_ARRIVAL_REASON_LABELS: Record<
+  z.infer<typeof manualSiteArrivalReasonSchema>,
+  string
+> = {
+  DRIVER_NO_MOBILE_ACCESS: "Driver has no Mobile access",
+  DRIVER_DEVICE_UNAVAILABLE: "Driver phone / device unavailable",
+  CONNECTIVITY_ISSUE: "Connectivity issue",
+  SITE_CONFIRMED_PHYSICAL_ARRIVAL: "Site confirmed physical arrival",
+  OTHER: "Other",
+};
 
 const siteTicketPayloadSchema = z.object({
   ticketNumber: z.string().trim().min(1).max(200),
@@ -222,28 +278,264 @@ async function validateIncomingPermit(
   siteId: string | null,
   ewcCodeId: string | null,
 ) {
-  if (!permitId || !siteId || !ewcCodeId) throw new SyncBusinessRuleError("PERMIT_MISMATCH");
-  const permit = await tx.query.sitePermits.findFirst({
-    where: and(
-      eq(sitePermits.id, permitId),
-      eq(sitePermits.organisationId, organisationId),
-      eq(sitePermits.siteId, siteId),
-      eq(sitePermits.status, "active"),
-    ),
-    columns: { id: true },
-  });
-  if (!permit) throw new SyncBusinessRuleError("PERMIT_MISMATCH");
-  const permittedEwc = await tx.query.permitEwcCodes.findFirst({
-    where: and(
-      eq(permitEwcCodes.organisationId, organisationId),
-      eq(permitEwcCodes.permitId, permitId),
-      eq(permitEwcCodes.ewcCodeId, ewcCodeId),
-      eq(permitEwcCodes.isActive, true),
-    ),
-    columns: { ewcCodeId: true },
-  });
-  if (!permittedEwc) throw new SyncBusinessRuleError("PERMIT_MISMATCH");
+  if (!permitId || !siteId || !ewcCodeId) {
+    throw new SyncBusinessRuleError("PERMIT_MISMATCH");
+  }
+
+  const acceptance = await resolvePermitEwcAcceptance({
+      organisationId,
+      permitId,
+      siteId,
+      ewcCodeId,
+    }, tx);
+
+  if (!acceptance.allowed) {
+    throw new SyncBusinessRuleError("PERMIT_MISMATCH");
+  }
+
+  return acceptance;
 }
+
+async function syncOperationalWasteItems(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  organisationId: string,
+  jobLoadId: string,
+) {
+  return tx.query.jobLoadWasteItems.findMany({
+    where: and(
+      eq(jobLoadWasteItems.organisationId, organisationId),
+      eq(jobLoadWasteItems.jobLoadId, jobLoadId),
+    ),
+    orderBy: (item, { asc }) => [asc(item.itemNumber)],
+  });
+}
+
+function syncAllocationTolerance(
+  metric: "Grams" | "Kilograms" | "Tonnes",
+) {
+  if (metric === "Grams") return 1;
+  if (metric === "Kilograms") return 0.01;
+  return 0.001;
+}
+
+async function applySyncWasteItemAllocations(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  params: {
+    organisationId: string;
+    jobLoadId: string;
+    metric: "Grams" | "Kilograms" | "Tonnes";
+    netWeight: number | null;
+    inputs:
+      | Array<{
+          id: string;
+          weightAmount?: number | null;
+          weightIsEstimate?: boolean;
+        }>
+      | undefined;
+    requireReconciled: boolean;
+  },
+) {
+  const items = await syncOperationalWasteItems(
+    tx,
+    params.organisationId,
+    params.jobLoadId,
+  );
+
+  if (items.length === 0) return;
+
+  const inputById = new Map(
+    (params.inputs ?? []).map((row) => [row.id, row]),
+  );
+
+  for (const item of items) {
+    const supplied = inputById.get(item.id);
+    if (!supplied) continue;
+
+    await tx
+      .update(jobLoadWasteItems)
+      .set({
+        weightAmount:
+          supplied.weightAmount === undefined ||
+          supplied.weightAmount === null
+            ? item.weightAmount
+            : supplied.weightAmount.toFixed(3),
+        weightMetric: params.metric,
+        weightIsEstimate:
+          supplied.weightIsEstimate ?? item.weightIsEstimate,
+        weightSource: "allocation",
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(jobLoadWasteItems.id, item.id),
+          eq(
+            jobLoadWasteItems.organisationId,
+            params.organisationId,
+          ),
+        ),
+      );
+  }
+
+  const refreshed = await syncOperationalWasteItems(
+    tx,
+    params.organisationId,
+    params.jobLoadId,
+  );
+
+  if (
+    refreshed.length === 1 &&
+    !refreshed[0].weightAmount &&
+    params.netWeight !== null &&
+    Number.isFinite(params.netWeight) &&
+    params.netWeight > 0
+  ) {
+    await tx
+      .update(jobLoadWasteItems)
+      .set({
+        weightAmount: params.netWeight.toFixed(3),
+        weightMetric: params.metric,
+        weightIsEstimate: false,
+        weightSource: "allocation",
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(jobLoadWasteItems.id, refreshed[0].id),
+          eq(
+            jobLoadWasteItems.organisationId,
+            params.organisationId,
+          ),
+        ),
+      );
+    return;
+  }
+
+  if (
+    !params.requireReconciled ||
+    params.netWeight === null ||
+    !Number.isFinite(params.netWeight) ||
+    params.netWeight <= 0
+  ) {
+    return;
+  }
+
+  const finalItems = await syncOperationalWasteItems(
+    tx,
+    params.organisationId,
+    params.jobLoadId,
+  );
+  const amounts = finalItems.map((item) =>
+    Number(item.weightAmount ?? "0"),
+  );
+
+  if (
+    amounts.some(
+      (amount) => !Number.isFinite(amount) || amount <= 0,
+    )
+  ) {
+    throw new SyncBusinessRuleError("WASTE_ITEM_WEIGHTS_REQUIRED");
+  }
+
+  const total = amounts.reduce((sum, amount) => sum + amount, 0);
+  if (
+    Math.abs(total - params.netWeight) >
+    syncAllocationTolerance(params.metric)
+  ) {
+    throw new SyncBusinessRuleError("WASTE_ITEM_WEIGHT_MISMATCH");
+  }
+}
+
+async function validateIncomingWasteItems(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  context: ClientApiContext,
+  load: typeof jobLoads.$inferSelect,
+) {
+  const items = await syncOperationalWasteItems(
+    tx,
+    context.organisationId,
+    load.id,
+  );
+
+  if (items.length === 0) {
+    return validateIncomingPermit(
+      tx,
+      context.organisationId,
+      load.sitePermitId,
+      load.ownSiteId,
+      load.ewcCodeId,
+    );
+  }
+
+  let primaryAcceptance:
+    | Awaited<ReturnType<typeof validateIncomingPermit>>
+    | null = null;
+
+  for (const item of items) {
+    const acceptance = await validateIncomingPermit(
+      tx,
+      context.organisationId,
+      load.sitePermitId,
+      load.ownSiteId,
+      item.ewcCodeId,
+    );
+
+    primaryAcceptance ??= acceptance;
+
+    await tx
+      .update(jobLoadWasteItems)
+      .set({
+        permitEwcMatchType: acceptance.matchType,
+        regulatoryAuthorityActivationId:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.activationId
+            : null,
+        regulatoryAcceptanceRuleId:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.authority.ruleId
+            : null,
+        regulatoryRuleKeySnapshot:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.authority.ruleKey
+            : null,
+        regulatoryRuleScopeSnapshot:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.authority.ruleScope
+            : null,
+        qualifyingAuthorisationRefSnapshot:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.authority.qualifyingAuthorisationRef
+            : null,
+        permitEwcBasis:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.basis
+            : null,
+        permitEwcReference:
+          acceptance.matchType === "regulatory_authority"
+            ? acceptance.reference
+            : null,
+        permitEwcCodeSnapshot:
+          acceptance.permittedEwcCode || item.ewcCodeSnapshot,
+        permitEwcCheckedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(jobLoadWasteItems.id, item.id),
+          eq(
+            jobLoadWasteItems.organisationId,
+            context.organisationId,
+          ),
+        ),
+      );
+  }
+
+  if (!primaryAcceptance) {
+    throw new SyncBusinessRuleError("PERMIT_MISMATCH");
+  }
+
+  return primaryAcceptance;
+}
+
 
 async function latestFieldWorkflowEvent(
   tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
@@ -272,14 +564,38 @@ async function currentFieldWorkflowStep(
   return previous ? normaliseFieldEventToStep(previous.eventType) : "ASSIGNED";
 }
 
+async function manualSiteArrivalExists(
+  tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
+  context: ClientApiContext,
+  loadId: string,
+) {
+  const [manualArrival] = await tx
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.organisationId, context.organisationId),
+        eq(auditEvents.entityType, "job_load"),
+        eq(auditEvents.entityId, loadId),
+        eq(auditEvents.action, "MANUAL_SITE_ARRIVAL_CONFIRMED"),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(manualArrival);
+}
+
 async function requireDriverDestinationForOwnTransport(
   tx: Parameters<Parameters<typeof database.transaction>[0]>[0],
   context: ClientApiContext,
   load: { id: string; driverId: string | null; haulierCounterpartyId: string | null },
 ) {
   if (!load.driverId || load.haulierCounterpartyId) return;
+
   const step = await currentFieldWorkflowStep(tx, context, load.id);
-  if (step !== "ARRIVED_DESTINATION") {
+  if (step === "ARRIVED_DESTINATION") return;
+
+  if (!(await manualSiteArrivalExists(tx, context, load.id))) {
     throw new SyncBusinessRuleError("DRIVER_DESTINATION_ARRIVAL_REQUIRED");
   }
 }
@@ -392,44 +708,183 @@ async function applyJobLoadEvent(
     case "FIELD_COLLECTED":
     case "FIELD_IN_TRANSIT":
     case "FIELD_ARRIVED_DESTINATION": {
-      if (["completed", "rejected", "cancelled"].includes(load.status)) {
+      const terminal = ["completed", "rejected", "cancelled"].includes(load.status);
+      const manualArrivalFallback = terminal
+        ? await manualSiteArrivalExists(tx, context, load.id)
+        : false;
+
+      if (terminal && !manualArrivalFallback) {
         throw new SyncBusinessRuleError("LOAD_IS_TERMINAL");
       }
+
+      /*
+       * A Driver phone may reconnect after the receiving site used the audited
+       * manual-arrival fallback and completed/rejected the transaction. Accept
+       * those genuine ordered Driver milestones as late evidence, but never let
+       * them move the canonical site-owned load status backwards.
+       */
       await validateFieldWorkflowTransition(tx, context, event);
-      const arrivedAtDestination = event.eventType === "FIELD_ARRIVED_DESTINATION";
-      await tx.update(jobLoads).set({
-        status:
-          arrivedAtDestination && load.direction === "incoming" && load.status === "planned"
-            ? "arrived"
-            : load.status,
-        receivedAt:
-          arrivedAtDestination && load.direction === "incoming"
-            ? load.receivedAt ?? new Date(event.occurredAt)
-            : load.receivedAt,
-        movementAt:
-          arrivedAtDestination ? load.movementAt ?? new Date(event.occurredAt) : load.movementAt,
-        updatedAt: now,
-      }).where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
+
+      if (!terminal) {
+        const arrivedAtDestination =
+          event.eventType === "FIELD_ARRIVED_DESTINATION";
+
+        await tx.update(jobLoads).set({
+          status:
+            arrivedAtDestination && load.direction === "incoming" && load.status === "planned"
+              ? "arrived"
+              : load.status,
+          receivedAt:
+            arrivedAtDestination && load.direction === "incoming"
+              ? load.receivedAt ?? new Date(event.occurredAt)
+              : load.receivedAt,
+          movementAt:
+            arrivedAtDestination ? load.movementAt ?? new Date(event.occurredAt) : load.movementAt,
+          updatedAt: now,
+        }).where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
+      }
+
       break;
     }
 
     case "LOAD_ARRIVED": {
-      if (load.direction !== "incoming") throw new SyncBusinessRuleError("INCOMING_ONLY_ACTION");
-      if (load.status !== "planned") throw new SyncBusinessRuleError("LOAD_NOT_PLANNED");
-      if (load.driverId && !load.haulierCounterpartyId) {
-        throw new SyncBusinessRuleError("DRIVER_DESTINATION_ARRIVAL_REQUIRED");
+      if (load.direction !== "incoming") {
+        throw new SyncBusinessRuleError("INCOMING_ONLY_ACTION");
       }
-      if (!load.wasteDescriptionSnapshot?.trim()) throw new SyncBusinessRuleError("WASTE_DESCRIPTION_REQUIRED");
-      if (!load.driverId) throw new SyncBusinessRuleError("DRIVER_REQUIRED");
-      if (!load.vehicleId) throw new SyncBusinessRuleError("VEHICLE_REQUIRED");
-      await validateDriver(tx, context.organisationId, load.driverId, load.haulierCounterpartyId);
-      await validateVehicle(tx, context.organisationId, load.vehicleId, load.haulierCounterpartyId);
-      await tx.update(jobLoads).set({
-        status: "arrived",
-        receivedAt: load.receivedAt ?? new Date(event.occurredAt),
-        movementAt: load.movementAt ?? new Date(event.occurredAt),
-        updatedAt: now,
-      }).where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
+      if (load.status !== "planned") {
+        throw new SyncBusinessRuleError("LOAD_NOT_PLANNED");
+      }
+
+      const parsed = loadArrivedPayloadSchema.safeParse(event.payload ?? {});
+      if (!parsed.success) {
+        throw new SyncBusinessRuleError("INVALID_LOAD_ARRIVAL");
+      }
+
+      const ownTransport = Boolean(
+        load.driverId && !load.haulierCounterpartyId,
+      );
+      const manualSiteFallback =
+        ownTransport &&
+        parsed.data.arrivalMode === "manual_site_fallback";
+
+      if (ownTransport && !manualSiteFallback) {
+        throw new SyncBusinessRuleError(
+          "DRIVER_DESTINATION_ARRIVAL_REQUIRED",
+        );
+      }
+
+      if (manualSiteFallback) {
+        if (!parsed.data.physicalArrivalConfirmed) {
+          throw new SyncBusinessRuleError(
+            "MANUAL_ARRIVAL_CONFIRMATION_REQUIRED",
+          );
+        }
+        if (!parsed.data.manualArrivalReason) {
+          throw new SyncBusinessRuleError(
+            "MANUAL_ARRIVAL_REASON_REQUIRED",
+          );
+        }
+        if (
+          parsed.data.manualArrivalReason === "OTHER" &&
+          (parsed.data.manualArrivalNote?.trim().length ?? 0) < 3
+        ) {
+          throw new SyncBusinessRuleError(
+            "MANUAL_ARRIVAL_OTHER_NOTE_REQUIRED",
+          );
+        }
+      }
+
+      if (!load.wasteDescriptionSnapshot?.trim()) {
+        throw new SyncBusinessRuleError("WASTE_DESCRIPTION_REQUIRED");
+      }
+      if (!load.driverId) {
+        throw new SyncBusinessRuleError("DRIVER_REQUIRED");
+      }
+      if (!load.vehicleId) {
+        throw new SyncBusinessRuleError("VEHICLE_REQUIRED");
+      }
+
+      await validateDriver(
+        tx,
+        context.organisationId,
+        load.driverId,
+        load.haulierCounterpartyId,
+      );
+      await validateVehicle(
+        tx,
+        context.organisationId,
+        load.vehicleId,
+        load.haulierCounterpartyId,
+      );
+
+      const arrivedAt = load.receivedAt ?? new Date(event.occurredAt);
+      const movementAt = load.movementAt ?? new Date(event.occurredAt);
+      const reasonCode = parsed.data.manualArrivalReason ?? null;
+      const reasonLabel = reasonCode
+        ? MANUAL_SITE_ARRIVAL_REASON_LABELS[reasonCode]
+        : null;
+      const manualNote = parsed.data.manualArrivalNote?.trim() || null;
+      const resolvedNotes =
+        manualSiteFallback && reasonLabel
+          ? appendOperationalNote(
+              load.notes,
+              "MANUAL SITE ARRIVAL",
+              [
+                "Channel: Desktop",
+                `Reason: ${reasonLabel}`,
+                manualNote ? `Note: ${manualNote}` : null,
+              ]
+                .filter((value): value is string => Boolean(value))
+                .join(" · "),
+              now,
+            )
+          : load.notes;
+
+      await tx
+        .update(jobLoads)
+        .set({
+          status: "arrived",
+          receivedAt: arrivedAt,
+          movementAt,
+          notes: resolvedNotes,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(jobLoads.id, load.id),
+            eq(jobLoads.organisationId, context.organisationId),
+          ),
+        );
+
+      if (manualSiteFallback && reasonCode && reasonLabel) {
+        await tx.insert(auditEvents).values({
+          organisationId: context.organisationId,
+          userId: event.actorUserId,
+          entityType: "job_load",
+          entityId: load.id,
+          action: "MANUAL_SITE_ARRIVAL_CONFIRMED",
+          previousState: JSON.stringify({
+            status: load.status,
+            receivedAt: load.receivedAt?.toISOString() ?? null,
+            movementAt: load.movementAt?.toISOString() ?? null,
+            driverId: load.driverId,
+            vehicleId: load.vehicleId,
+          }),
+          newState: JSON.stringify({
+            status: "arrived",
+            receivedAt: arrivedAt.toISOString(),
+            movementAt: movementAt.toISOString(),
+            driverId: load.driverId,
+            vehicleId: load.vehicleId,
+            channel: "DESKTOP",
+            physicalArrivalConfirmed: true,
+            reasonCode,
+            reason: reasonLabel,
+            note: manualNote,
+          }),
+        });
+      }
+
       break;
     }
 
@@ -466,6 +921,15 @@ async function applyJobLoadEvent(
         notes: data.notes === undefined ? load.notes : data.notes,
         updatedAt: now,
       }).where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
+
+      await applySyncWasteItemAllocations(tx, {
+        organisationId: context.organisationId,
+        jobLoadId: load.id,
+        metric: data.weightMetric ?? load.weightMetric,
+        netWeight,
+        inputs: data.wasteItems,
+        requireReconciled: false,
+      });
       break;
     }
 
@@ -474,8 +938,34 @@ async function applyJobLoadEvent(
       if (load.status !== "arrived") throw new SyncBusinessRuleError("LOAD_MUST_BE_ARRIVED");
       await requireDriverDestinationForOwnTransport(tx, context, load);
       if (!load.wasteDescriptionSnapshot?.trim()) throw new SyncBusinessRuleError("WASTE_DESCRIPTION_REQUIRED");
-      await validateIncomingPermit(tx, context.organisationId, load.sitePermitId, load.ownSiteId, load.ewcCodeId);
-      await tx.update(jobLoads).set({ status: "accepted", updatedAt: now })
+      const permitAcceptance = await validateIncomingWasteItems(
+        tx,
+        context,
+        load,
+      );
+
+      await tx.update(jobLoads).set({
+        status: "accepted",
+        permitEwcMatchType: permitAcceptance.matchType,
+        permitEwcEquivalenceId: null,
+      regulatoryAuthorityActivationId:
+        permitAcceptance.matchType === "regulatory_authority"
+          ? permitAcceptance.activationId
+          : null,
+        permitEwcBasis:
+          permitAcceptance.matchType === "regulatory_authority"
+            ? permitAcceptance.basis
+            : null,
+        permitEwcReference:
+          permitAcceptance.matchType === "regulatory_authority"
+            ? permitAcceptance.reference
+            : null,
+        permitEwcCodeSnapshot:
+          permitAcceptance.permittedEwcCode ||
+          load.ewcCodeSnapshot,
+        permitEwcCheckedAt: now,
+        updatedAt: now,
+      })
         .where(and(eq(jobLoads.id, load.id), eq(jobLoads.organisationId, context.organisationId)));
       break;
     }
@@ -540,6 +1030,15 @@ async function applyJobLoadEvent(
         data.grossWeight !== undefined ||
         data.tareWeight !== undefined ||
         data.netWeight !== undefined;
+
+      await applySyncWasteItemAllocations(tx, {
+        organisationId: context.organisationId,
+        jobLoadId: load.id,
+        metric: data.weightMetric ?? load.weightMetric,
+        netWeight,
+        inputs: data.wasteItems,
+        requireReconciled: load.direction === "incoming",
+      });
 
       await tx.update(jobLoads).set({
         driverId,
@@ -665,6 +1164,35 @@ export async function processSyncEvent(context: ClientApiContext, event: SyncEve
       let entityPayload: unknown;
       if (event.entityType === "job_load") {
         entityPayload = await applyJobLoadEvent(tx, context, event);
+
+        /*
+          WASTE_X_MULTI_WASTE_ITEM_CHANGE_FEED_V1
+
+          Job Load change-feed rows must carry the operational Waste Items too.
+          Desktop bootstrap already has them; without this enrichment, the next
+          Cloud UPSERT replaces the encrypted local payload with the flat
+          bb_job_load row and the Desktop appears to "fall back" to one EWC.
+        */
+        if (entityPayload && typeof entityPayload === "object") {
+          const wasteItems = await tx
+            .select()
+            .from(jobLoadWasteItems)
+            .where(
+              and(
+                eq(
+                  jobLoadWasteItems.organisationId,
+                  context.organisationId,
+                ),
+                eq(jobLoadWasteItems.jobLoadId, event.entityId),
+              ),
+            )
+            .orderBy(jobLoadWasteItems.itemNumber);
+
+          entityPayload = {
+            ...(entityPayload as Record<string, unknown>),
+            wasteItems,
+          };
+        }
       } else {
         throw new SyncBusinessRuleError("UNSUPPORTED_ENTITY_TYPE");
       }

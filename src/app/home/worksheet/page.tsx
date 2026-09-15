@@ -1,7 +1,7 @@
 /* WASTE_X_WORKSHEET_RECEIVING_FLOW_V3 */
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, ne } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
@@ -9,6 +9,7 @@ import {
   counterparties,
   counterpartyRoles,
   drivers,
+  ewcCodes,
   jobs,
   users,
   vehicles,
@@ -22,6 +23,7 @@ import {
   completeOutgoingLoadAction,
   markLoadArrivedAction,
   saveLoadDetailsAction,
+  updateLoadWasteItemAction,
 } from "./actions";
 import { issueReceivingSiteTicketAction } from "./ticket-actions";
 import DailyOperationsScrollKeeper from "./DailyOperationsScrollKeeper";
@@ -29,6 +31,7 @@ import RejectLoadModal from "./RejectLoadModal";
 import TransportAssignmentPopover from "./TransportAssignmentPopover";
 import WorksheetSearch from "./WorksheetSearch";
 import WorksheetToast from "./WorksheetToast";
+import { listPermitEwcAcceptances } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 
 export const dynamic = "force-dynamic";
 
@@ -190,7 +193,11 @@ function rejectionSummary(notes: string | null): RejectionSummary | null {
 
 const successMessages: Record<string, string> = {
   load_arrived: "External carrier marked as arrived. Site acceptance is still required.",
+  load_arrived_manually:
+    "Arrival manually confirmed by the receiving site. The Web fallback and operator are recorded in the audit trail.",
   load_details_saved: "Receiving-site details saved.",
+  waste_item_updated:
+    "Waste Item classification and acceptance updated.",
   load_accepted: "Load accepted by the receiving site.",
   load_rejected: "Load rejected by the receiving site and moved to Rejected.",
   load_completed: "Incoming receiving-site transaction completed.",
@@ -209,7 +216,16 @@ const errorMessages: Record<string, string> = {
   outgoing_only_action: "That action is only available for outgoing loads.",
   load_not_planned: "Only a planned incoming load can be marked as arrived.",
   load_must_be_arrived: "The Driver or external carrier must arrive before the site can decide this load.",
-  driver_destination_arrival_required: "Wait for the assigned Driver to mark Arrived at destination on Mobile.",
+  driver_destination_arrival_required:
+    "Wait for the assigned Driver to mark Arrived on Mobile, or use the authorised site fallback once the vehicle is physically at the receiving site.",
+  manual_arrival_confirmation_required:
+    "Confirm that the vehicle and load are physically at the receiving site before using the manual arrival fallback.",
+  manual_arrival_reason_required:
+    "Choose why the receiving site is recording arrival instead of the Driver.",
+  manual_arrival_note_required:
+    "Add a short note when the manual arrival reason is Other.",
+  manual_arrival_note_too_long:
+    "Manual arrival notes must be 2,000 characters or fewer.",
   load_must_be_accepted: "The receiving site must accept the load before completion.",
   load_is_terminal: "That load is already finished and cannot be edited.",
   waste_description_required: "Confirm the actual waste description before continuing.",
@@ -220,8 +236,20 @@ const errorMessages: Record<string, string> = {
   invalid_net_weight: "Net weight must be zero or greater.",
   gross_below_tare: "Gross weight cannot be lower than tare weight.",
   net_weight_required: "A positive final net weight is required before completion.",
+  waste_item_weights_required:
+    "Enter a positive weight allocation for every Waste Item on this Load.",
+  waste_item_weights_do_not_match_net:
+    "Waste Item allocations must add up to the Load net weight.",
+  waste_item_not_found:
+    "That Waste Item is no longer attached to this Load.",
   received_time_missing: "The incoming load does not have an arrival time.",
-  permit_mismatch: "This EWC is not currently allowed by the selected receiving permit.",
+  permit_mismatch:
+    "This EWC has neither an exact permit match nor a configured authorised equivalence.",
+  invalid_ewc: "Choose a valid active EWC code.",
+  ewc_change_reason_required:
+    "Enter why the actual received EWC differs from the booked classification.",
+  ewc_change_before_acceptance_only:
+    "Change the actual EWC while the load is Arrived, before accepting it.",
   external_facility_permit_mismatch:
     "The selected third-party facility does not have an active authorisation for this EWC.",
   rejection_category_required: "Choose a rejection category before refusing the load.",
@@ -291,6 +319,11 @@ export default async function DailyOperationsPage({
             vehicle: true,
             haulier: true,
             ownSite: true,
+            wasteItems: {
+              orderBy: (item, { asc: sortAsc }) => [
+                sortAsc(item.itemNumber),
+              ],
+            },
             thirdPartyDestinationSite: { with: { counterparty: true } },
           },
           orderBy: (load, { asc: sortAsc }) => [sortAsc(load.loadNumber)],
@@ -351,6 +384,92 @@ export default async function DailyOperationsPage({
   const cancelledRows = rows.filter(({ load }) => load.status === "cancelled");
   const incomingLoads = rows.filter(({ load }) => load.direction === "incoming");
 
+  type ReceiptEwcOption = {
+    id: string;
+    code: string;
+    description: string;
+    matchType: "exact" | "regulatory_authority";
+    permittedEwcCode: string | null;
+    basis: string | null;
+    reference: string | null;
+  };
+
+  const permitEwcOptionsByKey = new Map<string, ReceiptEwcOption[]>();
+  const permitScopes = new Map<
+    string,
+    { permitId: string; siteId: string }
+  >();
+
+  for (const { load } of incomingLoads) {
+    if (!load.sitePermitId || !load.ownSiteId) continue;
+
+    const key = `${load.sitePermitId}:${load.ownSiteId}`;
+
+    permitScopes.set(key, {
+      permitId: load.sitePermitId,
+      siteId: load.ownSiteId,
+    });
+  }
+
+  for (const [key, scope] of Array.from(permitScopes.entries())) {
+    const acceptanceList = await listPermitEwcAcceptances({
+      organisationId: currentUser.organisationId,
+      permitId: scope.permitId,
+      siteId: scope.siteId,
+    });
+
+    const equivalentById = new Map(
+      acceptanceList.regulatory.map((row) => [
+        row.acceptedEwcCodeId,
+        row,
+      ]),
+    );
+
+    const acceptedIds = Array.from(
+      new Set([
+        ...acceptanceList.exactEwcCodeIds,
+        ...acceptanceList.regulatory.map(
+          (row) => row.acceptedEwcCodeId,
+        ),
+      ]),
+    );
+
+    const codeRows = acceptedIds.length
+      ? await database
+          .select({
+            id: ewcCodes.id,
+            code: ewcCodes.code,
+            description: ewcCodes.description,
+          })
+          .from(ewcCodes)
+          .where(
+            and(
+              inArray(ewcCodes.id, acceptedIds),
+              eq(ewcCodes.isActive, true),
+            ),
+          )
+          .orderBy(asc(ewcCodes.code))
+      : [];
+
+    permitEwcOptionsByKey.set(
+      key,
+      codeRows.map((code) => {
+        const equivalent = equivalentById.get(code.id);
+
+        return {
+          ...code,
+          matchType: equivalent
+            ? ("regulatory_authority" as const)
+            : ("exact" as const),
+          permittedEwcCode:
+            equivalent?.permittedEwcCode ?? null,
+          basis: equivalent?.basis ?? null,
+          reference: equivalent?.reference ?? null,
+        };
+      }),
+    );
+  }
+
   const requestedView = firstParam(searchParams?.view);
   const view: WorksheetView =
     requestedView === "rejected" || requestedView === "completed" || requestedView === "cancelled"
@@ -406,7 +525,7 @@ export default async function DailyOperationsPage({
               <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-orange-400">Operations // Daily Operations</p>
               <h1 className="mt-2 text-3xl font-semibold tracking-tight">{formatDay(selectedDate)}</h1>
               <p className="mt-2 max-w-3xl text-sm text-white/45">
-                Driver arrival hands the load to the site. Site staff then check, accept or refuse, weigh accepted loads, and complete the transaction.
+                Driver Mobile is the normal hand-off. If Mobile cannot be used, authorised site staff can record the physical arrival fallback, then check, accept or refuse, weigh, and complete the transaction.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -470,6 +589,12 @@ export default async function DailyOperationsPage({
                     const terminal = ["completed", "rejected", "cancelled"].includes(load.status);
                     const firstLoad = job.loads[0]?.id === load.id;
                     const ownTransport = !load.haulierCounterpartyId;
+                    const permitScopeKey =
+                      load.sitePermitId && load.ownSiteId
+                        ? `${load.sitePermitId}:${load.ownSiteId}`
+                        : "";
+                    const receiptEwcOptions =
+                      permitEwcOptionsByKey.get(permitScopeKey) ?? [];
                     const rejection = load.status === "rejected" ? rejectionSummary(load.notes) : null;
                     const route = load.direction === "incoming"
                       ? `${job.clientSite?.name ?? "Origin"} → ${load.ownSite?.name ?? job.ownSite?.name ?? "Receiving site"}`
@@ -477,7 +602,12 @@ export default async function DailyOperationsPage({
                     const rowSearchText = [
                       job.jobNumber, job.purchaseOrder, job.customerReference, job.client?.name,
                       job.clientSite?.name, route, load.direction, load.status, load.ewcCodeSnapshot,
-                      load.wasteDescriptionSnapshot, load.haulier?.name, load.driver?.name,
+                      load.wasteDescriptionSnapshot,
+                      ...load.wasteItems.flatMap((item) => [
+                        item.ewcCodeSnapshot,
+                        item.wasteDescriptionSnapshot,
+                      ]),
+                      load.haulier?.name, load.driver?.name,
                       load.vehicle?.registrationNumber, load.ticketNumber, load.notes,
                       rejection?.categoryLabel, rejection?.reason,
                     ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
@@ -501,8 +631,117 @@ export default async function DailyOperationsPage({
                         </Td>
 
                         <Td>
-                          <p className="text-xs font-semibold text-black/55">{load.ewcCodeSnapshot ?? "No EWC"}</p>
-                          <p className="mt-1 max-w-[260px] truncate text-xs text-black/40">{load.wasteDescriptionSnapshot ?? "Waste description not confirmed"}</p>
+                          <div className="min-w-[260px] space-y-2">
+                            {load.wasteItems.length > 0 ? (
+                              load.wasteItems.map((item) => (
+                                <div
+                                  key={item.id}
+                                  className="rounded-lg border border-black/5 bg-black/[0.02] px-2.5 py-2"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold text-black/65">
+                                      {item.itemNumber}. {item.ewcCodeSnapshot}
+                                    </p>
+                                    <span
+                                      className={`rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] ${
+                                        item.permitEwcMatchType === "regulatory_authority"
+                                          ? "bg-amber-100 text-amber-900"
+                                          : "bg-emerald-100 text-emerald-900"
+                                      }`}
+                                    >
+                                      {item.permitEwcMatchType === "regulatory_authority"
+                                        ? "Regulatory authority"
+                                        : "Exact"}
+                                    </span>
+                                  </div>
+
+                                  <p className="mt-1 max-w-[250px] truncate text-[11px] text-black/40">
+                                    {item.wasteDescriptionSnapshot}
+                                  </p>
+
+                                  {item.weightAmount ? (
+                                    <p className="mt-1 text-[10px] font-semibold text-black/40">
+                                      {formatWeight(item.weightAmount)}{" "}
+                                      {weightUnit(item.weightMetric)}
+                                      {item.weightIsEstimate
+                                        ? " · estimated allocation"
+                                        : ""}
+                                    </p>
+                                  ) : null}
+
+                                  {load.status === "arrived" ? (
+                                    <details className="mt-2">
+                                      <summary className="cursor-pointer text-[10px] font-semibold text-orange-700">
+                                        Correct actual EWC
+                                      </summary>
+
+                                      <form
+                                        action={updateLoadWasteItemAction}
+                                        className="mt-2 grid gap-2"
+                                      >
+                                        <input
+                                          type="hidden"
+                                          name="loadId"
+                                          value={load.id}
+                                        />
+                                        <input
+                                          type="hidden"
+                                          name="itemId"
+                                          value={item.id}
+                                        />
+                                        <input
+                                          type="hidden"
+                                          name="returnDate"
+                                          value={selectedDate}
+                                        />
+
+                                        <select
+                                          name="ewcCodeId"
+                                          defaultValue={item.ewcCodeId ?? ""}
+                                          className="h-9 rounded-lg border border-black/10 bg-white px-2 text-[11px]"
+                                        >
+                                          {receiptEwcOptions.map((option) => (
+                                            <option
+                                              key={option.id}
+                                              value={option.id}
+                                            >
+                                              {option.code} · {option.description}
+                                              {option.matchType === "regulatory_authority"
+                                                ? " · REGULATORY AUTHORITY"
+                                                : " · EXACT"}
+                                            </option>
+                                          ))}
+                                        </select>
+
+                                        <input
+                                          name="reason"
+                                          placeholder="Reason required if EWC changes"
+                                          className="h-9 rounded-lg border border-black/10 bg-white px-2 text-[11px]"
+                                        />
+
+                                        <button
+                                          type="submit"
+                                          className="h-8 rounded-lg bg-black px-2 text-[10px] font-semibold text-white"
+                                        >
+                                          Save item EWC
+                                        </button>
+                                      </form>
+                                    </details>
+                                  ) : null}
+                                </div>
+                              ))
+                            ) : (
+                              <>
+                                <p className="text-xs font-semibold text-black/55">
+                                  {load.ewcCodeSnapshot ?? "No EWC"}
+                                </p>
+                                <p className="mt-1 max-w-[260px] truncate text-xs text-black/40">
+                                  {load.wasteDescriptionSnapshot ??
+                                    "Waste description not confirmed"}
+                                </p>
+                              </>
+                            )}
+                          </div>
                         </Td>
 
                         <Td>
@@ -545,9 +784,59 @@ export default async function DailyOperationsPage({
                                 </form>
                               )
                             ) : load.direction === "incoming" && load.status === "planned" && ownTransport ? (
-                              <span className="inline-flex w-full justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-center text-[10px] font-semibold text-blue-800">Waiting for Driver arrival</span>
+                              <div className="grid w-full gap-2">
+                                <span className="inline-flex w-full justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-center text-[10px] font-semibold text-blue-800">
+                                  Waiting for Driver arrival
+                                </span>
+                                <details className="w-full rounded-xl border border-black/10 bg-[#fbfaf7]">
+                                  <summary className="cursor-pointer list-none px-3 py-2 text-center text-[10px] font-semibold text-black/45 hover:text-orange-700">
+                                    Driver cannot use Mobile?
+                                  </summary>
+                                  <form action={markLoadArrivedAction} className="grid gap-2 border-t border-black/5 p-3 text-left">
+                                    <input type="hidden" name="loadId" value={load.id} />
+                                    <input type="hidden" name="returnDate" value={selectedDate} />
+                                    <input type="hidden" name="arrivalMode" value="manual_site_fallback" />
+
+                                    <p className="text-[10px] leading-4 text-black/45">
+                                      Use this only when the vehicle and load are physically at the receiving site. Waste X records the site operator, time, reason and Web fallback without inventing Driver milestones.
+                                    </p>
+
+                                    <label>
+                                      <FieldLabel>Fallback reason</FieldLabel>
+                                      <select name="manualArrivalReason" required defaultValue="" className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-[10px]">
+                                        <option value="" disabled>Choose reason</option>
+                                        <option value="DRIVER_NO_MOBILE_ACCESS">Driver has no Mobile access</option>
+                                        <option value="DRIVER_DEVICE_UNAVAILABLE">Driver phone / device unavailable</option>
+                                        <option value="CONNECTIVITY_ISSUE">Connectivity issue</option>
+                                        <option value="SITE_CONFIRMED_PHYSICAL_ARRIVAL">Site confirmed physical arrival</option>
+                                        <option value="OTHER">Other</option>
+                                      </select>
+                                    </label>
+
+                                    <label>
+                                      <FieldLabel>Note</FieldLabel>
+                                      <textarea
+                                        name="manualArrivalNote"
+                                        maxLength={2000}
+                                        rows={3}
+                                        placeholder="Required when reason is Other; otherwise optional."
+                                        className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2.5 py-2 text-[10px]"
+                                      />
+                                    </label>
+
+                                    <label className="flex items-start gap-2 text-[10px] font-medium leading-4 text-black/55">
+                                      <input type="checkbox" name="physicalArrivalConfirmed" required className="mt-0.5 size-3.5 accent-orange-500" />
+                                      <span>I confirm the vehicle and load are physically at the receiving site.</span>
+                                    </label>
+
+                                    <button type="submit" className="h-9 rounded-lg bg-black px-3 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black">
+                                      Confirm manual arrival
+                                    </button>
+                                  </form>
+                                </details>
+                              </div>
                             ) : load.direction === "incoming" && load.status === "planned" ? (
-                              <form action={markLoadArrivedAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white">Mark external carrier arrived</button></form>
+                              <form action={markLoadArrivedAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><input type="hidden" name="arrivalMode" value="external_carrier" /><button className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white">Mark external carrier arrived</button></form>
                             ) : load.direction === "incoming" && load.status === "arrived" ? (
                               <div className="grid w-full gap-2">
                                 <form action={acceptLoadAction} className="w-full"><input type="hidden" name="loadId" value={load.id} /><input type="hidden" name="returnDate" value={selectedDate} /><button className="w-full rounded-lg bg-orange-500 px-3.5 py-2 text-xs font-bold text-black">Accept load</button></form>
@@ -574,6 +863,54 @@ export default async function DailyOperationsPage({
                                   <form action={saveLoadDetailsAction} className="grid gap-2">
                                     <input type="hidden" name="loadId" value={load.id} />
                                     <input type="hidden" name="returnDate" value={selectedDate} />
+
+                                    {load.direction === "incoming" && (
+                                      <div className="grid gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                                        <label>
+                                          <FieldLabel>Actual EWC at receipt</FieldLabel>
+                                          <select
+                                            name="ewcCodeId"
+                                            defaultValue={load.ewcCodeId ?? ""}
+                                            disabled={load.status !== "arrived"}
+                                            className="mt-1 h-10 w-full min-w-[270px] rounded-lg border border-black/10 bg-white px-2 text-xs"
+                                          >
+                                            <option value="">Choose actual EWC</option>
+                                            {receiptEwcOptions.map((option) => (
+                                              <option key={option.id} value={option.id}>
+                                                {option.code} · {option.description}
+                                                {option.matchType === "regulatory_authority"
+                                                  ? ` · REGULATORY AUTHORITY (${option.basis?.replaceAll("_", " ")})`
+                                                  : " · EXACT PERMIT MATCH"}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </label>
+
+                                        {load.status === "arrived" ? (
+                                          <label>
+                                            <FieldLabel>Reason if classification changed</FieldLabel>
+                                            <input
+                                              name="ewcChangeReason"
+                                              placeholder="Required only if you change the booked EWC"
+                                              className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2.5 text-xs"
+                                            />
+                                          </label>
+                                        ) : (
+                                          <p className="text-[10px] leading-4 text-amber-900/60">
+                                            The actual EWC is locked after site acceptance.
+                                          </p>
+                                        )}
+
+                                        {load.permitEwcMatchType === "regulatory_authority" && (
+                                          <p className="text-[10px] leading-4 text-amber-900/70">
+                                            Current basis: actual {load.ewcCodeSnapshot ?? "EWC"} accepted against permit code {load.permitEwcCodeSnapshot ?? "configured legacy code"}
+                                            {load.permitEwcBasis ? ` · ${load.permitEwcBasis.replaceAll("_", " ")}` : ""}
+                                            {load.permitEwcReference ? ` · ${load.permitEwcReference}` : ""}.
+                                          </p>
+                                        )}
+                                      </div>
+                                    )}
+
                                     <label><FieldLabel>Waste description</FieldLabel><input name="wasteDescription" defaultValue={load.wasteDescriptionSnapshot ?? ""} required className="mt-1 h-9 w-full min-w-[270px] rounded-lg border border-black/10 bg-white px-2.5 text-xs" /></label>
                                     <div className="grid grid-cols-2 gap-2">
                                       <label><FieldLabel>Driver</FieldLabel><select name="driverId" defaultValue={load.driverId ?? ""} className="mt-1 h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs"><option value="">None</option>{availableDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.name}</option>)}</select></label>
@@ -665,6 +1002,15 @@ function QuickWeightForm({
     weightIsEstimate: boolean;
     notes: string | null;
     vehicle: { tareWeightKg: string | null } | null;
+    wasteItems: Array<{
+      id: string;
+      itemNumber: number;
+      ewcCodeSnapshot: string;
+      wasteDescriptionSnapshot: string;
+      weightAmount: string | null;
+      weightMetric: WeightMetric;
+      weightIsEstimate: boolean;
+    }>;
   };
   returnDate: string;
 }) {
@@ -703,6 +1049,47 @@ function QuickWeightForm({
         )}
         <button type="submit" className="h-9 rounded-lg border border-black/10 bg-black px-3 text-[10px] font-semibold text-white hover:bg-orange-500 hover:text-black">Save</button>
       </div>
+
+      {load.wasteItems.length > 0 ? (
+        <div className="mt-2 space-y-1.5 rounded-lg border border-black/10 bg-[#faf8f4] p-2">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-black/35">
+            Waste allocation · must equal final net
+          </p>
+
+          {load.wasteItems.map((item) => (
+            <div
+              key={item.id}
+              className="grid grid-cols-[1fr_74px_auto] items-center gap-1.5"
+            >
+              <span
+                title={item.wasteDescriptionSnapshot}
+                className="truncate text-[10px] font-semibold text-black/55"
+              >
+                {item.ewcCodeSnapshot} · {item.wasteDescriptionSnapshot}
+              </span>
+
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                name={`wasteItemWeight:${item.id}`}
+                defaultValue={item.weightAmount ?? ""}
+                placeholder="0"
+                className="h-8 rounded-lg border border-black/10 bg-white px-2 text-[10px]"
+              />
+
+              <label className="flex items-center gap-1 text-[9px] text-black/40">
+                <input
+                  type="checkbox"
+                  name={`wasteItemEstimated:${item.id}`}
+                  defaultChecked={item.weightIsEstimate}
+                />
+                Est.
+              </label>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </form>
   );
 }

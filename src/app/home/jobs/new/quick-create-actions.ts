@@ -13,7 +13,6 @@ import {
   drivers,
   ewcCodes,
   materialProfiles,
-  permitEwcCodes,
   sitePermits,
   sites,
   users,
@@ -23,6 +22,7 @@ import {
   canManageOwnCarrierDwtSettings,
   saveOwnCarrierDwtSettings,
 } from "@/modules/digital-waste-tracking/data-access/saveOwnCarrierDwtSettings";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 
 import type {
   BookJobClient,
@@ -807,34 +807,34 @@ export async function quickCreateMaterialAction(
     return { ok: false, error: "No active receiving permit is configured." };
   }
 
-  const [ewc] = await database
-    .select({
-      id: ewcCodes.id,
-      code: ewcCodes.code,
-    })
-    .from(ewcCodes)
-    .innerJoin(
-      permitEwcCodes,
-      and(
-        eq(permitEwcCodes.ewcCodeId, ewcCodes.id),
-        eq(permitEwcCodes.organisationId, organisationId),
-        eq(permitEwcCodes.permitId, primaryPermit.id),
-        eq(permitEwcCodes.isActive, true),
-      ),
-    )
-    .where(
-      and(
-        eq(ewcCodes.id, ewcCodeId),
-        eq(ewcCodes.isActive, true),
-      ),
-    )
-    .limit(1);
+  const ewc = await database.query.ewcCodes.findFirst({
+    where: and(
+      eq(ewcCodes.id, ewcCodeId),
+      eq(ewcCodes.isActive, true),
+      eq(ewcCodes.classificationUsable, true),
+    ),
+    columns: {
+      id: true,
+      code: true,
+    },
+  });
 
   if (!ewc) {
+    return { ok: false, error: "That EWC code is no longer available." };
+  }
+
+  const permitAcceptance = await resolvePermitEwcAcceptance({
+    organisationId,
+    siteId: receivingSite.id,
+    permitId: primaryPermit.id,
+    ewcCodeId,
+  });
+
+  if (!permitAcceptance.allowed) {
     return {
       ok: false,
       error:
-        "For quick-create on this incoming booking, choose an EWC accepted by the current receiving permit. The full Materials screen can store wider reusable profiles.",
+        "For quick-create on this incoming booking, choose an EWC accepted by an exact permit match or an enabled regulatory acceptance rule.",
     };
   }
 

@@ -4,6 +4,7 @@ import { database } from "@/db/database";
 import { users, organisations, wasteListings, bids } from "@/db/schema";
 import { desc, eq, ilike, or, sql } from "drizzle-orm";
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
+import { recordPlatformAdminAuditEvent } from "@/lib/admin/recordPlatformAdminAudit";
 import { revalidatePath } from "next/cache";
 
 export async function getAllPlatformUsers(search?: string) {
@@ -42,18 +43,45 @@ export async function suspendUser(userId: string) {
 
   const target = await database.query.users.findFirst({
     where: eq(users.id, userId),
-    columns: { id: true, role: true },
+    columns: {
+      id: true,
+      organisationId: true,
+      role: true,
+      status: true,
+      isActive: true,
+      isSuspended: true,
+    },
   });
 
   if (!target) throw new Error("User not found");
   if (target.role === "platform_admin") {
     throw new Error("Platform admin accounts cannot be suspended from this action.");
   }
+  if (!target.organisationId) {
+    throw new Error("Customer user is not attached to an organisation.");
+  }
 
   await database
     .update(users)
     .set({ isSuspended: true, isActive: false })
     .where(eq(users.id, userId));
+
+  await recordPlatformAdminAuditEvent({
+    organisationId: target.organisationId,
+    entityType: "user",
+    entityId: target.id,
+    action: "ADMIN_USER_SUSPENDED",
+    previousState: {
+      status: target.status,
+      isActive: target.isActive,
+      isSuspended: target.isSuspended,
+    },
+    newState: {
+      status: target.status,
+      isActive: false,
+      isSuspended: true,
+    },
+  });
 
   revalidatePath("/admin/users");
   revalidatePath(`/admin/users/${userId}`);
@@ -62,10 +90,47 @@ export async function suspendUser(userId: string) {
 export async function reactivateUser(userId: string) {
   await requirePlatformAdmin();
 
+  const target = await database.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: {
+      id: true,
+      organisationId: true,
+      role: true,
+      status: true,
+      isActive: true,
+      isSuspended: true,
+    },
+  });
+
+  if (!target) throw new Error("User not found");
+  if (target.role === "platform_admin") {
+    throw new Error("Platform admin accounts cannot be changed from this action.");
+  }
+  if (!target.organisationId) {
+    throw new Error("Customer user is not attached to an organisation.");
+  }
+
   await database
     .update(users)
     .set({ isSuspended: false, isActive: true })
     .where(eq(users.id, userId));
+
+  await recordPlatformAdminAuditEvent({
+    organisationId: target.organisationId,
+    entityType: "user",
+    entityId: target.id,
+    action: "ADMIN_USER_REACTIVATED",
+    previousState: {
+      status: target.status,
+      isActive: target.isActive,
+      isSuspended: target.isSuspended,
+    },
+    newState: {
+      status: target.status,
+      isActive: true,
+      isSuspended: false,
+    },
+  });
 
   revalidatePath("/admin/users");
   revalidatePath(`/admin/users/${userId}`);

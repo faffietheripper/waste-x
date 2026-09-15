@@ -242,3 +242,126 @@ export const clientEvidenceUploads = pgTable(
     statusIdx: index("client_evidence_status_idx").on(table.status),
   }),
 );
+
+/* =========================================================
+   PLATFORM DIAGNOSTICS
+   ---------------------------------------------------------
+   Sanitised Cloud-side operational diagnostics only.
+
+   This is NOT a replacement for:
+   - syncEventInbox / syncChangeFeed (authoritative sync truth)
+   - errorLogs (existing generic server/application error register)
+   - customer Desktop/Mobile local databases
+
+   Never store authentication secrets, raw request/response bodies,
+   SQLCipher contents, cookies, auth headers or arbitrary customer payloads.
+========================================================= */
+
+export type PlatformDiagnosticSurface =
+  | "WEB"
+  | "DESKTOP"
+  | "MOBILE"
+  | "SERVER";
+
+export type PlatformDiagnosticSeverity =
+  | "info"
+  | "low"
+  | "medium"
+  | "high"
+  | "critical";
+
+export type PlatformDiagnosticCategory =
+  | "auth"
+  | "network"
+  | "api"
+  | "validation"
+  | "sync"
+  | "workflow"
+  | "database"
+  | "external"
+  | "device"
+  | "unknown";
+
+export type PlatformDiagnosticOutcome =
+  | "FAILED"
+  | "RETRYING"
+  | "REJECTED"
+  | "CONFLICT"
+  | "RECOVERED"
+  | "RESOLVED";
+
+export type PlatformDiagnosticSafeContext = Record<
+  string,
+  string | number | boolean | null
+>;
+
+export const platformDiagnosticEvents = pgTable(
+  "bb_platform_diagnostic_event",
+  {
+    id: text("id").primaryKey(),
+
+    organisationId: text("organisationId").references(() => organisations.id, {
+      onDelete: "set null",
+    }),
+
+    userId: text("userId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    deviceId: text("deviceId").references(() => clientDevices.id, {
+      onDelete: "set null",
+    }),
+
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+    }),
+
+    surface: text("surface").$type<PlatformDiagnosticSurface>().notNull(),
+    clientVersion: text("clientVersion"),
+
+    severity: text("severity")
+      .$type<PlatformDiagnosticSeverity>()
+      .notNull()
+      .default("medium"),
+
+    category: text("category")
+      .$type<PlatformDiagnosticCategory>()
+      .notNull()
+      .default("unknown"),
+
+    code: text("code").notNull(),
+    operation: text("operation").notNull(),
+    route: text("route"),
+    method: text("method"),
+
+    entityType: text("entityType"),
+    entityId: text("entityId"),
+
+    correlationId: text("correlationId").notNull(),
+
+    safeMessage: text("safeMessage").notNull(),
+    safeContext: jsonb("safeContext")
+      .$type<PlatformDiagnosticSafeContext>()
+      .notNull(),
+
+    outcome: text("outcome")
+      .$type<PlatformDiagnosticOutcome>()
+      .notNull()
+      .default("FAILED"),
+
+    occurredAt: timestamp("occurredAt", { mode: "date" }).notNull(),
+    recordedAt: timestamp("recordedAt", { mode: "date" }).defaultNow(),
+    resolvedAt: timestamp("resolvedAt", { mode: "date" }),
+  },
+  (table) => ({
+    orgIdx: index("platform_diagnostic_org_idx").on(table.organisationId),
+    deviceIdx: index("platform_diagnostic_device_idx").on(table.deviceId),
+    userIdx: index("platform_diagnostic_user_idx").on(table.userId),
+    codeIdx: index("platform_diagnostic_code_idx").on(table.code),
+    correlationIdx: index("platform_diagnostic_correlation_idx").on(
+      table.correlationId,
+    ),
+    occurredIdx: index("platform_diagnostic_occurred_idx").on(table.occurredAt),
+    outcomeIdx: index("platform_diagnostic_outcome_idx").on(table.outcome),
+  }),
+);

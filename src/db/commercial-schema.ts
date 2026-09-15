@@ -13,6 +13,7 @@ import {
 
 import {
   counterparties,
+  jobLoads,
   jobs,
   organisations,
   users,
@@ -269,6 +270,48 @@ export const customerInvoiceJobs = pgTable(
   }),
 );
 
+
+/*
+  Load-level invoice linkage.
+
+  A customer invoice may cover one completed Load without making every other
+  Load on the Job invoiced. The unique (organisationId, jobLoadId) index is the
+  hard guard against double-invoicing the same Load. Voiding a draft removes
+  this active linkage; the immutable invoice line snapshot remains in history.
+*/
+export const customerInvoiceLoads = pgTable(
+  "bb_customer_invoice_load",
+  {
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    invoiceId: text("invoiceId")
+      .notNull()
+      .references(() => customerInvoices.id, { onDelete: "cascade" }),
+
+    jobId: text("jobId")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "restrict" }),
+
+    jobLoadId: text("jobLoadId")
+      .notNull()
+      .references(() => jobLoads.id, { onDelete: "restrict" }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.invoiceId, table.jobLoadId] }),
+    orgIdx: index("customer_invoice_load_org_idx").on(table.organisationId),
+    invoiceIdx: index("customer_invoice_load_invoice_idx").on(table.invoiceId),
+    jobIdx: index("customer_invoice_load_job_idx").on(table.jobId),
+    loadUnique: uniqueIndex("customer_invoice_load_unique").on(
+      table.organisationId,
+      table.jobLoadId,
+    ),
+  }),
+);
+
 export const customerInvoiceLines = pgTable(
   "bb_customer_invoice_line",
   {
@@ -286,6 +329,11 @@ export const customerInvoiceLines = pgTable(
 
     jobId: text("jobId")
       .references(() => jobs.id, { onDelete: "set null" }),
+
+    jobLoadId: text("jobLoadId")
+      .references(() => jobLoads.id, { onDelete: "set null" }),
+
+    loadNumberSnapshot: integer("loadNumberSnapshot"),
 
     jobCommercialLineId: text("jobCommercialLineId").references(
       () => jobCommercialLines.id,
@@ -335,6 +383,7 @@ export const customerInvoiceLines = pgTable(
     orgIdx: index("customer_invoice_line_org_idx").on(table.organisationId),
     invoiceIdx: index("customer_invoice_line_invoice_idx").on(table.invoiceId),
     jobIdx: index("customer_invoice_line_job_idx").on(table.jobId),
+    loadIdx: index("customer_invoice_line_load_idx").on(table.jobLoadId),
   }),
 );
 
@@ -383,6 +432,7 @@ export const customerInvoicesRelations = relations(
     }),
     lines: many(customerInvoiceLines),
     jobs: many(customerInvoiceJobs),
+    loads: many(customerInvoiceLoads),
   }),
 );
 
@@ -396,6 +446,10 @@ export const customerInvoiceLinesRelations = relations(
     job: one(jobs, {
       fields: [customerInvoiceLines.jobId],
       references: [jobs.id],
+    }),
+    jobLoad: one(jobLoads, {
+      fields: [customerInvoiceLines.jobLoadId],
+      references: [jobLoads.id],
     }),
     commercialLine: one(jobCommercialLines, {
       fields: [customerInvoiceLines.jobCommercialLineId],
@@ -414,6 +468,24 @@ export const customerInvoiceJobsRelations = relations(
     job: one(jobs, {
       fields: [customerInvoiceJobs.jobId],
       references: [jobs.id],
+    }),
+  }),
+);
+
+export const customerInvoiceLoadsRelations = relations(
+  customerInvoiceLoads,
+  ({ one }) => ({
+    invoice: one(customerInvoices, {
+      fields: [customerInvoiceLoads.invoiceId],
+      references: [customerInvoices.id],
+    }),
+    job: one(jobs, {
+      fields: [customerInvoiceLoads.jobId],
+      references: [jobs.id],
+    }),
+    jobLoad: one(jobLoads, {
+      fields: [customerInvoiceLoads.jobLoadId],
+      references: [jobLoads.id],
     }),
   }),
 );

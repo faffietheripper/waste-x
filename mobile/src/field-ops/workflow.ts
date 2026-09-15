@@ -139,9 +139,16 @@ export function getMobileFieldWorkflowState(
 }
 
 export function isMobileAssignmentReadOnly(assignment: MobileAssignmentV1) {
+  const loadStatus = assignment.load.status.toLowerCase();
+  const driverStep = getMobileFieldWorkflowState(assignment).step;
+  const siteTookControlBeforeDriverArrival =
+    (loadStatus === "arrived" || loadStatus === "accepted") &&
+    driverStep !== "ARRIVED_DESTINATION";
+
   return (
-    TERMINAL_LOAD_STATUSES.has(assignment.load.status.toLowerCase()) ||
-    NON_OPERATIONAL_JOB_STATUSES.has(assignment.job.status.toLowerCase())
+    TERMINAL_LOAD_STATUSES.has(loadStatus) ||
+    NON_OPERATIONAL_JOB_STATUSES.has(assignment.job.status.toLowerCase()) ||
+    siteTookControlBeforeDriverArrival
   );
 }
 

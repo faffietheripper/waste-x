@@ -7,7 +7,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { database } from "@/db/database";
 import { jobLoadFieldStates } from "@/db/mobile-field-schema";
-import { jobLoads, jobs, users } from "@/db/schema";
+import { auditEvents, jobLoads, jobs, users } from "@/db/schema";
 import { syncJobStatus } from "@/modules/jobs/core/syncJobStatus";
 
 const SITE_REJECTION_CATEGORIES = [
@@ -84,6 +84,7 @@ async function ownTransportDriverHasArrived(
   haulierCounterpartyId: string | null,
 ) {
   if (!driverId || haulierCounterpartyId) return true;
+
   const fieldState = await database.query.jobLoadFieldStates.findFirst({
     where: and(
       eq(jobLoadFieldStates.jobLoadId, loadId),
@@ -92,7 +93,24 @@ async function ownTransportDriverHasArrived(
     columns: { step: true },
   });
   const step = fieldState?.step as string | undefined;
-  return step === "ARRIVED_DESTINATION" || step === "DELIVERED";
+  if (step === "ARRIVED_DESTINATION" || step === "DELIVERED") {
+    return true;
+  }
+
+  const [manualArrival] = await database
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.organisationId, organisationId),
+        eq(auditEvents.entityType, "job_load"),
+        eq(auditEvents.entityId, loadId),
+        eq(auditEvents.action, "MANUAL_SITE_ARRIVAL_CONFIRMED"),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(manualArrival);
 }
 
 function appendSiteRejectionNote(

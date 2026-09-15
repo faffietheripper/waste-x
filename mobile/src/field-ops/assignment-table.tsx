@@ -80,6 +80,7 @@ function statusTone(assignment: MobileAssignmentV1) {
   return "default" as const;
 }
 
+/* WASTE_X_MOBILE_REFERENCE_PRIORITY_V1 */
 export function AssignmentTable({
   assignments,
   onOpen,
@@ -118,7 +119,7 @@ export function AssignmentTable({
             ]}
           >
             <View style={styles.refColumn}>
-              <Text style={styles.jobNumber} numberOfLines={1}>
+              <Text style={styles.jobNumber} numberOfLines={2}>
                 {assignment.job.jobNumber}
               </Text>
 
@@ -235,12 +236,13 @@ const styles = StyleSheet.create({
   },
 
   refColumn: {
-    width: 82,
+    flex: 1.65,
+    minWidth: 0,
     paddingRight: 8,
   },
 
   routeColumn: {
-    flex: 1,
+    flex: 0.85,
     minWidth: 0,
     paddingRight: 8,
   },
@@ -252,7 +254,7 @@ const styles = StyleSheet.create({
 
   jobNumber: {
     color: "#111827",
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: "900",
   },
 

@@ -13,7 +13,7 @@ const DB_FILE_NAME: &str = "waste-x-local.db";
 const DATABASE_KEYRING_SERVICE: &str = "com.wastex.desktop.local-database";
 const DATABASE_KEYRING_ACCOUNT: &str = "database-key-v1";
 const TICKET_AUTHORITY: &str = "RECEIVING_SITE";
-const PDF_TEMPLATE_VERSION: i64 = 2;
+const PDF_TEMPLATE_VERSION: i64 = 3;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -279,37 +279,268 @@ fn pdf_text_line(x: i32, y: i32, size: i32, bold: bool, value: &str) -> String {
 }
 
 fn build_ticket_pdf(load: &TicketLoad, ticket_number: &str, issued_at: &str) -> Vec<u8> {
-    let waste = value_string(&load.payload, "wasteDescriptionSnapshot").unwrap_or_else(|| "Not recorded".to_string());
-    let ewc = value_string(&load.payload, "ewcCodeSnapshot").unwrap_or_else(|| "Not recorded".to_string());
-    let driver = value_string(&load.payload, "driverId").unwrap_or_else(|| "Not recorded".to_string());
-    let vehicle = value_string(&load.payload, "vehicleId").unwrap_or_else(|| "Not recorded".to_string());
-    let metric = value_string(&load.payload, "weightMetric").unwrap_or_else(|| "Tonnes".to_string());
-    let gross = load.gross_weight.clone().unwrap_or_else(|| "Not recorded".to_string());
-    let tare = load.tare_weight.clone().unwrap_or_else(|| "Not recorded".to_string());
-    let net = load.net_weight.clone().unwrap_or_else(|| "Not recorded".to_string());
+    let primary_waste = value_string(&load.payload, "wasteDescriptionSnapshot")
+        .unwrap_or_else(|| "Not recorded".to_string());
+    let primary_ewc = value_string(&load.payload, "ewcCodeSnapshot")
+        .unwrap_or_else(|| "Not recorded".to_string());
+    let driver = value_string(&load.payload, "driverId")
+        .unwrap_or_else(|| "Not recorded".to_string());
+    let vehicle = value_string(&load.payload, "vehicleId")
+        .unwrap_or_else(|| "Not recorded".to_string());
+    let metric = value_string(&load.payload, "weightMetric")
+        .unwrap_or_else(|| "Tonnes".to_string());
+    let gross = load
+        .gross_weight
+        .clone()
+        .unwrap_or_else(|| "Not recorded".to_string());
+    let tare = load
+        .tare_weight
+        .clone()
+        .unwrap_or_else(|| "Not recorded".to_string());
+    let net = load
+        .net_weight
+        .clone()
+        .unwrap_or_else(|| "Not recorded".to_string());
+
+    let waste_items = load
+        .payload
+        .get("wasteItems")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let clip = |value: String, max_chars: usize| -> String {
+        value.chars().take(max_chars).collect()
+    };
 
     let mut content = String::new();
     content.push_str(&pdf_text_line(48, 790, 23, true, "Waste X"));
-    content.push_str(&pdf_text_line(48, 765, 10, true, "RECEIVING-SITE / WEIGHBRIDGE TICKET"));
+    content.push_str(&pdf_text_line(
+        48,
+        765,
+        10,
+        true,
+        "RECEIVING-SITE / WEIGHBRIDGE TICKET",
+    ));
     content.push_str(&pdf_text_line(48, 735, 15, true, ticket_number));
-    content.push_str(&pdf_text_line(48, 710, 10, false, &format!("Job {} | Load {:02} | {}", load.job_number, load.load_number, load.direction.to_uppercase())));
+    content.push_str(&pdf_text_line(
+        48,
+        710,
+        10,
+        false,
+        &format!(
+            "Job {} | Load {:02} | {}",
+            load.job_number,
+            load.load_number,
+            load.direction.to_uppercase()
+        ),
+    ));
     content.push_str(&pdf_text_line(48, 680, 9, true, "SITE TRANSACTION"));
-    content.push_str(&pdf_text_line(48, 663, 10, false, &format!("Load status at issue: {}", load.status.to_uppercase())));
-    content.push_str(&pdf_text_line(48, 647, 10, false, &format!("Driver arrival state: {}", field_workflow_step(&load.payload).unwrap_or_else(|| "Not recorded".to_string()))));
-    content.push_str(&pdf_text_line(48, 631, 10, false, &format!("Ticket issued: {issued_at}")));
-    content.push_str(&pdf_text_line(48, 601, 9, true, "WASTE"));
-    content.push_str(&pdf_text_line(48, 584, 10, false, &format!("EWC: {ewc}")));
-    content.push_str(&pdf_text_line(48, 568, 10, false, &format!("Description: {waste}")));
-    content.push_str(&pdf_text_line(48, 538, 9, true, "WEIGHTS / QUANTITY"));
-    content.push_str(&pdf_text_line(48, 521, 10, false, &format!("Gross: {gross} {metric}")));
-    content.push_str(&pdf_text_line(48, 505, 10, false, &format!("Tare: {tare} {metric}")));
-    content.push_str(&pdf_text_line(48, 489, 11, true, &format!("Net: {net} {metric}")));
-    content.push_str(&pdf_text_line(48, 459, 9, true, "TRANSPORT"));
-    content.push_str(&pdf_text_line(48, 442, 10, false, &format!("Driver ID: {driver}")));
-    content.push_str(&pdf_text_line(48, 426, 10, false, &format!("Vehicle ID: {vehicle}")));
-    content.push_str(&pdf_text_line(48, 110, 8, false, &format!("Canonical load identity: {}", load.id)));
-    content.push_str(&pdf_text_line(48, 94, 8, false, &format!("Ticket authority: {TICKET_AUTHORITY} | Template v{PDF_TEMPLATE_VERSION}")));
-    content.push_str(&pdf_text_line(48, 78, 8, false, "Reprints use these exact original PDF bytes."));
+    content.push_str(&pdf_text_line(
+        48,
+        663,
+        10,
+        false,
+        &format!("Load status at issue: {}", load.status.to_uppercase()),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        647,
+        10,
+        false,
+        &format!(
+            "Driver arrival state: {}",
+            field_workflow_step(&load.payload)
+                .unwrap_or_else(|| "Not recorded".to_string())
+        ),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        631,
+        10,
+        false,
+        &format!("Ticket issued: {issued_at}"),
+    ));
+
+    content.push_str(&pdf_text_line(48, 601, 9, true, "WASTE ITEMS"));
+    let mut y = 584_i32;
+
+    if waste_items.is_empty() {
+        content.push_str(&pdf_text_line(
+            48,
+            y,
+            10,
+            false,
+            &format!("Item 1 | EWC {primary_ewc} | {}", clip(primary_waste, 68)),
+        ));
+        y -= 16;
+        content.push_str(&pdf_text_line(
+            48,
+            y,
+            9,
+            false,
+            &format!("Allocated weight: {net} {metric} | Legacy single-item record"),
+        ));
+        y -= 30;
+    } else {
+        for (index, item) in waste_items.iter().take(8).enumerate() {
+            let item_number = item
+                .get("itemNumber")
+                .and_then(Value::as_i64)
+                .unwrap_or((index + 1) as i64);
+            let ewc = item
+                .get("ewcCodeSnapshot")
+                .and_then(Value::as_str)
+                .unwrap_or("Not recorded");
+            let description = item
+                .get("wasteDescriptionSnapshot")
+                .and_then(Value::as_str)
+                .unwrap_or("Not recorded");
+            let item_metric = item
+                .get("weightMetric")
+                .and_then(Value::as_str)
+                .unwrap_or(metric.as_str());
+            let amount = item
+                .get("weightAmount")
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .or_else(|| value.as_f64().map(|number| format!("{number:.3}")))
+                })
+                .unwrap_or_else(|| "Not recorded".to_string());
+            let estimated = item
+                .get("weightIsEstimate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+            let acceptance = match item
+                .get("permitEwcMatchType")
+                .and_then(Value::as_str)
+            {
+                Some("regulatory_authority") => {
+                    let basis = item
+                        .get("permitEwcBasis")
+                        .and_then(Value::as_str)
+                        .unwrap_or("regulatory authority");
+                    let permit_ewc = item
+                        .get("permitEwcCodeSnapshot")
+                        .and_then(Value::as_str)
+                        .unwrap_or("not recorded");
+                    format!(
+                        "Regulatory authority {basis} | underlying permit EWC {permit_ewc}"
+                    )
+                }
+                Some("exact") => "Exact permit match".to_string(),
+                _ => "Acceptance not recorded".to_string(),
+            };
+
+            content.push_str(&pdf_text_line(
+                48,
+                y,
+                10,
+                false,
+                &clip(
+                    format!(
+                        "Item {item_number} | EWC {ewc} | {description}"
+                    ),
+                    88,
+                ),
+            ));
+            y -= 13;
+            content.push_str(&pdf_text_line(
+                48,
+                y,
+                9,
+                false,
+                &clip(
+                    format!(
+                        "Allocated: {amount} {item_metric}{} | {acceptance}",
+                        if estimated { " ESTIMATED" } else { "" }
+                    ),
+                    96,
+                ),
+            ));
+            y -= 18;
+        }
+    }
+
+    let weights_heading_y = y - 4;
+    content.push_str(&pdf_text_line(
+        48,
+        weights_heading_y,
+        9,
+        true,
+        "WEIGHTS / QUANTITY",
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        weights_heading_y - 17,
+        10,
+        false,
+        &format!("Gross: {gross} {metric}"),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        weights_heading_y - 33,
+        10,
+        false,
+        &format!("Tare: {tare} {metric}"),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        weights_heading_y - 49,
+        11,
+        true,
+        &format!("Net: {net} {metric}"),
+    ));
+
+    let transport_heading_y = weights_heading_y - 79;
+    content.push_str(&pdf_text_line(
+        48,
+        transport_heading_y,
+        9,
+        true,
+        "TRANSPORT",
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        transport_heading_y - 17,
+        10,
+        false,
+        &format!("Driver ID: {driver}"),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        transport_heading_y - 33,
+        10,
+        false,
+        &format!("Vehicle ID: {vehicle}"),
+    ));
+
+    content.push_str(&pdf_text_line(
+        48,
+        110,
+        8,
+        false,
+        &format!("Canonical load identity: {}", load.id),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        94,
+        8,
+        false,
+        &format!(
+            "Ticket authority: {TICKET_AUTHORITY} | Template v{PDF_TEMPLATE_VERSION}"
+        ),
+    ));
+    content.push_str(&pdf_text_line(
+        48,
+        78,
+        8,
+        false,
+        "Reprints use these exact original PDF bytes.",
+    ));
 
     let objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -319,21 +550,38 @@ fn build_ticket_pdf(load: &TicketLoad, ticket_number: &str, issued_at: &str) -> 
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".to_string(),
         format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content),
     ];
+
     let mut pdf = Vec::<u8>::new();
     pdf.extend_from_slice(b"%PDF-1.4\n%WasteX\n");
     let mut offsets = Vec::<usize>::new();
+
     for (index, object) in objects.iter().enumerate() {
         offsets.push(pdf.len());
-        pdf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+        pdf.extend_from_slice(
+            format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes(),
+        );
     }
+
     let xref_offset = pdf.len();
     pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
     pdf.extend_from_slice(b"0000000000 65535 f \n");
-    for offset in offsets { pdf.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes()); }
-    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", objects.len() + 1, xref_offset).as_bytes());
+
+    for offset in offsets {
+        pdf.extend_from_slice(
+            format!("{:010} 00000 n \n", offset).as_bytes(),
+        );
+    }
+
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            objects.len() + 1,
+            xref_offset
+        )
+        .as_bytes(),
+    );
     pdf
 }
-
 fn existing_ticket_state(connection: &Connection, load: &TicketLoad) -> Result<Option<DesktopTicketState>, String> {
     let row = connection
         .query_row(

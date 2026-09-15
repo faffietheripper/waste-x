@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import { jobLoads, users } from "@/db/schema";
@@ -22,6 +22,25 @@ export type WeighbridgeTicketData = {
   vehicleRegistration: string;
   ewcCode: string;
   wasteDescription: string;
+  wasteItems: Array<{
+    itemNumber: number;
+    ewcCode: string;
+    wasteDescription: string;
+    weightAmount: string | null;
+    weightMetric: "Grams" | "Kilograms" | "Tonnes";
+    weightIsEstimate: boolean;
+    permitEwcMatchType: "exact" | "regulatory_authority" | null;
+    permitEwcCode: string;
+    permitEwcBasis: string;
+    permitEwcReference: string;
+    regulatoryRuleKey: string;
+    regulatoryRuleScope: string;
+    qualifyingAuthorisationRef: string;
+  }>;
+  permitEwcMatchType: string;
+  permitEwcCode: string;
+  permitEwcBasis: string;
+  permitEwcReference: string;
   grossWeight: string | null;
   tareWeight: string | null;
   netWeight: string | null;
@@ -90,6 +109,9 @@ export async function getWeighbridgeTicketData(params: {
       driver: true,
       vehicle: true,
       materialProfile: { with: { ewcCode: true } },
+      wasteItems: {
+        orderBy: (item, { asc }) => [asc(item.itemNumber)],
+      },
       thirdPartyDestinationSite: { with: { counterparty: true } },
     },
   });
@@ -152,6 +174,52 @@ export async function getWeighbridgeTicketData(params: {
       clean(load.wasteDescriptionSnapshot) ||
       load.materialProfile?.wasteDescription ||
       "Not recorded",
+    wasteItems:
+      load.wasteItems.length > 0
+        ? load.wasteItems.map((item) => ({
+            itemNumber: item.itemNumber,
+            ewcCode: item.ewcCodeSnapshot,
+            wasteDescription: item.wasteDescriptionSnapshot,
+            weightAmount: item.weightAmount,
+            weightMetric: item.weightMetric,
+            weightIsEstimate: item.weightIsEstimate,
+            permitEwcMatchType: item.permitEwcMatchType,
+            permitEwcCode: clean(item.permitEwcCodeSnapshot),
+            permitEwcBasis: clean(item.permitEwcBasis),
+            permitEwcReference: clean(item.permitEwcReference),
+            regulatoryRuleKey: clean(item.regulatoryRuleKeySnapshot),
+            regulatoryRuleScope: clean(item.regulatoryRuleScopeSnapshot),
+            qualifyingAuthorisationRef: clean(
+              item.qualifyingAuthorisationRefSnapshot,
+            ),
+          }))
+        : [
+            {
+              itemNumber: 1,
+              ewcCode:
+                clean(load.ewcCodeSnapshot) ||
+                load.materialProfile?.ewcCode?.code ||
+                "Not recorded",
+              wasteDescription:
+                clean(load.wasteDescriptionSnapshot) ||
+                load.materialProfile?.wasteDescription ||
+                "Not recorded",
+              weightAmount: load.netWeight,
+              weightMetric: load.weightMetric,
+              weightIsEstimate: load.weightIsEstimate,
+              permitEwcMatchType: load.permitEwcMatchType,
+              permitEwcCode: clean(load.permitEwcCodeSnapshot),
+              permitEwcBasis: clean(load.permitEwcBasis),
+              permitEwcReference: clean(load.permitEwcReference),
+              regulatoryRuleKey: "",
+              regulatoryRuleScope: "",
+              qualifyingAuthorisationRef: "",
+            },
+          ],
+    permitEwcMatchType: clean(load.permitEwcMatchType),
+    permitEwcCode: clean(load.permitEwcCodeSnapshot),
+    permitEwcBasis: clean(load.permitEwcBasis),
+    permitEwcReference: clean(load.permitEwcReference),
     grossWeight: load.grossWeight,
     tareWeight: load.tareWeight,
     netWeight: load.netWeight,

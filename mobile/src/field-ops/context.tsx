@@ -199,11 +199,21 @@ export function FieldOpsProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!auth) return;
 
-    // While Cloud is unavailable, retry quickly enough that a driver does not
-    // need to press anything when connectivity returns. While connected, keep
-    // a low-frequency heartbeat so the short-lived access session is renewed
-    // before expiry even if the app remains open all shift.
-    const retryMs = auth.onlineAuthenticated ? 5 * 60 * 1000 : 15 * 1000;
+    /*
+      WASTE_X_MOBILE_FAST_ASSIGNMENT_RECONCILE_V1
+
+      Desktop can create, assign and complete work while Cloud is unavailable.
+      When Cloud returns there is a short race: Mobile may reconnect before the
+      Desktop outbox has finished replaying and receive the previous assignment
+      snapshot. A five-minute online heartbeat then makes valid newly-synced
+      assignments look missing.
+
+      While the app is active, reconcile every 15 seconds whether Cloud was
+      already online or has just returned. The bootstrap remains authoritative,
+      Driver-scoped and replacement-based, so reassignment/revocation semantics
+      are unchanged.
+    */
+    const retryMs = 15 * 1000;
     const timer = setInterval(() => {
       if (AppState.currentState === "active") void reconcile(false);
     }, retryMs);

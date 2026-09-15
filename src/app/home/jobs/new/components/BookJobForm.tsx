@@ -45,9 +45,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   driver_not_for_haulier: "The selected driver does not belong to that haulier.",
   vehicle_not_for_haulier: "The selected vehicle does not belong to that haulier.",
   invalid_material: "That material is no longer available.",
+  too_many_waste_items:
+    "A single Load can contain up to 12 identifiable waste items in this pilot.",
   invalid_template: "That job template is no longer available.",
   material_not_permitted_at_receiving_site:
-    "That material's EWC code is not configured on the receiving-site permit.",
+    "This waste profile exists, but its EWC is not authorised for this receiving site. Add an exact permit EWC or enable an applicable regulatory acceptance rule.",
 };
 
 function money(amount: string, currency: string) {
@@ -159,6 +161,8 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
   const [driverId, setDriverId] = useState(initialDriver?.id ?? "");
   const [vehicleId, setVehicleId] = useState(initialVehicle?.id ?? "");
   const [materialProfileId, setMaterialProfileId] = useState(initialMaterialProfileId);
+  const [additionalMaterialProfileIds, setAdditionalMaterialProfileIds] =
+    useState<string[]>([]);
   const [customerChargeDescription, setCustomerChargeDescription] =
     useState("Waste acceptance / disposal");
   const [customerChargeAmount, setCustomerChargeAmount] = useState("");
@@ -204,14 +208,39 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
   const selectedDriver = drivers.find((driver) => driver.id === driverId);
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === vehicleId);
 
-  const permittedEwcIds = useMemo(
-    () => new Set(data.permittedEwcCodeIds),
-    [data.permittedEwcCodeIds],
+  const acceptedEwcIds = useMemo(
+    () => new Set(data.acceptedEwcCodeIds),
+    [data.acceptedEwcCodeIds],
   );
 
-  const materialIsPermitted = selectedMaterial
-    ? permittedEwcIds.has(selectedMaterial.ewcCodeId)
+  const selectedRegulatoryAcceptance = selectedMaterial
+    ? data.regulatoryEwcAcceptances.find(
+        (item) => item.acceptedEwcCodeId === selectedMaterial.ewcCodeId,
+      )
+    : undefined;
+
+  const materialIsAccepted = selectedMaterial
+    ? acceptedEwcIds.has(selectedMaterial.ewcCodeId)
     : false;
+
+  const additionalMaterials = additionalMaterialProfileIds.map(
+    (id) => materials.find((material) => material.id === id) ?? null,
+  );
+  const selectedWasteItemIds = [
+    materialProfileId,
+    ...additionalMaterialProfileIds,
+  ].filter(Boolean);
+  const wasteItemsAreUnique =
+    new Set(selectedWasteItemIds).size === selectedWasteItemIds.length;
+  const additionalWasteItemsAreAccepted =
+    additionalMaterialProfileIds.every((id, index) => {
+      const material = additionalMaterials[index];
+      return Boolean(
+        id &&
+          material &&
+          acceptedEwcIds.has(material.ewcCodeId),
+      );
+    });
 
   const rateDate = /^\d{4}-\d{2}-\d{2}$/.test(jobDate)
     ? new Date(`${jobDate}T12:00:00.000Z`)
@@ -410,7 +439,9 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
     (transportMode === "own" ||
       (transportMode === "external" && Boolean(haulierId))) &&
     Boolean(materialProfileId) &&
-    materialIsPermitted;
+    materialIsAccepted &&
+    additionalWasteItemsAreAccepted &&
+    wasteItemsAreUnique;
 
   const bookingChecks = [
     {
@@ -436,8 +467,12 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
       ok: Boolean(materialProfileId),
     },
     {
-      label: "Receiving permit match",
-      ok: Boolean(materialProfileId) && materialIsPermitted,
+      label: "Receiving acceptance",
+      ok:
+        Boolean(materialProfileId) &&
+        materialIsAccepted &&
+        additionalWasteItemsAreAccepted &&
+        wasteItemsAreUnique,
     },
   ];
 
@@ -733,7 +768,7 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
           </Card>
 
           <Card title="Waste material" eyebrow="4 · What is being moved">
-            <Field label="Material profile" required>
+            <Field label="Waste item 1 · Primary material" required>
               <select
                 name="materialProfileId"
                 value={materialProfileId}
@@ -743,13 +778,20 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
               >
                 <option value="">Choose material</option>
                 {sortedMaterials.map((material) => {
-                  const permitted = permittedEwcIds.has(material.ewcCodeId);
+                  const accepted = acceptedEwcIds.has(material.ewcCodeId);
+                  const regulatory = data.regulatoryEwcAcceptances.find(
+                    (item) => item.acceptedEwcCodeId === material.ewcCodeId,
+                  );
 
                   return (
                     <option key={material.id} value={material.id}>
                       {material.isFavourite ? "★ " : ""}
                       {material.name} · {material.ewcCode}
-                      {permitted ? "" : " · NOT ON RECEIVING PERMIT"}
+                      {regulatory
+                        ? ` · REGULATORY AUTHORITY · ${regulatory.basis.replaceAll("_", " ")}`
+                        : accepted
+                          ? ""
+                          : " · NOT AUTHORISED"}
                     </option>
                   );
                 })}
@@ -759,9 +801,11 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
             {selectedMaterial && (
               <div
                 className={`mt-4 rounded-2xl border px-4 py-4 text-sm ${
-                  materialIsPermitted
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-                    : "border-red-200 bg-red-50 text-red-900"
+                  selectedRegulatoryAcceptance
+                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                    : materialIsAccepted
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                      : "border-red-200 bg-red-50 text-red-900"
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -775,18 +819,191 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
                   </div>
 
                   <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold shadow-sm">
-                    {materialIsPermitted ? "✓ Permit match" : "✕ Not permitted here"}
+                    {selectedRegulatoryAcceptance
+                      ? "⚠ Regulatory authority"
+                      : materialIsAccepted
+                        ? "✓ Exact permit match"
+                        : "✕ Not authorised here"}
                   </span>
                 </div>
+                {selectedRegulatoryAcceptance && (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-white/70 px-3 py-2 text-xs leading-5 text-amber-900">
+                    Actual EWC is accepted against permit code{" "}
+                    <span className="font-semibold">
+                      {selectedRegulatoryAcceptance.permittedEwcCode || "configured activity authority"}
+                    </span>
+                    {" "}under {selectedRegulatoryAcceptance.basis.replaceAll("_", " ")}
+                    {selectedRegulatoryAcceptance.reference
+                      ? ` · ${selectedRegulatoryAcceptance.reference}`
+                      : ""}.
+                  </div>
+                )}
               </div>
             )}
 
+            <div className="mt-5 rounded-2xl border border-black/10 bg-[#faf8f4] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-black">
+                    Additional waste items on this same lorry
+                  </p>
+                  <p className="mt-1 max-w-2xl text-xs leading-5 text-black/45">
+                    Add another identifiable waste stream only when it travels
+                    on the same physical Load, from this origin to this receiving site.
+                    The Driver still gets one transport journey.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={!materialProfileId || additionalMaterialProfileIds.length >= 7}
+                  onClick={() =>
+                    setAdditionalMaterialProfileIds((current) => [...current, ""])
+                  }
+                  className="rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-black/60 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  + Add waste item
+                </button>
+              </div>
+
+              {additionalMaterialProfileIds.length > 0 ? (
+                <div className="mt-4 space-y-3">
+                  {additionalMaterialProfileIds.map((value, index) => {
+                    const selected = additionalMaterials[index];
+                    const regulatory = selected
+                      ? data.regulatoryEwcAcceptances.find(
+                          (item) =>
+                            item.acceptedEwcCodeId === selected.ewcCodeId,
+                        )
+                      : undefined;
+
+                    return (
+                      <div
+                        key={`additional-waste-${index}`}
+                        className="rounded-xl border border-black/10 bg-white p-3"
+                      >
+                        <div className="flex gap-2">
+                          <select
+                            name="additionalMaterialProfileId"
+                            value={value}
+                            required
+                            onChange={(event) =>
+                              setAdditionalMaterialProfileIds((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? event.target.value
+                                    : row,
+                                ),
+                              )
+                            }
+                            className={inputClass}
+                          >
+                            <option value="">
+                              Choose waste item {index + 2}
+                            </option>
+                            {sortedMaterials.map((material) => {
+                              const accepted = acceptedEwcIds.has(
+                                material.ewcCodeId,
+                              );
+                              const isAlreadySelected =
+                                selectedWasteItemIds.includes(material.id) &&
+                                material.id !== value;
+                              const authority =
+                                data.regulatoryEwcAcceptances.find(
+                                  (item) =>
+                                    item.acceptedEwcCodeId ===
+                                    material.ewcCodeId,
+                                );
+
+                              return (
+                                <option
+                                  key={material.id}
+                                  value={material.id}
+                                  disabled={isAlreadySelected}
+                                >
+                                  {material.isFavourite ? "★ " : ""}
+                                  {material.name} · {material.ewcCode}
+                                  {authority
+                                    ? ` · REGULATORY AUTHORITY · ${authority.basis.replaceAll("_", " ")}`
+                                    : accepted
+                                      ? " · EXACT PERMIT MATCH"
+                                      : " · NOT AUTHORISED"}
+                                </option>
+                              );
+                            })}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAdditionalMaterialProfileIds((current) =>
+                                current.filter(
+                                  (_, rowIndex) => rowIndex !== index,
+                                ),
+                              )
+                            }
+                            className="rounded-xl border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        {selected ? (
+                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="text-black/50">
+                              {selected.ewcCode} · {selected.wasteDescription}
+                            </span>
+                            <span
+                              className={`rounded-full px-2.5 py-1 font-semibold ${
+                                regulatory
+                                  ? "bg-amber-100 text-amber-900"
+                                  : acceptedEwcIds.has(selected.ewcCodeId)
+                                    ? "bg-emerald-100 text-emerald-900"
+                                    : "bg-red-100 text-red-800"
+                              }`}
+                            >
+                              {regulatory
+                                ? "Regulatory authority"
+                                : acceptedEwcIds.has(selected.ewcCodeId)
+                                  ? "Exact permit match"
+                                  : "Not authorised"}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+
+                  {!wasteItemsAreUnique ? (
+                    <p className="text-xs font-semibold text-red-700">
+                      Each Waste Item on the Load must use a different Material Profile.
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-black/35">
+                  This Load currently contains one Waste Item.
+                </p>
+              )}
+
+              <p className="mt-3 text-[11px] leading-5 text-black/40">
+                Waste X checks every item independently against the receiving
+                permit and enabled regulatory acceptance rules.
+              </p>
+            </div>
+
             <div className="mt-4 flex flex-wrap gap-3 text-xs">
               <QuickActionButton onClick={() => openQuickCreate("material")}>
-                + New material
+                + New waste profile
               </QuickActionButton>
               <QuickLink href="/home/materials">Manage material profiles</QuickLink>
             </div>
+
+            <p className="mt-3 text-xs leading-5 text-black/45">
+              A waste profile only records what the waste is. Creating a profile does
+              not authorise this receiving site to accept it. Waste X checks the site's
+              active permit and enabled regulatory rules separately before the Job can
+              be booked.
+            </p>
           </Card>
 
           <Card title="Job-specific pricing" eyebrow="5 · Commercial">
@@ -1121,11 +1338,14 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
             </div>
           </section>
 
-          {!materialIsPermitted && selectedMaterial && (
+          {!materialIsAccepted && selectedMaterial && (
             <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs leading-5 text-red-800">
-              This booking cannot be saved to your receiving site until the selected EWC
-              is authorised on the active permit. Choose another material or review the
-              permit setup.
+              <p className="font-bold">This Job cannot be booked.</p>
+              <p className="mt-1">
+                The waste profile is valid, but EWC {selectedMaterial.ewcCode} is not
+                authorised for this receiving site. It needs either an exact active
+                permit match or an enabled regulatory acceptance rule.
+              </p>
             </div>
           )}
 
@@ -1156,7 +1376,7 @@ export default function BookJobForm({ data, defaultDate, initialValues, error }:
           haulierId={haulierId}
           haulierName={selectedHaulier?.name ?? null}
           ownCarrierDwt={ownCarrierDwt}
-          permittedEwcCodes={data.permittedEwcCodes}
+          acceptedEwcCodes={data.acceptedEwcCodes}
           error={quickCreateError}
           saving={quickCreateSaving}
           onClose={() => {
@@ -1260,7 +1480,7 @@ function QuickCreateModal({
   haulierId,
   haulierName,
   ownCarrierDwt,
-  permittedEwcCodes,
+  acceptedEwcCodes,
   error,
   saving,
   onClose,
@@ -1273,19 +1493,19 @@ function QuickCreateModal({
   haulierId: string;
   haulierName: string | null;
   ownCarrierDwt: BookJobFormData["ownCarrierDwt"];
-  permittedEwcCodes: BookJobFormData["permittedEwcCodes"];
+  acceptedEwcCodes: BookJobFormData["acceptedEwcCodes"];
   error: string;
   saving: boolean;
   onClose: () => void;
   onSubmit: (formData: FormData) => Promise<void>;
 }) {
-  const firstEwc = permittedEwcCodes[0];
+  const firstEwc = acceptedEwcCodes[0];
   const [materialEwcId, setMaterialEwcId] = useState(firstEwc?.id ?? "");
   const [materialHazardous, setMaterialHazardous] = useState(
     firstEwc?.isHazardous === true,
   );
 
-  const selectedMaterialEwc = permittedEwcCodes.find(
+  const selectedMaterialEwc = acceptedEwcCodes.find(
     (item) => item.id === materialEwcId,
   );
 
@@ -1332,7 +1552,7 @@ function QuickCreateModal({
       eyebrow: "Quick create · Material",
       title: "Add a material profile",
       description:
-        "This fast path only offers EWC codes accepted by the current receiving permit so the material can be used on this incoming booking immediately.",
+        "This fast path only offers EWC codes currently accepted at the receiving site — either by an exact permit match or an enabled regulatory rule — so the material can be used on this incoming booking immediately.",
     },
   };
 
@@ -1564,9 +1784,9 @@ function QuickCreateModal({
 
           {kind === "material" && (
             <>
-              {permittedEwcCodes.length === 0 ? (
+              {acceptedEwcCodes.length === 0 ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-                  No permitted EWC codes are configured on the receiving permit. Add them before creating a material from this booking.
+                  No EWC codes are currently accepted at this receiving site. Add an exact permit code or enable an applicable regulatory acceptance rule first.
                 </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2">
@@ -1581,13 +1801,13 @@ function QuickCreateModal({
                       onChange={(event) => {
                         const nextId = event.target.value;
                         setMaterialEwcId(nextId);
-                        const nextEwc = permittedEwcCodes.find((item) => item.id === nextId);
+                        const nextEwc = acceptedEwcCodes.find((item) => item.id === nextId);
                         setMaterialHazardous(nextEwc?.isHazardous === true);
                       }}
                       required
                       className={inputClass}
                     >
-                      {permittedEwcCodes.map((ewc) => (
+                      {acceptedEwcCodes.map((ewc) => (
                         <option key={ewc.id} value={ewc.id}>
                           {ewc.code} · {ewc.description}
                         </option>
@@ -1694,7 +1914,7 @@ function QuickCreateModal({
               disabled={
                 saving ||
                 transportOwnerMissing ||
-                (kind === "material" && permittedEwcCodes.length === 0)
+                (kind === "material" && acceptedEwcCodes.length === 0)
               }
               className="rounded-2xl bg-orange-500 px-5 py-3 text-sm font-bold text-black transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
             >

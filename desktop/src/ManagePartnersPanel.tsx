@@ -167,12 +167,17 @@ export function ManagePartnersPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    if (!cloudReachable) {
-      setData(null);
-      return;
-    }
+  /* WASTE_X_DESKTOP_PARTNER_ACTION_TOAST_V1 */
+  useEffect(() => {
+    if (!message && !error) return;
+    const timer = window.setTimeout(() => {
+      setMessage(null);
+      setError(null);
+    }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [message, error]);
 
+  async function load() {
     setLoading(true);
     setError(null);
 
@@ -181,7 +186,6 @@ export function ManagePartnersPanel({
         await invoke<PartnerData>("desktop_partner_master_data"),
       );
     } catch (reason) {
-      setData(null);
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setLoading(false);
@@ -311,7 +315,7 @@ export function ManagePartnersPanel({
 
     try {
       const result = await invoke<MutationResult>(
-        "desktop_mutate_partner_master_data",
+        "desktop_mutate_partner_local",
         { input },
       );
 
@@ -321,7 +325,13 @@ export function ManagePartnersPanel({
           : null,
       );
 
-      await invoke("desktop_refresh_bootstrap");
+      if (cloudReachable) {
+        try {
+          await invoke("desktop_sync_partner_mutations");
+        } catch {
+          // The local Partner / Site change is durable and retries automatically.
+        }
+      }
       await onMasterDataChanged();
 
       setMessage(
@@ -349,7 +359,7 @@ export function ManagePartnersPanel({
         ? "haulier.update"
         : "haulier.create",
       data: {
-        ...(haulierDraft.id ? { id: haulierDraft.id } : {}),
+        id: haulierDraft.id ?? crypto.randomUUID(),
         name: haulierDraft.name,
         carrierRegistrationNumber: optional(
           haulierDraft.carrierRegistrationNumber,
@@ -376,7 +386,7 @@ export function ManagePartnersPanel({
     const result = await mutate({
       operation: siteDraft.id ? "site.update" : "site.create",
       data: {
-        ...(siteDraft.id ? { id: siteDraft.id } : {}),
+        id: siteDraft.id ?? crypto.randomUUID(),
         kind: siteDraft.kind,
         counterpartyId: siteDraft.counterpartyId,
         name: siteDraft.name,
@@ -403,6 +413,7 @@ export function ManagePartnersPanel({
     const result = await mutate({
       operation: "company.create",
       data: {
+        id: crypto.randomUUID(),
         kind: companyDraft.kind,
         name: companyDraft.name,
         accountReference: optional(companyDraft.accountReference),
@@ -436,18 +447,6 @@ export function ManagePartnersPanel({
     }
   }
 
-  if (!cloudReachable) {
-    return (
-      <div className="pilot-create-offline">
-        <strong>Connect to Waste X Cloud to manage partners.</strong>
-        <span>
-          Existing cached partner/site records remain available for
-          current site operations.
-        </span>
-      </div>
-    );
-  }
-
   if (loading && !data) {
     return <div className="empty-state">Loading partner records…</div>;
   }
@@ -461,11 +460,27 @@ export function ManagePartnersPanel({
   return (
     <div className="pilot-partners-wrap">
       {message ? (
-        <div className="pilot-manage-message good">{message}</div>
+        <div className="pilot-action-toast success" role="status" aria-live="polite">
+          <div>
+            <strong>Action completed</strong>
+            <span>{message}</span>
+          </div>
+          <button type="button" onClick={() => setMessage(null)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
       ) : null}
 
       {error ? (
-        <div className="pilot-manage-message bad">{error}</div>
+        <div className="pilot-action-toast error" role="alert" aria-live="assertive">
+          <div>
+            <strong>Action unsuccessful</strong>
+            <span>{error}</span>
+          </div>
+          <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
       ) : null}
 
       {tab === "hauliers" ? (

@@ -37,3 +37,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Waste X local environment secrets
+.env
+.env.local
+.env.*.local
+!.env.example

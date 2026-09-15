@@ -2,7 +2,7 @@ use keyring::Entry;
 use reqwest::{Client, Url};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 use crate::offline_auth::{self, DesktopAuthState};
@@ -12,6 +12,9 @@ const DATABASE_KEYRING_SERVICE: &str = "com.wastex.desktop.local-database";
 const DATABASE_KEYRING_ACCOUNT: &str = "database-key-v1";
 const CLOUD_KEYRING_SERVICE: &str = "com.wastex.desktop.cloud-credentials";
 const CLOUD_KEYRING_ACCOUNT: &str = "credentials-v1";
+const JOB_OPTIONS_SNAPSHOT_KEY: &str = "desktop_job_options_snapshot_v1";
+const TRANSPORT_MASTER_SNAPSHOT_KEY: &str = "desktop_transport_master_snapshot_v1";
+const PARTNER_MASTER_SNAPSHOT_KEY: &str = "desktop_partner_master_snapshot_v1";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +100,53 @@ fn metadata(connection: &Connection, key: &str) -> Result<Option<String>, String
         )
         .optional()
         .map_err(|e| e.to_string())
+}
+
+/* WASTE_X_DESKTOP_OFFLINE_REFERENCE_CACHE_V1 */
+fn cache_snapshot(app: &AppHandle, key: &str, value: &Value) -> Result<(), String> {
+    let connection = open_local_connection(app)?;
+    let encoded = serde_json::to_string(value)
+        .map_err(|e| format!("Could not encode Waste X offline reference data: {e}"))?;
+
+    connection
+        .execute(
+            "INSERT INTO local_sync_metadata (key, value, updated_at)
+             VALUES (?1, ?2, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = excluded.updated_at",
+            params![key, encoded],
+        )
+        .map_err(|e| format!("Could not cache Waste X offline reference data: {e}"))?;
+
+    Ok(())
+}
+
+fn cached_snapshot(app: &AppHandle, key: &str, label: &str) -> Result<Value, String> {
+    let connection = open_local_connection(app)?;
+    let encoded = metadata(&connection, key)?
+        .ok_or_else(|| format!("{label} has not been cached on this Desktop yet. Connect to Waste X Cloud once to refresh it."))?;
+
+    serde_json::from_str(&encoded)
+        .map_err(|e| format!("Cached {label} is unreadable: {e}"))
+}
+
+fn cached_snapshot_after(
+    app: &AppHandle,
+    key: &str,
+    label: &str,
+    cloud_error: String,
+) -> Result<Value, String> {
+    cached_snapshot(app, key, label).map_err(|cache_error| {
+        format!("{cloud_error} {cache_error}")
+    })
+}
+
+fn snapshot_from_mutation_data(body: &Value, boundary: Value) -> Option<Value> {
+    let mut object = body.get("data")?.as_object()?.clone();
+    object.insert("ok".to_string(), Value::Bool(true));
+    object.insert("boundary".to_string(), boundary);
+    Some(Value::Object(object))
 }
 
 fn load_cloud_credentials() -> Result<CloudCredentials, String> {
@@ -243,14 +293,25 @@ fn cloud_api_error(body: &Value, fallback: &str) -> String {
 
 #[tauri::command]
 pub async fn desktop_job_options(
+    app: AppHandle,
     auth_state: State<'_, DesktopAuthState>,
 ) -> Result<Value, String> {
     offline_auth::require_unlocked(&auth_state)?;
 
-    let credentials = load_cloud_credentials()?;
+    let credentials = match load_cloud_credentials() {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                JOB_OPTIONS_SNAPSHOT_KEY,
+                "Waste X Job options",
+                error,
+            )
+        }
+    };
     let base_url = cloud_base_url();
 
-    let response = Client::new()
+    let response = match Client::new()
         .get(format!(
             "{base_url}/api/desktop/v1/operations/job-options"
         ))
@@ -261,30 +322,54 @@ pub async fn desktop_job_options(
         )
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "Waste X Cloud Job options are unavailable: {e}"
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                JOB_OPTIONS_SNAPSHOT_KEY,
+                "Waste X Job options",
+                format!("Waste X Cloud Job options are unavailable: {error}"),
             )
-        })?;
+        }
+    };
 
     let status = response.status();
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|e| {
-            format!(
-                "Waste X Cloud Job options returned unreadable data: {e}"
+    let body = match response.json::<Value>().await {
+        Ok(body) => body,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                JOB_OPTIONS_SNAPSHOT_KEY,
+                "Waste X Job options",
+                format!("Waste X Cloud Job options returned unreadable data: {error}"),
             )
-        })?;
+        }
+    };
 
     if !status.is_success() {
-        return Err(format!(
+        let error = format!(
             "{} [HTTP {status}]",
             cloud_api_error(
                 &body,
                 "Waste X Cloud rejected the Job options request.",
             )
-        ));
+        );
+
+        if status.is_server_error() {
+            return cached_snapshot_after(
+                &app,
+                JOB_OPTIONS_SNAPSHOT_KEY,
+                "Waste X Job options",
+                error,
+            );
+        }
+
+        return Err(error);
+    }
+
+    if let Err(error) = cache_snapshot(&app, JOB_OPTIONS_SNAPSHOT_KEY, &body) {
+        eprintln!("[DESKTOP_OFFLINE_REFERENCE_CACHE] Job options cache warning: {error}");
     }
 
     Ok(body)
@@ -405,14 +490,25 @@ pub async fn desktop_cloud_job_history(
 
 #[tauri::command]
 pub async fn desktop_transport_master_data(
+    app: AppHandle,
     auth_state: State<'_, DesktopAuthState>,
 ) -> Result<Value, String> {
     offline_auth::require_unlocked(&auth_state)?;
 
-    let credentials = load_cloud_credentials()?;
+    let credentials = match load_cloud_credentials() {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                TRANSPORT_MASTER_SNAPSHOT_KEY,
+                "Waste X Driver / Vehicle master data",
+                error,
+            )
+        }
+    };
     let base_url = cloud_base_url();
 
-    let response = Client::new()
+    let response = match Client::new()
         .get(format!(
             "{base_url}/api/desktop/v1/operations/transport"
         ))
@@ -423,30 +519,54 @@ pub async fn desktop_transport_master_data(
         )
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "Waste X Cloud transport master data is unavailable: {e}"
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                TRANSPORT_MASTER_SNAPSHOT_KEY,
+                "Waste X Driver / Vehicle master data",
+                format!("Waste X Cloud transport master data is unavailable: {error}"),
             )
-        })?;
+        }
+    };
 
     let status = response.status();
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|e| {
-            format!(
-                "Waste X Cloud transport master data returned unreadable data: {e}"
+    let body = match response.json::<Value>().await {
+        Ok(body) => body,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                TRANSPORT_MASTER_SNAPSHOT_KEY,
+                "Waste X Driver / Vehicle master data",
+                format!("Waste X Cloud transport master data returned unreadable data: {error}"),
             )
-        })?;
+        }
+    };
 
     if !status.is_success() {
-        return Err(format!(
+        let error = format!(
             "{} [HTTP {status}]",
             cloud_api_error(
                 &body,
                 "Waste X Cloud rejected the transport master-data request.",
             )
-        ));
+        );
+
+        if status.is_server_error() {
+            return cached_snapshot_after(
+                &app,
+                TRANSPORT_MASTER_SNAPSHOT_KEY,
+                "Waste X Driver / Vehicle master data",
+                error,
+            );
+        }
+
+        return Err(error);
+    }
+
+    if let Err(error) = cache_snapshot(&app, TRANSPORT_MASTER_SNAPSHOT_KEY, &body) {
+        eprintln!("[DESKTOP_OFFLINE_REFERENCE_CACHE] Transport cache warning: {error}");
     }
 
     Ok(body)
@@ -454,6 +574,7 @@ pub async fn desktop_transport_master_data(
 
 #[tauri::command]
 pub async fn desktop_mutate_transport_master_data(
+    app: AppHandle,
     auth_state: State<'_, DesktopAuthState>,
     input: Value,
 ) -> Result<Value, String> {
@@ -500,6 +621,18 @@ pub async fn desktop_mutate_transport_master_data(
         ));
     }
 
+    if let Some(snapshot) = snapshot_from_mutation_data(
+        &body,
+        json!({
+            "mobileAccessAdministration": "WEB_ONLY",
+            "dwtCarrierAdministration": "WEB_ONLY"
+        }),
+    ) {
+        if let Err(error) = cache_snapshot(&app, TRANSPORT_MASTER_SNAPSHOT_KEY, &snapshot) {
+            eprintln!("[DESKTOP_OFFLINE_REFERENCE_CACHE] Transport mutation cache warning: {error}");
+        }
+    }
+
     Ok(body)
 }
 
@@ -507,14 +640,25 @@ pub async fn desktop_mutate_transport_master_data(
 
 #[tauri::command]
 pub async fn desktop_partner_master_data(
+    app: AppHandle,
     auth_state: State<'_, DesktopAuthState>,
 ) -> Result<Value, String> {
     offline_auth::require_unlocked(&auth_state)?;
 
-    let credentials = load_cloud_credentials()?;
+    let credentials = match load_cloud_credentials() {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                PARTNER_MASTER_SNAPSHOT_KEY,
+                "Waste X partner / site master data",
+                error,
+            )
+        }
+    };
     let base_url = cloud_base_url();
 
-    let response = Client::new()
+    let response = match Client::new()
         .get(format!(
             "{base_url}/api/desktop/v1/operations/partners"
         ))
@@ -525,30 +669,54 @@ pub async fn desktop_partner_master_data(
         )
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "Waste X Cloud partner master data is unavailable: {e}"
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                PARTNER_MASTER_SNAPSHOT_KEY,
+                "Waste X partner / site master data",
+                format!("Waste X Cloud partner master data is unavailable: {error}"),
             )
-        })?;
+        }
+    };
 
     let status = response.status();
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|e| {
-            format!(
-                "Waste X Cloud partner data returned unreadable data: {e}"
+    let body = match response.json::<Value>().await {
+        Ok(body) => body,
+        Err(error) => {
+            return cached_snapshot_after(
+                &app,
+                PARTNER_MASTER_SNAPSHOT_KEY,
+                "Waste X partner / site master data",
+                format!("Waste X Cloud partner data returned unreadable data: {error}"),
             )
-        })?;
+        }
+    };
 
     if !status.is_success() {
-        return Err(format!(
+        let error = format!(
             "{} [HTTP {status}]",
             cloud_api_error(
                 &body,
                 "Waste X Cloud rejected the partner master-data request.",
             )
-        ));
+        );
+
+        if status.is_server_error() {
+            return cached_snapshot_after(
+                &app,
+                PARTNER_MASTER_SNAPSHOT_KEY,
+                "Waste X partner / site master data",
+                error,
+            );
+        }
+
+        return Err(error);
+    }
+
+    if let Err(error) = cache_snapshot(&app, PARTNER_MASTER_SNAPSHOT_KEY, &body) {
+        eprintln!("[DESKTOP_OFFLINE_REFERENCE_CACHE] Partner cache warning: {error}");
     }
 
     Ok(body)
@@ -556,6 +724,7 @@ pub async fn desktop_partner_master_data(
 
 #[tauri::command]
 pub async fn desktop_mutate_partner_master_data(
+    app: AppHandle,
     auth_state: State<'_, DesktopAuthState>,
     input: Value,
 ) -> Result<Value, String> {
@@ -600,6 +769,19 @@ pub async fn desktop_mutate_partner_master_data(
                 "Waste X Cloud rejected the company / site change.",
             )
         ));
+    }
+
+    if let Some(snapshot) = snapshot_from_mutation_data(
+        &body,
+        json!({
+            "destinationAuthorisations": "WEB_ONLY",
+            "permittedEwcConfiguration": "WEB_ONLY",
+            "advancedCounterpartyCompliance": "WEB_ONLY"
+        }),
+    ) {
+        if let Err(error) = cache_snapshot(&app, PARTNER_MASTER_SNAPSHOT_KEY, &snapshot) {
+            eprintln!("[DESKTOP_OFFLINE_REFERENCE_CACHE] Partner mutation cache warning: {error}");
+        }
     }
 
     Ok(body)

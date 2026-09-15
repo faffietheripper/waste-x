@@ -20,6 +20,7 @@ import {
   counterpartySites,
   drivers,
   jobLoads,
+  jobLoadWasteItems,
   jobs,
   materialProfiles,
   sites,
@@ -210,11 +211,27 @@ export async function GET(request: Request) {
       .limit(2);
 
     const now = new Date();
-    const horizonStart = new Date(now);
-    horizonStart.setHours(0, 0, 0, 0);
-    const horizonEnd = new Date(horizonStart);
-    horizonEnd.setDate(horizonEnd.getDate() + FORWARD_DAYS);
+
+    /*
+      WASTE_X_MOBILE_PERMANENT_ASSIGNMENT_HISTORY_V1
+
+      A Driver's authorised historical work must not disappear because time
+      passed. Completed/rejected/cancelled Loads and unfinished carry-over Loads
+      remain available in the encrypted Mobile working set indefinitely so the
+      Driver can revisit the operational record and receiving-site ticket later.
+
+      Future work is still prefetched FORWARD_DAYS ahead. Authorisation changes
+      such as reassignment, suspension or device/user revocation remain the
+      mechanisms that remove access — never an arbitrary historical age limit.
+
+      horizonStart is retained for the existing bootstrap contract and stored
+      local metadata. Unix epoch represents all historical Waste X records.
+    */
+    const horizonStart = new Date(0);
+
+    const horizonEnd = new Date(now);
     horizonEnd.setHours(23, 59, 59, 999);
+    horizonEnd.setDate(horizonEnd.getDate() + FORWARD_DAYS);
 
     if (matchedDrivers.length !== 1) {
       return clientApiJson({
@@ -294,6 +311,35 @@ export async function GET(request: Request) {
       .orderBy(asc(jobs.jobDate), asc(jobLoads.loadNumber));
 
     const loadIds = unique(assignmentRows.map((row) => row.loadId));
+    const wasteItemRows = loadIds.length
+      ? await database
+          .select()
+          .from(jobLoadWasteItems)
+          .where(
+            and(
+              eq(
+                jobLoadWasteItems.organisationId,
+                context.organisationId,
+              ),
+              inArray(jobLoadWasteItems.jobLoadId, loadIds),
+            ),
+          )
+          .orderBy(
+            asc(jobLoadWasteItems.jobLoadId),
+            asc(jobLoadWasteItems.itemNumber),
+          )
+      : [];
+
+    const wasteItemsByLoadId = new Map<
+      string,
+      typeof wasteItemRows
+    >();
+    for (const item of wasteItemRows) {
+      const current = wasteItemsByLoadId.get(item.jobLoadId) ?? [];
+      current.push(item);
+      wasteItemsByLoadId.set(item.jobLoadId, current);
+    }
+
     const vehicleIds = unique(assignmentRows.map((row) => row.loadVehicleId ?? row.jobVehicleId));
     const materialIds = unique(assignmentRows.map((row) => row.loadMaterialProfileId ?? row.jobMaterialProfileId));
     const ownSiteIds = unique(assignmentRows.map((row) => row.loadOwnSiteId ?? row.jobOwnSiteId));
@@ -453,6 +499,23 @@ export async function GET(request: Request) {
           movementAt: row.movementAt?.toISOString() ?? null,
           ewcCode: row.ewcCode,
           wasteDescription: row.wasteDescription,
+          wasteItems: (wasteItemsByLoadId.get(row.loadId) ?? []).map(
+            (item) => ({
+              id: item.id,
+              itemNumber: item.itemNumber,
+              materialProfileId: item.materialProfileId,
+              ewcCodeId: item.ewcCodeId,
+              ewcCode: item.ewcCodeSnapshot,
+              wasteDescription: item.wasteDescriptionSnapshot,
+              weightAmount: item.weightAmount,
+              weightMetric: item.weightMetric,
+              weightIsEstimate: item.weightIsEstimate,
+              permitEwcMatchType: item.permitEwcMatchType,
+              permitEwcCode: item.permitEwcCodeSnapshot,
+              permitEwcBasis: item.permitEwcBasis,
+              permitEwcReference: item.permitEwcReference,
+            }),
+          ),
           grossWeight: row.grossWeight,
           tareWeight: row.tareWeight,
           netWeight: row.netWeight,

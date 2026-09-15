@@ -81,6 +81,7 @@ function makeReferenceItem(params: {
 /* =========================================================
    EWC CODES
    GET /reference-data/ewc-codes
+   WASTE_X_DWT_EWC_REFERENCE_CANONICAL_V1
 ========================================================= */
 
 export function normaliseEwcCodes(params: {
@@ -89,7 +90,7 @@ export function normaliseEwcCodes(params: {
 }): NormalisedWasteTrackingReferenceDataItem[] {
   return params.items
     .map((item) => {
-      const code = cleanCode(item.code);
+      const code = cleanCode(item.code)?.replace(/\s+/g, "") ?? null;
 
       if (!code) return null;
 

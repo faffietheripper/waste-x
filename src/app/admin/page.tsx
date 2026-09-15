@@ -11,13 +11,17 @@ import {
 import { requirePlatformAdmin } from "@/lib/access/require-platform-admin";
 import { getAdminControlTowerData } from "@/modules/admin/core/getAdminControlTowerData";
 import { getAdminWorkflowHealth } from "@/modules/admin/core/getAdminWorkflowHealth";
+import { getAdminDevices } from "@/modules/admin/core/getAdminDeviceData";
+import { getAdminDiagnostics } from "@/modules/admin/core/getAdminDiagnosticsData";
 
 export default async function AdminDashboard() {
   await requirePlatformAdmin();
 
-  const [core, workflows] = await Promise.all([
+  const [core, workflows, devices, diagnostics] = await Promise.all([
     getAdminControlTowerData(),
     getAdminWorkflowHealth(30),
+    getAdminDevices(),
+    getAdminDiagnostics(),
   ]);
 
   const workflowAttention =
@@ -31,6 +35,26 @@ export default async function AdminDashboard() {
     .filter((row) => row.status === "ACTIVE" && !row.isSuspended && !row.setup.ready)
     .sort((a, b) => a.setup.readyCount - b.setup.readyCount)
     .slice(0, 6);
+
+  const staleDeviceThreshold = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const activeDevices = devices.filter((device) => device.status === "ACTIVE").length;
+  const suspendedDevices = devices.filter((device) => device.status === "SUSPENDED").length;
+  const revokedDevices = devices.filter((device) => device.status === "REVOKED").length;
+  const staleActiveDevices = devices.filter(
+    (device) =>
+      device.status === "ACTIVE" &&
+      (!device.lastSeenAt ||
+        device.lastSeenAt.getTime() < staleDeviceThreshold),
+  ).length;
+
+  const diagnosticAttention = diagnostics.rows.filter(
+    (event) =>
+      !event.resolvedAt &&
+      ["FAILED", "RETRYING", "REJECTED", "CONFLICT"].includes(event.outcome),
+  ).length;
+  const criticalDiagnostics = diagnostics.rows.filter(
+    (event) => event.severity === "critical" && !event.resolvedAt,
+  ).length;
 
   return (
     <div className="space-y-7">
@@ -52,6 +76,59 @@ export default async function AdminDashboard() {
         <AdminMetric label="Workflow attention" value={workflowAttention} helper="Returns + carbon + commercial + billing signals" danger={workflowAttention > 0} />
         <AdminMetric label="Support" value={core.support.open} helper={`${core.support.urgent} urgent · ${core.support.unassigned} unassigned`} danger={core.support.urgent > 0 || core.support.unassigned > 0} />
         <AdminMetric label="System" value={core.system.unresolvedErrors} helper={`${core.system.criticalErrors} critical unresolved errors`} danger={core.system.unresolvedErrors > 0} />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-3">
+        <AdminPanel
+          eyebrow="Client Fleet"
+          title="Desktop & Mobile devices"
+          description="Cloud-side device security and activity only. Platform Admin never opens Desktop SQLCipher or Mobile local storage."
+          action={<Link href="/admin/devices" className="text-xs font-black text-red-600">Devices →</Link>}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Small label="Active" value={activeDevices} />
+            <Small label="Suspended" value={suspendedDevices} danger={suspendedDevices > 0} />
+            <Small label="Revoked" value={revokedDevices} danger={revokedDevices > 0} />
+            <Small label="Stale active" value={staleActiveDevices} danger={staleActiveDevices > 0} />
+          </div>
+        </AdminPanel>
+
+        <AdminPanel
+          eyebrow="Operational Diagnostics"
+          title="Cross-surface problem signals"
+          description={
+            diagnostics.storageReady
+              ? "Sanitised Web/Desktop/Mobile/server context. Raw sync payloads, auth secrets and customer file contents stay outside normal Admin."
+              : "Diagnostics source is present, but its database migration has not been applied in this environment yet."
+          }
+          action={<Link href="/admin/diagnostics" className="text-xs font-black text-red-600">Diagnostics →</Link>}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Small label="Events in view" value={diagnostics.rows.length} />
+            <Small label="Needs attention" value={diagnosticAttention} danger={diagnosticAttention > 0} />
+            <Small label="Critical" value={criticalDiagnostics} danger={criticalDiagnostics > 0} />
+            <Small label="Storage" value={diagnostics.storageReady ? "Ready" : "Pending"} danger={!diagnostics.storageReady} />
+          </div>
+        </AdminPanel>
+
+        <AdminPanel
+          eyebrow="Privacy Boundary"
+          title="Support without impersonation"
+          description="Platform Admin is a metadata-first control plane. Customer work stays inside customer workspaces; local encrypted databases, device secrets, token hashes and raw operational payloads are not exposed here."
+          action={<Link href="/admin/audit" className="text-xs font-black text-red-600">Activity & Audit →</Link>}
+        >
+          <div className="space-y-3">
+            <Row label="Customer impersonation" value="Not enabled" />
+            <Row label="Local database access" value="Not enabled" />
+            <Row label="Routine secret/token access" value="Not exposed" />
+            <Row label="Sensitive Admin mutations" value="Audited" />
+          </div>
+          <p className="mt-4 text-xs leading-5 text-black/40">
+            A future break-glass workflow, if ever required, must be explicit,
+            separately authorised and written to the canonical audit trail. No
+            break-glass data-access path is enabled by this patch.
+          </p>
+        </AdminPanel>
       </section>
 
       {core.organisations.pending > 0 ? (

@@ -34,6 +34,18 @@ export default async function DwtBatchQuickFixPage({ params }: PageProps) {
   const validation = await validateBatchDwtAction([draft.jobLoadId]);
   const validationItem = validation.items[0] ?? null;
   const input = draft.receiveMovementInput;
+
+  /*
+   * Quick Fix is intentionally single-item. Multi-item Loads must use the full
+   * receipt editor so Waste X never edits only item 1 and silently diverges
+   * from the operational Load.
+   */
+  if (input.wasteItems.length > 1) {
+    redirect(
+      `/home/dwt/intake/${draft.jobLoadId}?reason=multi_item_full_editor_required`,
+    );
+  }
+
   const wasteItem = input.wasteItems[0] ?? null;
   const disposalRecoveryCode = wasteItem?.disposalOrRecoveryCodes?.[0]?.code ?? "";
 

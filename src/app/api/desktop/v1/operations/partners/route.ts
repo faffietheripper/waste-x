@@ -23,6 +23,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/* WASTE_X_DESKTOP_CLIENT_STABLE_PARTNER_IDS_V1 */
+
 const optionalText = z.string().trim().max(4000).nullable().optional();
 
 const haulierData = z.object({
@@ -37,6 +39,7 @@ const haulierData = z.object({
 });
 
 const companyData = z.object({
+  id: z.string().trim().min(1).optional(),
   kind: z.enum(["source", "destination"]),
   name: z.string().trim().min(1).max(300),
   accountReference: optionalText,
@@ -63,7 +66,7 @@ const siteData = z.object({
 const mutationSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("haulier.create"),
-    data: haulierData.omit({ id: true }),
+    data: haulierData,
   }),
   z.object({
     operation: z.literal("haulier.update"),
@@ -83,7 +86,7 @@ const mutationSchema = z.discriminatedUnion("operation", [
   }),
   z.object({
     operation: z.literal("site.create"),
-    data: siteData.omit({ id: true }),
+    data: siteData,
   }),
   z.object({
     operation: z.literal("site.update"),
@@ -387,25 +390,22 @@ export async function POST(request: Request) {
       const postcode = normalisePostcode(data.postcode);
 
       if (mutation.operation === "haulier.create") {
-        const sameName = await database.query.counterparties.findFirst({
-          where: and(
-            eq(counterparties.organisationId, context.organisationId),
-            eq(counterparties.name, data.name.trim()),
-          ),
-        });
+        const requestedId = data.id ?? null;
+        const requestedExisting = requestedId
+          ? await database.query.counterparties.findFirst({
+              where: and(
+                eq(counterparties.id, requestedId),
+                eq(counterparties.organisationId, context.organisationId),
+              ),
+            })
+          : null;
 
-        if (sameName) {
-          const existingRole = await hasRole(
-            context.organisationId,
-            sameName.id,
-            "haulier",
-          );
-
-          if (existingRole) {
+        if (requestedExisting) {
+          if (requestedExisting.name !== data.name.trim()) {
             return clientApiError(
-              "DUPLICATE_HAULIER",
+              "DESKTOP_HAULIER_ID_COLLISION",
               409,
-              "That haulier already exists.",
+              "That Desktop Haulier identity belongs to a different company.",
             );
           }
 
@@ -413,18 +413,20 @@ export async function POST(request: Request) {
             .update(counterparties)
             .set({
               carrierRegistrationNumber,
-              email: nullable(data.email) ?? sameName.email,
-              telephone: nullable(data.telephone) ?? sameName.telephone,
+              email: nullable(data.email) ?? requestedExisting.email,
+              telephone:
+                nullable(data.telephone) ?? requestedExisting.telephone,
               fullAddress:
-                nullable(data.fullAddress) ?? sameName.fullAddress,
-              postcode: postcode ?? sameName.postcode,
-              notes: nullable(data.notes) ?? sameName.notes,
+                nullable(data.fullAddress) ??
+                requestedExisting.fullAddress,
+              postcode: postcode ?? requestedExisting.postcode,
+              notes: nullable(data.notes) ?? requestedExisting.notes,
               isActive: true,
               updatedAt: new Date(),
             })
             .where(
               and(
-                eq(counterparties.id, sameName.id),
+                eq(counterparties.id, requestedExisting.id),
                 eq(
                   counterparties.organisationId,
                   context.organisationId,
@@ -434,48 +436,114 @@ export async function POST(request: Request) {
 
           await addRoleIfMissing(
             context.organisationId,
-            sameName.id,
+            requestedExisting.id,
             "haulier",
           );
 
           entityType = "haulier";
-          entityId = sameName.id;
+          entityId = requestedExisting.id;
           action = "created";
         } else {
-          const [created] = await database
-            .insert(counterparties)
-            .values({
-              organisationId: context.organisationId,
-              name: data.name.trim(),
-              carrierRegistrationNumber,
-              email: nullable(data.email),
-              telephone: nullable(data.telephone),
-              fullAddress: nullable(data.fullAddress),
-              postcode,
-              notes: nullable(data.notes),
-              isActive: true,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .returning({ id: counterparties.id });
+          const sameName = await database.query.counterparties.findFirst({
+            where: and(
+              eq(counterparties.organisationId, context.organisationId),
+              eq(counterparties.name, data.name.trim()),
+            ),
+          });
 
-          if (!created) {
+          if (sameName && requestedId) {
             return clientApiError(
-              "HAULIER_CREATE_FAILED",
-              500,
-              "Waste X could not create the haulier.",
+              "DESKTOP_HAULIER_NAME_COLLISION",
+              409,
+              "A different Waste X company already uses that Haulier name.",
             );
           }
 
-          await addRoleIfMissing(
-            context.organisationId,
-            created.id,
-            "haulier",
-          );
+          if (sameName) {
+            const existingRole = await hasRole(
+              context.organisationId,
+              sameName.id,
+              "haulier",
+            );
 
-          entityType = "haulier";
-          entityId = created.id;
-          action = "created";
+            if (existingRole) {
+              return clientApiError(
+                "DUPLICATE_HAULIER",
+                409,
+                "That haulier already exists.",
+              );
+            }
+
+            await database
+              .update(counterparties)
+              .set({
+                carrierRegistrationNumber,
+                email: nullable(data.email) ?? sameName.email,
+                telephone:
+                  nullable(data.telephone) ?? sameName.telephone,
+                fullAddress:
+                  nullable(data.fullAddress) ?? sameName.fullAddress,
+                postcode: postcode ?? sameName.postcode,
+                notes: nullable(data.notes) ?? sameName.notes,
+                isActive: true,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(counterparties.id, sameName.id),
+                  eq(
+                    counterparties.organisationId,
+                    context.organisationId,
+                  ),
+                ),
+              );
+
+            await addRoleIfMissing(
+              context.organisationId,
+              sameName.id,
+              "haulier",
+            );
+
+            entityType = "haulier";
+            entityId = sameName.id;
+            action = "created";
+          } else {
+            const [created] = await database
+              .insert(counterparties)
+              .values({
+                ...(requestedId ? { id: requestedId } : {}),
+                organisationId: context.organisationId,
+                name: data.name.trim(),
+                carrierRegistrationNumber,
+                email: nullable(data.email),
+                telephone: nullable(data.telephone),
+                fullAddress: nullable(data.fullAddress),
+                postcode,
+                notes: nullable(data.notes),
+                isActive: true,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .returning({ id: counterparties.id });
+
+            if (!created) {
+              return clientApiError(
+                "HAULIER_CREATE_FAILED",
+                500,
+                "Waste X could not create the haulier.",
+              );
+            }
+
+            await addRoleIfMissing(
+              context.organisationId,
+              created.id,
+              "haulier",
+            );
+
+            entityType = "haulier";
+            entityId = created.id;
+            action = "created";
+          }
         }
       } else {
         const existing = await database.query.counterparties.findFirst({
@@ -661,67 +729,125 @@ export async function POST(request: Request) {
     } else if (mutation.operation === "company.create") {
       const data = mutation.data;
       const name = data.name.trim();
-      const sameName = await database.query.counterparties.findFirst({
-        where: and(
-          eq(counterparties.organisationId, context.organisationId),
-          eq(counterparties.name, name),
-        ),
-      });
+      const requestedId = data.id ?? null;
+      const requestedExisting = requestedId
+        ? await database.query.counterparties.findFirst({
+            where: and(
+              eq(counterparties.id, requestedId),
+              eq(counterparties.organisationId, context.organisationId),
+            ),
+          })
+        : null;
 
       let companyId: string;
 
-      if (sameName) {
-        companyId = sameName.id;
+      if (requestedExisting) {
+        if (requestedExisting.name !== name) {
+          return clientApiError(
+            "DESKTOP_COMPANY_ID_COLLISION",
+            409,
+            "That Desktop company identity belongs to a different company.",
+          );
+        }
+
+        companyId = requestedExisting.id;
 
         await database
           .update(counterparties)
           .set({
             accountReference:
               nullable(data.accountReference) ??
-              sameName.accountReference,
-            email: nullable(data.email) ?? sameName.email,
-            telephone: nullable(data.telephone) ?? sameName.telephone,
+              requestedExisting.accountReference,
+            email: nullable(data.email) ?? requestedExisting.email,
+            telephone:
+              nullable(data.telephone) ?? requestedExisting.telephone,
             fullAddress:
-              nullable(data.fullAddress) ?? sameName.fullAddress,
+              nullable(data.fullAddress) ??
+              requestedExisting.fullAddress,
             postcode:
-              normalisePostcode(data.postcode) ?? sameName.postcode,
-            notes: nullable(data.notes) ?? sameName.notes,
+              normalisePostcode(data.postcode) ??
+              requestedExisting.postcode,
+            notes: nullable(data.notes) ?? requestedExisting.notes,
             isActive: true,
             updatedAt: new Date(),
           })
           .where(
             and(
-              eq(counterparties.id, sameName.id),
+              eq(counterparties.id, requestedExisting.id),
               eq(counterparties.organisationId, context.organisationId),
             ),
           );
       } else {
-        const [created] = await database
-          .insert(counterparties)
-          .values({
-            organisationId: context.organisationId,
-            name,
-            accountReference: nullable(data.accountReference),
-            email: nullable(data.email),
-            telephone: nullable(data.telephone),
-            fullAddress: nullable(data.fullAddress),
-            postcode: normalisePostcode(data.postcode),
-            notes: nullable(data.notes),
-            isActive: true,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .returning({ id: counterparties.id });
+        const sameName = await database.query.counterparties.findFirst({
+          where: and(
+            eq(counterparties.organisationId, context.organisationId),
+            eq(counterparties.name, name),
+          ),
+        });
 
-        if (!created) {
+        if (sameName && requestedId) {
           return clientApiError(
-            "COMPANY_CREATE_FAILED",
-            500,
-            "Waste X could not create the company.",
+            "DESKTOP_COMPANY_NAME_COLLISION",
+            409,
+            "A different Waste X company already uses that name.",
           );
         }
 
-        companyId = created.id;
+        if (sameName) {
+          companyId = sameName.id;
+
+          await database
+            .update(counterparties)
+            .set({
+              accountReference:
+                nullable(data.accountReference) ??
+                sameName.accountReference,
+              email: nullable(data.email) ?? sameName.email,
+              telephone:
+                nullable(data.telephone) ?? sameName.telephone,
+              fullAddress:
+                nullable(data.fullAddress) ?? sameName.fullAddress,
+              postcode:
+                normalisePostcode(data.postcode) ?? sameName.postcode,
+              notes: nullable(data.notes) ?? sameName.notes,
+              isActive: true,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(counterparties.id, sameName.id),
+                eq(counterparties.organisationId, context.organisationId),
+              ),
+            );
+        } else {
+          const [created] = await database
+            .insert(counterparties)
+            .values({
+              ...(requestedId ? { id: requestedId } : {}),
+              organisationId: context.organisationId,
+              name,
+              accountReference: nullable(data.accountReference),
+              email: nullable(data.email),
+              telephone: nullable(data.telephone),
+              fullAddress: nullable(data.fullAddress),
+              postcode: normalisePostcode(data.postcode),
+              notes: nullable(data.notes),
+              isActive: true,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .returning({ id: counterparties.id });
+
+          if (!created) {
+            return clientApiError(
+              "COMPANY_CREATE_FAILED",
+              500,
+              "Waste X could not create the company.",
+            );
+          }
+
+          companyId = created.id;
+        }
       }
 
       if (data.kind === "source") {
@@ -793,73 +919,133 @@ export async function POST(request: Request) {
       }
 
       if (mutation.operation === "site.create") {
-        const duplicate = await database.query.counterpartySites.findFirst({
-          where: and(
-            eq(
-              counterpartySites.organisationId,
-              context.organisationId,
-            ),
-            eq(counterpartySites.counterpartyId, data.counterpartyId),
-            eq(counterpartySites.name, data.name.trim()),
-          ),
-          columns: { id: true },
-        });
-
-        if (duplicate) {
-          return clientApiError(
-            "DUPLICATE_SITE",
-            409,
-            "That company already has a site with this name.",
-          );
-        }
-
-        const existingSite =
-          await database.query.counterpartySites.findFirst({
-            where: and(
-              eq(
-                counterpartySites.organisationId,
-                context.organisationId,
+        const requestedId = data.id ?? null;
+        const requestedExisting = requestedId
+          ? await database.query.counterpartySites.findFirst({
+              where: and(
+                eq(counterpartySites.id, requestedId),
+                eq(
+                  counterpartySites.organisationId,
+                  context.organisationId,
+                ),
               ),
-              eq(
-                counterpartySites.counterpartyId,
-                data.counterpartyId,
+            })
+          : null;
+
+        if (requestedExisting) {
+          if (
+            requestedExisting.counterpartyId !== data.counterpartyId ||
+            requestedExisting.siteType !== siteType ||
+            requestedExisting.name !== data.name.trim()
+          ) {
+            return clientApiError(
+              "DESKTOP_SITE_ID_COLLISION",
+              409,
+              "That Desktop Site identity belongs to a different site.",
+            );
+          }
+
+          await database
+            .update(counterpartySites)
+            .set({
+              fullAddress: nullable(data.fullAddress),
+              postcode: normalisePostcode(data.postcode),
+              contactName: nullable(data.contactName),
+              contactEmail: nullable(data.contactEmail),
+              contactTelephone: nullable(data.contactTelephone),
+              isActive: true,
+              notes: nullable(data.notes),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(counterpartySites.id, requestedExisting.id),
+                eq(
+                  counterpartySites.organisationId,
+                  context.organisationId,
+                ),
               ),
-              eq(counterpartySites.isActive, true),
-            ),
-            columns: { id: true },
-          });
+            );
 
-        const [created] = await database
-          .insert(counterpartySites)
-          .values({
-            organisationId: context.organisationId,
-            counterpartyId: data.counterpartyId,
-            name: data.name.trim(),
-            siteType,
-            fullAddress: nullable(data.fullAddress),
-            postcode: normalisePostcode(data.postcode),
-            contactName: nullable(data.contactName),
-            contactEmail: nullable(data.contactEmail),
-            contactTelephone: nullable(data.contactTelephone),
-            isDefault: !existingSite,
-            isActive: true,
-            notes: nullable(data.notes),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .returning({ id: counterpartySites.id });
+          entityType = "site";
+          entityId = requestedExisting.id;
+          action = "created";
+        } else {
+          const duplicate =
+            await database.query.counterpartySites.findFirst({
+              where: and(
+                eq(
+                  counterpartySites.organisationId,
+                  context.organisationId,
+                ),
+                eq(
+                  counterpartySites.counterpartyId,
+                  data.counterpartyId,
+                ),
+                eq(counterpartySites.name, data.name.trim()),
+              ),
+              columns: { id: true },
+            });
 
-        if (!created) {
-          return clientApiError(
-            "SITE_CREATE_FAILED",
-            500,
-            "Waste X could not create the site.",
-          );
+          if (duplicate) {
+            return clientApiError(
+              requestedId
+                ? "DESKTOP_SITE_NAME_COLLISION"
+                : "DUPLICATE_SITE",
+              409,
+              "That company already has a site with this name.",
+            );
+          }
+
+          const existingSite =
+            await database.query.counterpartySites.findFirst({
+              where: and(
+                eq(
+                  counterpartySites.organisationId,
+                  context.organisationId,
+                ),
+                eq(
+                  counterpartySites.counterpartyId,
+                  data.counterpartyId,
+                ),
+                eq(counterpartySites.isActive, true),
+              ),
+              columns: { id: true },
+            });
+
+          const [created] = await database
+            .insert(counterpartySites)
+            .values({
+              ...(requestedId ? { id: requestedId } : {}),
+              organisationId: context.organisationId,
+              counterpartyId: data.counterpartyId,
+              name: data.name.trim(),
+              siteType,
+              fullAddress: nullable(data.fullAddress),
+              postcode: normalisePostcode(data.postcode),
+              contactName: nullable(data.contactName),
+              contactEmail: nullable(data.contactEmail),
+              contactTelephone: nullable(data.contactTelephone),
+              isDefault: !existingSite,
+              isActive: true,
+              notes: nullable(data.notes),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .returning({ id: counterpartySites.id });
+
+          if (!created) {
+            return clientApiError(
+              "SITE_CREATE_FAILED",
+              500,
+              "Waste X could not create the site.",
+            );
+          }
+
+          entityType = "site";
+          entityId = created.id;
+          action = "created";
         }
-
-        entityType = "site";
-        entityId = created.id;
-        action = "created";
       } else {
         const existing = await database.query.counterpartySites.findFirst({
           where: and(

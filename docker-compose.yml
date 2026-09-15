@@ -7,7 +7,7 @@ services:
     ports:
       - 5433:5433
     environment:
-      POSTGRES_PASSWORD: loveandpeace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in root .env}
       PGDATA: /data/postgres
     volumes:
       - postgres:/data/postgres

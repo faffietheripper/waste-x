@@ -20,14 +20,30 @@ export default async function AdminOrganisationDetailPage({ params }: PageProps)
   const activeUsers = org.members.filter((member) => member.isActive && !member.isSuspended).length;
   const dwtAccepted = org.wasteTrackingSubmissions.filter((submission) => ["accepted", "accepted_with_warnings"].includes(submission.status)).length;
   const dwtFailures = org.wasteTrackingSubmissions.filter((submission) => ["rejected", "failed"].includes(submission.status)).length;
+  const activeSites = org.sites.filter((site) => site.status === "active");
+  const receivingSites = activeSites.filter((site) => site.siteType === "waste_receiving_site");
+  const activePermits = org.sitePermits.filter((permit) => permit.status === "active");
+  const activeDrivers = org.drivers.filter((driver) => driver.isActive);
+  const mobileActiveDrivers = activeDrivers.filter((driver) => driver.mobileAccessStatus === "ACTIVE");
+  const linkedDrivers = activeDrivers.filter((driver) => Boolean(driver.linkedUserId));
+  const activeVehicles = org.vehicles.filter((vehicle) => vehicle.isActive);
+
+  const sitePermitsBySite = new Map<string, typeof org.sitePermits>();
+  for (const permit of org.sitePermits) {
+    const current = sitePermitsBySite.get(permit.siteId) ?? [];
+    current.push(permit);
+    sitePermitsBySite.set(permit.siteId, current);
+  }
 
   return (
     <div className="space-y-7">
-      <AdminPageHeader eyebrow="Customer Workspace" title={org.teamName} description="Platform support view across access, operational usage, compliance, Quarterly Returns, automatic Transport Emissions, Job-specific Commercials, customer invoicing and Waste X subscription billing. Customer Job/Load edits remain inside the customer workspace." actions={<><Link href="/admin/organisations" className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-bold text-white hover:border-red-500">← Organisations</Link><Link href="/admin/workflows" className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-red-700">Workflow Health</Link></>} />
+      <AdminPageHeader eyebrow="Customer Workspace" title={org.teamName} description="Platform support view across access, operational usage, compliance, Quarterly Returns, automatic Transport Emissions, Job-specific Commercials, customer invoicing and Waste X subscription billing. Customer Job/Load edits remain inside the customer workspace." actions={<><Link href="/admin/organisations" className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-bold text-white hover:border-red-500">← Organisations</Link><Link href="/admin/workflows" className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-red-700">Workflow Health</Link><Link href={`/admin/diagnostics?organisationId=${encodeURIComponent(org.id)}`} className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-bold text-white hover:border-red-500">Diagnostics</Link></>} />
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         <AdminMetric label="Status" value={org.isSuspended ? "Suspended" : org.status ?? "Unknown"} helper={`Mode: ${org.operatingMode}`} danger={org.isSuspended || org.status !== "ACTIVE"} />
         <AdminMetric label="Users" value={`${activeUsers}/${org.members.length}`} helper="Active / total" />
+        <AdminMetric label="Sites" value={`${activeSites.length}/${org.sites.length}`} helper={`${receivingSites.length} active receiving site${receivingSites.length === 1 ? "" : "s"}`} />
+        <AdminMetric label="Fleet" value={`${activeDrivers.length} / ${activeVehicles.length}`} helper="Active drivers / vehicles" />
         <AdminMetric label="Jobs · 90d" value={health.operations.jobs} helper={`${health.operations.completedJobs} completed`} />
         <AdminMetric label="Completed Loads" value={health.operations.completedLoads} helper={`${health.operations.tonnes.toFixed(3)} tonnes`} />
         <AdminMetric label="Workflow attention" value={health.attentionSignals} helper="Returns + carbon + commercial + billing" danger={health.attentionSignals > 0} />
@@ -42,6 +58,158 @@ export default async function AdminOrganisationDetailPage({ params }: PageProps)
 
         <AdminPanel eyebrow="Customer Record" title="Organisation information">
           <div className="grid gap-4 sm:grid-cols-2"><Info label="Email" value={org.emailAddress} /><Info label="Telephone" value={org.telephone} /><Info label="Industry" value={org.industry ?? "Not recorded"} /><Info label="Plan" value={formatLabel(org.subscriptionPlan ?? "starter")} /><Info label="Subscription" value={formatLabel(org.subscriptionStatus ?? "trial")} /><Info label="Joined" value={formatDate(org.createdAt)} /><Info label="Address" value={[org.streetAddress, org.city, org.region, org.postCode].filter(Boolean).join(", ")} wide /></div>
+        </AdminPanel>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-2">
+        <AdminPanel
+          eyebrow="Sites & Compliance"
+          title="Operational site setup"
+          description="Read-only platform view of customer sites and permit setup. Customers remain responsible for editing their operational and compliance records."
+        >
+          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+            <Mini label="Active sites" value={activeSites.length} />
+            <Mini label="Receiving sites" value={receivingSites.length} danger={health.capabilities.includes("manager") && receivingSites.length === 0} />
+            <Mini label="Active permits" value={activePermits.length} danger={health.capabilities.includes("manager") && activePermits.length === 0} />
+          </div>
+
+          {org.sites.length === 0 ? (
+            <AdminEmptyState>No sites are configured for this organisation.</AdminEmptyState>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-black/10">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[850px] divide-y divide-black/10 text-sm">
+                  <thead>
+                    <tr>
+                      <TableHead>Site</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Postcode</TableHead>
+                      <TableHead>Primary permit</TableHead>
+                      <TableHead>Permit EWC</TableHead>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-black/10">
+                    {org.sites.map((site) => {
+                      const permits = sitePermitsBySite.get(site.id) ?? [];
+                      const primaryPermit =
+                        permits.find((permit) => permit.isPrimary && permit.status === "active") ??
+                        permits.find((permit) => permit.isPrimary) ??
+                        permits[0];
+
+                      return (
+                        <tr key={site.id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-black text-black">{site.name}</p>
+                              {site.isDefault ? <p className="mt-1 text-xs text-black/35">Default site</p> : null}
+                            </div>
+                          </TableCell>
+                          <TableCell>{formatLabel(site.siteType)}</TableCell>
+                          <TableCell>
+                            <AdminStatusPill
+                              label={formatLabel(site.status)}
+                              tone={site.status === "active" ? "success" : "neutral"}
+                            />
+                          </TableCell>
+                          <TableCell>{site.postcode ?? "—"}</TableCell>
+                          <TableCell>
+                            {primaryPermit ? (
+                              <div>
+                                <p className="font-black text-black">{primaryPermit.permitNumber}</p>
+                                <p className="mt-1 text-xs text-black/35">
+                                  {formatLabel(primaryPermit.authorisationType)} · {formatLabel(primaryPermit.regulator)}
+                                </p>
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {primaryPermit
+                              ? primaryPermit.permittedEwcCodes.filter((row) => row.isActive).length
+                              : "—"}
+                          </TableCell>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </AdminPanel>
+
+        <AdminPanel
+          eyebrow="Transport"
+          title="Drivers & Mobile readiness"
+          description="Driver-to-user linkage and Mobile access state. Registered device details and device security controls are deliberately deferred to Patch B."
+        >
+          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+            <Mini label="Active drivers" value={activeDrivers.length} />
+            <Mini label="Linked users" value={linkedDrivers.length} />
+            <Mini label="Mobile active" value={mobileActiveDrivers.length} />
+          </div>
+
+          {org.drivers.length === 0 ? (
+            <AdminEmptyState>No Driver records are configured for this organisation.</AdminEmptyState>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-black/10">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px] divide-y divide-black/10 text-sm">
+                  <thead>
+                    <tr>
+                      <TableHead>Driver</TableHead>
+                      <TableHead>Operational</TableHead>
+                      <TableHead>Mobile</TableHead>
+                      <TableHead>Waste X account</TableHead>
+                      <TableHead>Default vehicle</TableHead>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-black/10">
+                    {org.drivers.map((driver) => (
+                      <tr key={driver.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-black text-black">{driver.name}</p>
+                            <p className="mt-1 text-xs text-black/35">{driver.email ?? "No Driver email"}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <AdminStatusPill
+                            label={driver.isActive ? "Active" : "Archived"}
+                            tone={driver.isActive ? "success" : "neutral"}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <AdminStatusPill
+                            label={formatLabel(driver.mobileAccessStatus)}
+                            tone={
+                              driver.mobileAccessStatus === "ACTIVE"
+                                ? "success"
+                                : ["SUSPENDED", "REVOKED"].includes(driver.mobileAccessStatus)
+                                  ? "danger"
+                                  : "neutral"
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {driver.linkedUser ? (
+                            <Link href={`/admin/users/${driver.linkedUser.id}`} className="font-black text-black hover:text-red-600">
+                              {driver.linkedUser.name ?? driver.linkedUser.email}
+                            </Link>
+                          ) : (
+                            <span className="text-black/35">Not linked</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{driver.defaultVehicle?.registrationNumber ?? "—"}</TableCell>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </AdminPanel>
       </section>
 

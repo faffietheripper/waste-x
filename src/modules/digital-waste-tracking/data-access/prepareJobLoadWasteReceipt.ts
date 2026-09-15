@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import {
@@ -6,10 +6,33 @@ import {
   wasteReceiptItems,
   wasteReceipts,
 } from "@/db/schema";
+import { canonicaliseDwtContainer } from "../core/containerTypes";
 import { getWasteTrackingOrganisationSettings } from "./getWasteTrackingOrganisationSettings";
+
+/* WASTE_X_DWT_REGULATORY_ACCEPTANCE_V1 */
+/* WASTE_X_DWT_CONTAINER_CANONICAL_RECEIPT_V1 */
 
 function clean(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function regulatoryPositionStatementNumbers(params: {
+  permitEwcMatchType: string | null | undefined;
+  permitEwcBasis: string | null | undefined;
+}) {
+  if (params.permitEwcMatchType !== "regulatory_authority") {
+    return [];
+  }
+
+  const match = clean(params.permitEwcBasis).match(
+    /^RPS[_\s-]?(\d+)$/i,
+  );
+
+  if (!match?.[1]) return [];
+
+  const value = Number(match[1]);
+
+  return Number.isInteger(value) && value > 0 ? [value] : [];
 }
 
 function stringArrayJson(value: string | null | undefined) {
@@ -54,6 +77,10 @@ function buildOtherReferences(params: {
   jobNumber: string;
   purchaseOrder: string | null;
   customerReference: string | null;
+  permitEwcMatchType?: string | null;
+  permitEwcCode?: string | null;
+  permitEwcBasis?: string | null;
+  permitEwcReference?: string | null;
 }) {
   const refs: Array<{ label: string; reference: string }> = [
     { label: "Waste X Job", reference: params.jobNumber },
@@ -67,6 +94,20 @@ function buildOtherReferences(params: {
     refs.push({
       label: "Customer Reference",
       reference: clean(params.customerReference),
+    });
+  }
+
+  if (params.permitEwcMatchType === "regulatory_authority") {
+    const basis = [
+      clean(params.permitEwcBasis),
+      clean(params.permitEwcReference),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    refs.push({
+      label: "Waste Acceptance Authority",
+      reference: `Actual EWC accepted against permit EWC ${clean(params.permitEwcCode) || "not recorded"}${basis ? ` · ${basis}` : ""}`,
     });
   }
 
@@ -122,6 +163,9 @@ export async function prepareJobLoadWasteReceipt(params: {
       ewcCode: true,
       disposalRecoveryCode: true,
       materialProfile: true,
+      wasteItems: {
+        orderBy: (item, { asc }) => [asc(item.itemNumber)],
+      },
     },
   });
 
@@ -142,10 +186,36 @@ export async function prepareJobLoadWasteReceipt(params: {
   if (!load.receivedAt) missing.push("receivedAt");
   if (!load.ownSite) missing.push("receivingSite");
   if (!load.sitePermit) missing.push("receivingPermit");
-  if (!clean(load.ewcCodeSnapshot) && !load.ewcCode?.code) missing.push("ewcCode");
-  if (!clean(load.wasteDescriptionSnapshot)) missing.push("wasteDescription");
-  if (!load.physicalFormSnapshot) missing.push("physicalForm");
   if (!load.netWeight || Number(load.netWeight) <= 0) missing.push("netWeight");
+
+  const operationalItems = load.wasteItems;
+
+  if (operationalItems.length === 0) {
+    if (!clean(load.ewcCodeSnapshot) && !load.ewcCode?.code) {
+      missing.push("ewcCode");
+    }
+    if (!clean(load.wasteDescriptionSnapshot)) {
+      missing.push("wasteDescription");
+    }
+    if (!load.physicalFormSnapshot) {
+      missing.push("physicalForm");
+    }
+  } else {
+    for (const item of operationalItems) {
+      if (!clean(item.ewcCodeSnapshot)) {
+        missing.push(`wasteItem.${item.itemNumber}.ewcCode`);
+      }
+      if (!clean(item.wasteDescriptionSnapshot)) {
+        missing.push(`wasteItem.${item.itemNumber}.wasteDescription`);
+      }
+      if (!item.physicalFormSnapshot) {
+        missing.push(`wasteItem.${item.itemNumber}.physicalForm`);
+      }
+      if (!item.weightAmount || Number(item.weightAmount) <= 0) {
+        missing.push(`wasteItem.${item.itemNumber}.weight`);
+      }
+    }
+  }
 
   if (missing.length > 0) {
     return {
@@ -243,6 +313,10 @@ export async function prepareJobLoadWasteReceipt(params: {
         purchaseOrder: load.purchaseOrder ?? load.job.purchaseOrder,
         customerReference:
           load.customerReference ?? load.job.customerReference,
+        permitEwcMatchType: load.permitEwcMatchType,
+        permitEwcCode: load.permitEwcCodeSnapshot,
+        permitEwcBasis: load.permitEwcBasis,
+        permitEwcReference: load.permitEwcReference,
       }),
 
       carrierRegistrationNumber,
@@ -259,6 +333,23 @@ export async function prepareJobLoadWasteReceipt(params: {
       receiverEmailAddress: org.emailAddress,
       receiverPhoneNumber: org.telephone,
       receiverAuthorisationNumber: load.sitePermit?.permitNumber ?? "",
+      receiverRegulatoryPositionStatements: JSON.stringify(
+        Array.from(
+          new Set(
+            operationalItems.length > 0
+              ? operationalItems.flatMap((item) =>
+                  regulatoryPositionStatementNumbers({
+                    permitEwcMatchType: item.permitEwcMatchType,
+                    permitEwcBasis: item.permitEwcBasis,
+                  }),
+                )
+              : regulatoryPositionStatementNumbers({
+                  permitEwcMatchType: load.permitEwcMatchType,
+                  permitEwcBasis: load.permitEwcBasis,
+                }),
+          ),
+        ),
+      ),
       receiptFullAddress: load.ownSite?.fullAddress ?? "",
       receiptPostcode: load.ownSite?.postcode ?? "",
 
@@ -267,33 +358,104 @@ export async function prepareJobLoadWasteReceipt(params: {
     })
     .returning({ id: wasteReceipts.id });
 
-  await database.insert(wasteReceiptItems).values({
-    organisationId: params.organisationId,
-    receiptId: receipt.id,
+  const receiptItemValues =
+    operationalItems.length > 0
+      ? operationalItems.map((item) => {
+          const itemWeightAmount = Number(item.weightAmount ?? "0");
+          const disposalRecoveryCodeForItem =
+            clean(item.disposalRecoveryCodeSnapshot) ||
+            (item.itemNumber === 1 ? disposalRecoveryCode : "");
+          const container = canonicaliseDwtContainer({
+            typeOfContainers: item.containerTypeSnapshot,
+            numberOfContainers: item.numberOfContainers,
+          });
 
-    ewcCodes: JSON.stringify([ewcCode]),
-    wasteDescription: load.wasteDescriptionSnapshot ?? "",
-    physicalForm: load.physicalFormSnapshot ?? "Solid",
-    numberOfContainers: load.numberOfContainers ?? 0,
-    typeOfContainers: load.containerTypeSnapshot ?? "",
+          return {
+            organisationId: params.organisationId,
+            receiptId: receipt.id,
 
-    weightMetric: load.weightMetric,
-    weightAmount: weightAmount.toFixed(3),
-    weightIsEstimate: load.weightIsEstimate,
+            ewcCodes: JSON.stringify([item.ewcCodeSnapshot]),
+            wasteDescription: item.wasteDescriptionSnapshot,
+            physicalForm: item.physicalFormSnapshot ?? "Solid",
+            numberOfContainers: container.numberOfContainers,
+            typeOfContainers: container.code,
 
-    containsPops: load.containsPops,
-    popsSourceOfComponents: load.popsSourceOfComponents,
-    popsComponents: load.popsComponents,
+            weightMetric: item.weightMetric,
+            weightAmount: itemWeightAmount.toFixed(3),
+            weightIsEstimate: item.weightIsEstimate,
 
-    containsHazardous: load.containsHazardous,
-    hazardousSourceOfComponents: load.hazardousSourceOfComponents,
-    hazardousHazCodes: stringArrayJson(load.hazardousHazCodes),
-    hazardousComponents: load.hazardousComponents,
+            containsPops: item.containsPops,
+            popsSourceOfComponents: item.popsSourceOfComponents,
+            popsComponents: item.popsComponents,
 
-    disposalOrRecoveryCodes,
-    createdAt: now,
-    updatedAt: now,
-  });
+            containsHazardous: item.containsHazardous,
+            hazardousSourceOfComponents:
+              item.hazardousSourceOfComponents,
+            hazardousHazCodes: stringArrayJson(
+              item.hazardousHazCodes,
+            ),
+            hazardousComponents: item.hazardousComponents,
+
+            disposalOrRecoveryCodes: disposalRecoveryCodeForItem
+              ? JSON.stringify([
+                  {
+                    code: disposalRecoveryCodeForItem,
+                    weight: {
+                      metric: item.weightMetric,
+                      amount: itemWeightAmount,
+                      isEstimate: item.weightIsEstimate,
+                    },
+                  },
+                ])
+              : JSON.stringify([]),
+
+            createdAt: now,
+            updatedAt: now,
+          };
+        })
+      : (() => {
+          const container = canonicaliseDwtContainer({
+            typeOfContainers: load.containerTypeSnapshot,
+            numberOfContainers: load.numberOfContainers,
+          });
+
+          return [
+            {
+              organisationId: params.organisationId,
+              receiptId: receipt.id,
+
+              ewcCodes: JSON.stringify([ewcCode]),
+              wasteDescription: load.wasteDescriptionSnapshot ?? "",
+              physicalForm: load.physicalFormSnapshot ?? "Solid",
+              numberOfContainers: container.numberOfContainers,
+              typeOfContainers: container.code,
+
+            weightMetric: load.weightMetric,
+            weightAmount: weightAmount.toFixed(3),
+            weightIsEstimate: load.weightIsEstimate,
+
+            containsPops: load.containsPops,
+            popsSourceOfComponents: load.popsSourceOfComponents,
+            popsComponents: load.popsComponents,
+
+            containsHazardous: load.containsHazardous,
+            hazardousSourceOfComponents:
+              load.hazardousSourceOfComponents,
+            hazardousHazCodes: stringArrayJson(
+              load.hazardousHazCodes,
+            ),
+            hazardousComponents: load.hazardousComponents,
+
+              disposalOrRecoveryCodes,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ];
+        })();
+
+  await database
+    .insert(wasteReceiptItems)
+    .values(receiptItemValues);
 
   return {
     success: true,

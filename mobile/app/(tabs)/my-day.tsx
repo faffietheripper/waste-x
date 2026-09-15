@@ -16,6 +16,7 @@ import {
   fieldOpsStyles,
 } from "@/field-ops/components";
 import { AssignmentTable } from "@/field-ops/assignment-table";
+import { AssignmentSearch } from "@/field-ops/assignment-search";
 import { useFieldOps } from "@/field-ops/context";
 import {
   assignmentDateKey,
@@ -88,6 +89,12 @@ export default function MyDayScreen() {
 
         <View style={fieldOpsStyles.sectionGap}>
           <SectionHeading title="My Day" count={buckets.today.length} />
+          {/* WASTE_X_MOBILE_GLOBAL_ASSIGNMENT_SEARCH_SLOT_V1 */}
+          <AssignmentSearch
+            assignments={workingSet?.assignments ?? []}
+            onOpen={openAssignment}
+          />
+
           {buckets.today.length > 0 ? (
             <AssignmentTable
               assignments={buckets.today}

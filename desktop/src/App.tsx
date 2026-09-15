@@ -5,6 +5,8 @@ import { RejectLoadModal, type SiteRejectionCategory } from "./RejectLoadModal";
 import { TicketPanel } from "./TicketPanel";
 import { CreateJobPanel, type DesktopCreatedJob } from "./CreateJobPanel";
 import { ManageTransportPanel } from "./ManageTransportPanel";
+import { SupportPanel } from "./SupportPanel";
+import { RecordsPanel } from "./RecordsPanel";
 import {
   QuickAddTransportModal,
   type QuickTransportKind,
@@ -46,7 +48,28 @@ type WeightMetric = "Grams" | "Kilograms" | "Tonnes";
 type TareSource = "LOAD" | "VEHICLE_MASTER" | "MANUAL" | null;
 type VehicleTareResult = { vehicleId: string; tareWeightKg: number | null };
 type LoadView = "live" | "rejected" | "completed" | "cancelled";
-type DesktopView = "operations" | "create" | "cloud" | "manage" | "settings";
+type ManualArrivalReason =
+  | "DRIVER_NO_MOBILE_ACCESS"
+  | "DRIVER_DEVICE_UNAVAILABLE"
+  | "CONNECTIVITY_ISSUE"
+  | "SITE_CONFIRMED_PHYSICAL_ARRIVAL"
+  | "OTHER";
+type DesktopView = "operations" | "create" | "cloud" | "manage" | "settings" | "support";
+
+type DailyWasteItem = {
+  id: string;
+  itemNumber: number;
+  ewcCodeId: string | null;
+  ewcCode: string;
+  wasteDescription: string;
+  weightAmount: string | null;
+  weightMetric: string;
+  weightIsEstimate: boolean;
+  permitEwcMatchType: string | null;
+  permitEwcCode: string | null;
+  permitEwcBasis: string | null;
+  permitEwcReference: string | null;
+};
 
 type DailyLoad = {
   id: string;
@@ -61,6 +84,7 @@ type DailyLoad = {
   vehicleId: string | null;
   wasteDescription: string;
   ewcCode: string | null;
+  wasteItems: DailyWasteItem[];
   grossWeight: string | null;
   tareWeight: string | null;
   netWeight: string | null;
@@ -69,8 +93,78 @@ type DailyLoad = {
   notes: string | null;
   entityVersion: number;
   pendingEvents: number;
+  completionSyncState:
+    | "not_applicable"
+    | "pending"
+    | "review_required"
+    | "cloud_confirmed";
+  ticketSyncState:
+    | "not_issued"
+    | "waiting_for_completion"
+    | "pending"
+    | "review_required"
+    | "cloud_confirmed";
   searchText: string;
 };
+
+/* WASTE_X_DESKTOP_CANONICAL_SYNC_STATE_UI_V1 */
+function desktopLoadStatusLabel(load: DailyLoad) {
+  if (
+    load.status === "completed" &&
+    load.completionSyncState === "review_required"
+  ) {
+    return "completion review";
+  }
+  if (
+    load.status === "completed" &&
+    load.completionSyncState !== "cloud_confirmed"
+  ) {
+    return "completed locally";
+  }
+  return load.status;
+}
+
+function desktopLoadSyncSummary(load: DailyLoad) {
+  if (load.status === "completed") {
+    if (load.completionSyncState === "review_required") {
+      return load.ticketNumber
+        ? "Completed locally · completion needs sync review · ticket held locally"
+        : "Completed locally · completion needs sync review";
+    }
+
+    if (load.completionSyncState === "pending") {
+      return load.ticketNumber
+        ? "Completed locally · Cloud confirmation pending · ticket waiting behind completion"
+        : "Completed locally · Cloud confirmation pending";
+    }
+
+    if (load.ticketNumber) {
+      const ticketState =
+        load.ticketSyncState === "not_issued"
+          ? "cloud_confirmed"
+          : load.ticketSyncState;
+
+      if (ticketState === "waiting_for_completion") {
+        return "Completed locally · ticket waiting for completion sync";
+      }
+      if (ticketState === "review_required") {
+        return "Cloud completion confirmed · ticket sync needs review";
+      }
+      if (ticketState === "pending") {
+        return "Cloud completion confirmed · ticket awaiting Cloud confirmation";
+      }
+      return "Cloud confirmed · ticket synced";
+    }
+
+    return "Cloud confirmed";
+  }
+
+  return load.pendingEvents > 0
+    ? `${load.pendingEvents} local ${
+        load.pendingEvents === 1 ? "change" : "changes"
+      } waiting to sync`
+    : "Local record up to date";
+}
 
 type DailyOperationsSnapshot = { loads: DailyLoad[]; drivers: OpsReference[]; vehicles: OpsReference[]; pendingEvents: number; conflicts: number };
 type DesktopSyncStatus = { running: boolean; cloudReachable: boolean; authRequired: boolean; lastAttemptAt: string | null; lastSuccessAt: string | null; lastError: string | null; cursor: string | null; pending: number; retryableFailed: number; permanentFailed: number; conflicts: number; deferredRemoteChanges: number };
@@ -138,6 +232,11 @@ type EditState = {
   netWeight: string;
   weightMetric: WeightMetric;
   notes: string;
+  wasteItems: Array<{
+    id: string;
+    weightAmount: string;
+    weightIsEstimate: boolean;
+  }>;
 };
 
 type RejectionSummary = {
@@ -244,6 +343,11 @@ function editStateFor(load: DailyLoad): EditState {
     netWeight: calculatedNet || load.netWeight || "",
     weightMetric: metric,
     notes: load.notes ?? "",
+    wasteItems: (load.wasteItems ?? []).map((item) => ({
+      id: item.id,
+      weightAmount: item.weightAmount ?? "",
+      weightIsEstimate: item.weightIsEstimate,
+    })),
   };
 }
 
@@ -341,6 +445,9 @@ export function App() {
 
   const [loadQuery, setLoadQuery] = useState("");
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [manualArrivalReason, setManualArrivalReason] = useState<ManualArrivalReason | "">("");
+  const [manualArrivalNote, setManualArrivalNote] = useState("");
+  const [manualArrivalConfirmed, setManualArrivalConfirmed] = useState(false);
   const [quickTransportKind, setQuickTransportKind] = useState<QuickTransportKind | null>(null);
   const [edit, setEdit] = useState<EditState | null>(null);
   const [tareSource, setTareSource] = useState<TareSource>(null);
@@ -353,6 +460,13 @@ export function App() {
   const [signOutArmed, setSignOutArmed] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  /* WASTE_X_DESKTOP_GLOBAL_ACTION_TOAST_V1 */
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(null), 6500);
+    return () => window.clearTimeout(timer);
+  }, [message]);
   const syncLoopActive = useRef(false);
 
   const selectedLoad = useMemo(
@@ -485,8 +599,110 @@ export function App() {
     syncLoopActive.current = true;
     setSyncBusy(true);
     try {
+      /* WASTE_X_DESKTOP_PARTNER_MUTATION_AUTO_SYNC_V1
+       * Operational companies, Hauliers and Sites sync before Driver / Vehicle
+       * and Job mutations that may reference their stable local identities. */
+      let pendingMasterMutations = 0;
+      try {
+        const partnerSync = await invoke<{
+          ok: boolean;
+          syncedNow: number;
+          pending: number;
+          failed: number;
+          warning: string | null;
+        }>("desktop_sync_partner_mutations");
+        pendingMasterMutations += partnerSync.pending;
+      } catch {
+        pendingMasterMutations += 1;
+      }
+
+      /* WASTE_X_DESKTOP_MASTER_MUTATION_AUTO_SYNC_V1
+       * Driver / Vehicle creates replay after Partner identities and before
+       * Job/Load activity that may reference them. */
+      try {
+        const transportSync = await invoke<{
+          ok: boolean;
+          syncedNow: number;
+          pending: number;
+          failed: number;
+          warning: string | null;
+        }>("desktop_sync_transport_mutations");
+        pendingMasterMutations += transportSync.pending;
+      } catch {
+        pendingMasterMutations += 1;
+      }
+
+      /* WASTE_X_DESKTOP_JOB_MUTATION_AUTO_SYNC_V1
+       * A Job owns the canonical identity of its planned Loads. Never upload a
+       * later Load event until the Job-create request has Cloud acknowledgement. */
+      let pendingJobCreates = 0;
+      try {
+        const jobSync = await invoke<{
+          ok: boolean;
+          syncedNow: number;
+          pending: number;
+          failed: number;
+          warning: string | null;
+        }>("desktop_sync_job_mutations");
+        pendingJobCreates = jobSync.pending;
+      } catch {
+        pendingJobCreates = 1;
+      }
+
+      if (pendingJobCreates > 0 || pendingMasterMutations > 0) {
+        try {
+          await invoke("desktop_sync_support");
+        } catch {
+          // Support has its own durable queue and can retry independently.
+        }
+
+        const status = await invoke<DesktopSyncStatus>("desktop_sync_status");
+        setSync(status);
+        await refreshLocalState();
+
+        if (showToast) {
+          setMessage(
+            pendingJobCreates > 0
+              ? "Offline Job creation is still waiting for Cloud acknowledgement. Its Load activity remains safely queued behind it."
+              : "Offline master-data changes are still waiting for Cloud acknowledgement. Load activity remains safely queued behind them.",
+          );
+        }
+        return;
+      }
+
       const result = await invoke<DesktopSyncRunResult>("desktop_sync_now");
       setSync(result.status);
+
+      /* WASTE_X_DESKTOP_SUPPORT_AUTO_SYNC_V1 */
+      if (result.status.cloudReachable && !result.status.authRequired) {
+        try {
+          await invoke("desktop_sync_support");
+        } catch {
+          // Support remains queued; operational Job sync stays isolated.
+        }
+      }
+
+      /*
+       * WASTE_X_DESKTOP_RELATIONAL_REFRESH_V1
+       *
+       * Incremental Job Load changes are fast, but the authoritative bootstrap
+       * owns the complete relational working set (including wasteItems[]).
+       * Reconcile after incoming Cloud changes so a multi-waste Load cannot
+       * temporarily render from a flat/single-item compatibility payload.
+       */
+      if (
+        result.status.cloudReachable &&
+        !result.status.authRequired &&
+        result.pulledChanges > 0
+      ) {
+        try {
+          await invoke("desktop_refresh_bootstrap");
+        } catch {
+          // Incremental sync has already succeeded. The periodic reconciliation
+          // below will retry without blocking local operations.
+        }
+      }
+
       await refreshLocalState();
       if (showToast) {
         if (!result.status.cloudReachable) setMessage("Cloud is still unavailable. Local operations remain safe and queued.");
@@ -529,6 +745,9 @@ export function App() {
 
     const initial = editStateFor(selectedLoad);
     setEdit(initial);
+    setManualArrivalReason("");
+    setManualArrivalNote("");
+    setManualArrivalConfirmed(false);
     if (selectedLoad.tareWeight !== null && selectedLoad.tareWeight.trim() !== "") {
       setTareSource("LOAD");
       return () => { cancelled = true; };
@@ -558,6 +777,47 @@ export function App() {
     const interval = window.setInterval(() => void syncNow(false), 15_000);
     return () => { window.clearTimeout(initial); window.clearInterval(interval); };
   }, [auth?.unlocked]);
+
+  useEffect(() => {
+    if (
+      !auth?.unlocked ||
+      !sync?.cloudReachable ||
+      sync?.authRequired
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const reconcileAuthoritativeWorkingSet = async () => {
+      if (syncLoopActive.current) return;
+
+      try {
+        await invoke("desktop_refresh_bootstrap");
+        if (!cancelled) {
+          await refreshLocalState();
+        }
+      } catch {
+        // Offline-first: a missed reconciliation is retried automatically.
+      }
+    };
+
+    const initial = window.setTimeout(
+      () => void reconcileAuthoritativeWorkingSet(),
+      3_000,
+    );
+    const interval = window.setInterval(
+      () => void reconcileAuthoritativeWorkingSet(),
+      60_000,
+    );
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [auth?.unlocked, sync?.authRequired, sync?.cloudReachable]);
+
   useEffect(() => {
     if (auth?.unlocked && sync?.cloudReachable && !cloudCatalogue && !cloudBusy) void fetchCloudCatalogue("", 0);
   }, [auth?.unlocked, sync?.cloudReachable]);
@@ -639,9 +899,11 @@ export function App() {
       setPassword("");
       if (result.mode === "ONLINE") await invoke("desktop_refresh_bootstrap");
       await refreshLocalState();
-      setMessage(result.mode === "OFFLINE"
-        ? "Cloud is unavailable — Waste X unlocked offline from encrypted local data."
-        : "Cloud sign-in verified. Working set reconciled and offline access refreshed for 14 days.");
+      setMessage(
+        result.mode === "OFFLINE"
+          ? "Desktop unlocked. Local operations are ready."
+          : "Desktop unlocked. Working set refreshed.",
+      );
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
@@ -684,16 +946,35 @@ export function App() {
       weightIsEstimate: false,
       ticketNumber: null,
       notes: values.notes || null,
+      wasteItems: values.wasteItems.map((item) => ({
+        id: item.id,
+        weightAmount: numberOrNull(item.weightAmount),
+        weightIsEstimate: item.weightIsEstimate,
+      })),
     };
   }
 
   async function saveDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedLoad || !edit) return;
+
     await run(
-      () => invoke("desktop_save_load_details", { input: loadDetailsInput(selectedLoad, edit) }),
-      "Site details saved locally and queued for Cloud sync.",
+      () =>
+        invoke("desktop_save_load_details", {
+          input: loadDetailsInput(selectedLoad, edit),
+        }),
+      "Site details saved locally. Waste X will sync them to Cloud when available.",
     );
+
+    /*
+     * WASTE_X_DESKTOP_IMMEDIATE_DETAILS_SYNC_V1
+     *
+     * Weights and Waste Item allocations are operational data, not completion-
+     * only data. Attempt sync immediately after Save so Web can show them before
+     * the Load is completed. If Cloud is unavailable, the encrypted outbox
+     * remains authoritative and the normal background loop retries later.
+     */
+    await syncNow(false);
   }
 
   async function completeSelectedLoad() {
@@ -703,6 +984,40 @@ export function App() {
     if (!netWeight || !Number.isFinite(net) || net <= 0) {
       setMessage("Enter a gross weight above tare. Waste X calculates the positive net weight automatically before completion.");
       return;
+    }
+
+    if (edit.wasteItems.length > 1) {
+      const allocations = edit.wasteItems.map((item) =>
+        Number(item.weightAmount),
+      );
+      if (
+        allocations.some(
+          (value) => !Number.isFinite(value) || value <= 0,
+        )
+      ) {
+        setMessage(
+          "Enter a positive weight allocation for every Waste Item before completing the Load.",
+        );
+        return;
+      }
+
+      const allocated = allocations.reduce(
+        (total, value) => total + value,
+        0,
+      );
+      const tolerance =
+        edit.weightMetric === "Grams"
+          ? 1
+          : edit.weightMetric === "Kilograms"
+            ? 0.01
+            : 0.001;
+
+      if (Math.abs(allocated - net) > tolerance) {
+        setMessage(
+          `Waste Item allocations total ${allocated.toFixed(3)} ${edit.weightMetric}, but the Load net is ${net.toFixed(3)} ${edit.weightMetric}.`,
+        );
+        return;
+      }
     }
 
     await run(async () => {
@@ -807,12 +1122,54 @@ export function App() {
       grossWeight,
       tareWeight,
       netWeight: calculatedNetWeight(grossWeight, tareWeight),
+      wasteItems: edit.wasteItems.map((item) => ({
+        ...item,
+        weightAmount: convertWeight(
+          item.weightAmount,
+          edit.weightMetric,
+          nextMetric,
+        ),
+      })),
     });
   }
 
   async function loadAction(command: string, success: string) {
     if (!selectedLoad) return;
     await run(() => invoke(command, { input: { loadId: selectedLoad.id } }), success);
+  }
+
+  async function manualArriveSelectedLoad() {
+    if (!selectedLoad) return;
+
+    if (!manualArrivalConfirmed) {
+      setMessage("Confirm that the vehicle and waste are physically at the receiving site.");
+      return;
+    }
+    if (!manualArrivalReason) {
+      setMessage("Choose why Driver Mobile cannot be used for this arrival.");
+      return;
+    }
+    if (
+      manualArrivalReason === "OTHER" &&
+      manualArrivalNote.trim().length < 3
+    ) {
+      setMessage("Add a short note when the manual-arrival reason is Other.");
+      return;
+    }
+
+    await run(
+      () =>
+        invoke("desktop_mark_load_arrived", {
+          input: {
+            loadId: selectedLoad.id,
+            arrivalMode: "manual_site_fallback",
+            manualArrivalReason,
+            manualArrivalNote: manualArrivalNote.trim() || null,
+            physicalArrivalConfirmed: true,
+          },
+        }),
+      "Manual site arrival recorded locally and queued for Cloud audit sync.",
+    );
   }
 
   async function rejectLoad(category: SiteRejectionCategory, reason: string) {
@@ -898,6 +1255,10 @@ export function App() {
           load.status,
           load.wasteDescription,
           load.ewcCode ?? "",
+          ...(load.wasteItems ?? []).flatMap((item) => [
+            item.ewcCode,
+            item.wasteDescription,
+          ]),
           load.ticketNumber ?? "",
           load.notes ?? "",
           pilotDriverLabel(load),
@@ -967,7 +1328,7 @@ export function App() {
               className={desktopView === "cloud" ? "active" : ""}
               onClick={() => setDesktopView("cloud")}
             >
-              Cloud records
+              Records
             </button>
 
             <button
@@ -977,6 +1338,21 @@ export function App() {
             >
               Manage
             </button>
+
+            <button
+
+              type="button"
+
+              className={desktopView === "support" ? "active" : ""}
+
+              onClick={() => setDesktopView("support")}
+
+            >
+
+              Support
+
+            </button>
+
 
             <button
               type="button"
@@ -1106,7 +1482,11 @@ export function App() {
 
                         <small>
                           {shortDate(load.jobDate)} · {load.direction}
-                          {load.ewcCode ? ` · ${load.ewcCode}` : ""}
+                          {load.wasteItems?.length > 1
+                            ? ` · ${load.wasteItems.length} waste items`
+                            : load.ewcCode
+                              ? ` · ${load.ewcCode}`
+                              : ""}
                         </small>
                       </span>
 
@@ -1114,8 +1494,15 @@ export function App() {
                         <strong>{pilotDriverLabel(load)}</strong>
 
                         <small>
-                          {load.wasteDescription ||
-                            "Waste description required"}
+                          {load.wasteItems?.length > 1
+                            ? load.wasteItems
+                                .map(
+                                  (item) =>
+                                    `${item.ewcCode} ${item.wasteDescription}`,
+                                )
+                                .join(" · ")
+                            : load.wasteDescription ||
+                              "Waste description required"}
                           {load.vehicleId
                             ? ` · ${pilotVehicleLabel(load)}`
                             : ""}
@@ -1126,16 +1513,10 @@ export function App() {
                         <span
                           className={`status-pill status-${load.status}`}
                         >
-                          {load.status}
+                          {desktopLoadStatusLabel(load)}
                         </span>
 
-                        {load.pendingEvents > 0 ? (
-                          <small>
-                            {load.pendingEvents} queued
-                          </small>
-                        ) : load.ticketNumber ? (
-                          <small>Ticket ready</small>
-                        ) : null}
+                        <small>{desktopLoadSyncSummary(load)}</small>
                       </span>
                     </button>
                   ))}
@@ -1165,16 +1546,18 @@ export function App() {
                         <p className="pilot-editor-meta">
                           {shortDate(selectedLoad.jobDate)} ·{" "}
                           {selectedLoad.direction}
-                          {selectedLoad.ewcCode
-                            ? ` · EWC ${selectedLoad.ewcCode}`
-                            : ""}
+                          {selectedLoad.wasteItems?.length > 1
+                            ? ` · ${selectedLoad.wasteItems.length} waste items`
+                            : selectedLoad.ewcCode
+                              ? ` · EWC ${selectedLoad.ewcCode}`
+                              : ""}
                         </p>
                       </div>
 
                       <span
                         className={`status-pill status-${selectedLoad.status}`}
                       >
-                        {selectedLoad.status}
+                        {desktopLoadStatusLabel(selectedLoad)}
                       </span>
                     </div>
 
@@ -1229,16 +1612,8 @@ export function App() {
                           <span>Driver</span>
                           <button
                             type="button"
-                            disabled={
-                              selectedTerminal ||
-                              busy ||
-                              !sync?.cloudReachable
-                            }
-                            title={
-                              sync?.cloudReachable
-                                ? "Create a Driver for this Load's carrier"
-                                : "Connect to Waste X Cloud to add a Driver"
-                            }
+                            disabled={selectedTerminal || busy}
+                            title="Create a Driver locally for this Load's carrier; Waste X syncs it when Cloud is available"
                             onClick={() => setQuickTransportKind("driver")}
                           >
                             + Add
@@ -1273,16 +1648,8 @@ export function App() {
                           <span>Vehicle</span>
                           <button
                             type="button"
-                            disabled={
-                              selectedTerminal ||
-                              busy ||
-                              !sync?.cloudReachable
-                            }
-                            title={
-                              sync?.cloudReachable
-                                ? "Create a Vehicle for this Load's carrier"
-                                : "Connect to Waste X Cloud to add a Vehicle"
-                            }
+                            disabled={selectedTerminal || busy}
+                            title="Create a Vehicle locally for this Load's carrier; Waste X syncs it when Cloud is available"
                             onClick={() => setQuickTransportKind("vehicle")}
                           >
                             + Add
@@ -1418,6 +1785,108 @@ export function App() {
                         </select>
                       </label>
 
+                      {selectedLoad.wasteItems?.length ? (
+                        <div className="wide">
+                          <span className="pilot-waste-allocation-title">Waste Items · allocation must equal net</span>
+
+                          <div className="manage-inline-list">
+                            {selectedLoad.wasteItems.map((item) => {
+                              const allocation = edit.wasteItems.find(
+                                (row) => row.id === item.id,
+                              );
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="manage-inline-card"
+                                >
+                                  <div>
+                                    <strong>
+                                      {item.itemNumber}. {item.ewcCode}
+                                    </strong>
+                                    <small>
+                                      {item.wasteDescription}
+                                      {item.permitEwcMatchType ===
+                                      "regulatory_authority"
+                                        ? ` · Regulatory authority${item.permitEwcBasis ? ` · ${item.permitEwcBasis.replaceAll("_", " ")}` : ""}`
+                                        : " · Exact permit match"}
+                                    </small>
+                                  </div>
+
+                                  <label className="pilot-allocation-field">
+                                    <span>
+                                      Allocated {edit.weightMetric}
+                                    </span>
+                                    <input
+                                      disabled={
+                                        selectedTerminal ||
+                                        incomingWeightLocked
+                                      }
+                                      inputMode="decimal"
+                                      value={
+                                        allocation?.weightAmount ?? ""
+                                      }
+                                      onChange={(event) =>
+                                        setEdit({
+                                          ...edit,
+                                          wasteItems:
+                                            edit.wasteItems.map((row) =>
+                                              row.id === item.id
+                                                ? {
+                                                    ...row,
+                                                    weightAmount:
+                                                      event.target.value,
+                                                  }
+                                                : row,
+                                            ),
+                                        })
+                                      }
+                                    />
+                                  </label>
+
+                                  <label className="pilot-estimate-toggle">
+                                    <span>Estimated split</span>
+                                    <input
+                                      type="checkbox"
+                                      disabled={
+                                        selectedTerminal ||
+                                        incomingWeightLocked
+                                      }
+                                      checked={
+                                        allocation?.weightIsEstimate ??
+                                        false
+                                      }
+                                      onChange={(event) =>
+                                        setEdit({
+                                          ...edit,
+                                          wasteItems:
+                                            edit.wasteItems.map((row) =>
+                                              row.id === item.id
+                                                ? {
+                                                    ...row,
+                                                    weightIsEstimate:
+                                                      event.target.checked,
+                                                  }
+                                                : row,
+                                            ),
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <small className="small-copy">
+                            Gross and tare belong to the lorry. Allocate the
+                            final net across every identifiable Waste Item.
+                            Mark an allocation estimated when it was not
+                            separately measured.
+                          </small>
+                        </div>
+                      ) : null}
+
                       {incomingWeightLocked && !selectedTerminal ? (
                         <p className="wide small-copy pilot-weight-note">
                           Weight entry unlocks when the load reaches the
@@ -1486,10 +1955,83 @@ export function App() {
                       {selectedLoad.direction === "incoming" &&
                       selectedLoad.status === "planned" &&
                       !selectedLoad.haulierCounterpartyId ? (
-                        <span className="small-copy">
-                          Waiting for the assigned Driver to mark Arrived at
-                          destination on Mobile.
-                        </span>
+                        <div className="wide">
+                          <p className="small-copy">
+                            Waiting for the assigned Driver to mark Arrived at
+                            destination on Mobile.
+                          </p>
+                          <details className="ticket-waiting-card">
+                            <summary>Driver cannot use Mobile?</summary>
+                            <div className="inline-form-grid">
+                              <p className="small-copy">
+                                Use this only when the vehicle and waste are
+                                physically at this receiving site. Waste X records
+                                the Desktop operator, time and reason without
+                                inventing Driver milestones.
+                              </p>
+                              <label>
+                                <span>Fallback reason</span>
+                                <select
+                                  value={manualArrivalReason}
+                                  onChange={(event) =>
+                                    setManualArrivalReason(
+                                      event.target.value as ManualArrivalReason | "",
+                                    )
+                                  }
+                                >
+                                  <option value="">Choose reason</option>
+                                  <option value="DRIVER_NO_MOBILE_ACCESS">
+                                    Driver has no Mobile access
+                                  </option>
+                                  <option value="DRIVER_DEVICE_UNAVAILABLE">
+                                    Driver phone / device unavailable
+                                  </option>
+                                  <option value="CONNECTIVITY_ISSUE">
+                                    Connectivity issue
+                                  </option>
+                                  <option value="SITE_CONFIRMED_PHYSICAL_ARRIVAL">
+                                    Site confirmed physical arrival
+                                  </option>
+                                  <option value="OTHER">Other</option>
+                                </select>
+                              </label>
+                              <label>
+                                <span>Note</span>
+                                <textarea
+                                  rows={2}
+                                  maxLength={2000}
+                                  value={manualArrivalNote}
+                                  onChange={(event) =>
+                                    setManualArrivalNote(event.target.value)
+                                  }
+                                  placeholder="Optional unless reason is Other"
+                                />
+                              </label>
+                              <label className="desktop-inline-check">
+                                <input
+                                  type="checkbox"
+                                  checked={manualArrivalConfirmed}
+                                  onChange={(event) =>
+                                    setManualArrivalConfirmed(event.target.checked)
+                                  }
+                                />
+                                I confirm the vehicle and waste are physically at
+                                this receiving site.
+                              </label>
+                              <button
+                                type="button"
+                                disabled={
+                                  busy ||
+                                  !manualArrivalConfirmed ||
+                                  !manualArrivalReason
+                                }
+                                onClick={() => void manualArriveSelectedLoad()}
+                              >
+                                Confirm manual arrival
+                              </button>
+                            </div>
+                          </details>
+                        </div>
                       ) : null}
 
                       {selectedLoad.direction === "incoming" &&
@@ -1549,13 +2091,7 @@ export function App() {
                     ) : null}
 
                     <div className="local-proof pilot-local-proof">
-                      {selectedLoad.pendingEvents > 0
-                        ? `${selectedLoad.pendingEvents} local ${
-                            selectedLoad.pendingEvents === 1
-                              ? "change"
-                              : "changes"
-                          } waiting to sync`
-                        : "Local record up to date"}
+                      {desktopLoadSyncSummary(selectedLoad)}
                     </div>
                   </>
                 ) : (
@@ -1616,12 +2152,7 @@ export function App() {
             </form>
 
             {!sync?.cloudReachable ? (
-              <div className="pilot-offline-card">
-                <strong>Cloud records are unavailable offline.</strong>
-                <span>
-                  Site operations and the encrypted working set remain available.
-                </span>
-              </div>
+              <p className="pilot-connectivity-hint">Cloud archive search is available when connected.</p>
             ) : cloudCatalogue ? (
               <>
                 <div className="pilot-record-counts">
@@ -1895,6 +2426,19 @@ export function App() {
             }}
           />
         ) : null}
+
+        {/* WASTE_X_DESKTOP_SUPPORT_V1 */}
+
+        {desktopView === "support" ? (
+
+          <SupportPanel
+
+            cloudReachable={Boolean(sync?.cloudReachable)}
+
+          />
+
+        ) : null}
+
 
         {desktopView === "settings" ? (
           <section className="pilot-screen pilot-scroll-screen">
@@ -2178,7 +2722,10 @@ export function App() {
         ) : null}
 
         {message ? (
-          <div className="toast pilot-toast">{message}</div>
+          <div className="pilot-action-toast neutral" role="status" aria-live="polite">
+            <div><strong>Waste X</strong><span>{message}</span></div>
+            <button type="button" onClick={() => setMessage(null)} aria-label="Dismiss message">×</button>
+          </div>
         ) : null}
       </main>
     );
@@ -2447,8 +2994,13 @@ export function App() {
           </section>
 
           <section className="cloud-catalogue">
+            {/* WASTE_X_DESKTOP_LOCAL_RECORDS_PANEL_V1 */}
+            <RecordsPanel
+              cloudReachable={Boolean(sync?.cloudReachable)}
+            />
+
             <div className="cloud-catalogue-heading"><div><span className="eyebrow">Organisation Cloud Access</span><h2>Whole-account view when connected</h2><p className="small-copy">Historical Cloud records stay searchable without bloating the guaranteed offline cache. Operational writes still hydrate into SQLite first.</p></div><form className="cloud-search" onSubmit={handleCloudSearch}><input value={cloudQuery} onChange={(e) => setCloudQuery(e.target.value)} placeholder="Search job number, status or direction" /><button disabled={!sync?.cloudReachable || cloudBusy}>{cloudBusy ? "Searching…" : "Search Cloud"}</button></form></div>
-            {!sync?.cloudReachable ? <div className="cloud-offline-note">Cloud catalogue unavailable offline. The local operational working set below remains fully usable.</div> : cloudCatalogue ? (
+            {!sync?.cloudReachable ? <p className="pilot-connectivity-hint">Cloud archive search is available when connected.</p> : cloudCatalogue ? (
               <><div className="cloud-totals"><span><strong>{cloudCatalogue.totals.jobs}</strong> matching organisation jobs</span><span><strong>{cloudCatalogue.totals.evidence}</strong> matching evidence files</span><span>Showing up to {cloudCatalogue.limit} at a time</span></div><div className="cloud-columns"><div><h3>Cloud jobs</h3><div className="cloud-list">{cloudCatalogue.jobs.map((job) => { const loadCount = cloudCatalogue.jobLoads.filter((load) => load.jobId === job.id).length; return <div className="cloud-row" key={job.id}><strong>{job.jobNumber ?? job.id}</strong><span>{job.direction ?? "—"} · {job.status ?? "—"} · {shortDate(job.jobDate)}</span><span>{loadCount} load{loadCount === 1 ? "" : "s"} on this page</span></div>; })}{!cloudCatalogue.jobs.length ? <div className="empty-state">No Cloud jobs matched.</div> : null}</div><div className="cloud-page-actions"><button className="secondary-button" disabled={cloudBusy || cloudCatalogue.offset === 0} onClick={() => void fetchCloudCatalogue(cloudCatalogue.query, Math.max(0, cloudCatalogue.offset - cloudCatalogue.limit))}>Previous</button><button className="secondary-button" disabled={cloudBusy || !cloudCatalogue.hasMoreJobs || cloudCatalogue.nextOffset === null} onClick={() => void fetchCloudCatalogue(cloudCatalogue.query, cloudCatalogue.nextOffset ?? 0)}>Next</button></div></div><div><h3>Cloud evidence</h3><div className="cloud-list">{cloudCatalogue.evidence.map((file) => <div className="cloud-row" key={file.evidenceId}><strong>{file.fileName}</strong><span>{file.entityType} · {file.entityId}</span><span>{fileSize(file.byteSize)} · {file.status}</span></div>)}{!cloudCatalogue.evidence.length ? <div className="empty-state">No evidence metadata matched.</div> : null}</div></div></div></>
             ) : <div className="empty-state">Connect to Cloud to load the organisation catalogue.</div>}
           </section>
@@ -2502,14 +3054,9 @@ export function App() {
                           type="button"
                           disabled={
                             selectedTerminal ||
-                            busy ||
-                            !sync?.cloudReachable
+                            busy
                           }
-                          title={
-                            sync?.cloudReachable
-                              ? "Create a Driver for this Load's carrier"
-                              : "Connect to Waste X Cloud to add a Driver"
-                          }
+                          title="Create a Driver for this Load's carrier"
                           onClick={() => setQuickTransportKind("driver")}
                         >
                           + Add
@@ -2540,14 +3087,9 @@ export function App() {
                           type="button"
                           disabled={
                             selectedTerminal ||
-                            busy ||
-                            !sync?.cloudReachable
+                            busy
                           }
-                          title={
-                            sync?.cloudReachable
-                              ? "Create a Vehicle for this Load's carrier"
-                              : "Connect to Waste X Cloud to add a Vehicle"
-                          }
+                          title="Create a Vehicle for this Load's carrier"
                           onClick={() => setQuickTransportKind("vehicle")}
                         >
                           + Add
@@ -2581,7 +3123,30 @@ export function App() {
 
                   <div className="action-row">
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" && selectedLoad.haulierCounterpartyId ? <button disabled={busy} onClick={() => loadAction("desktop_mark_load_arrived", "External-haulier arrival recorded locally and queued for sync.")}>Mark external carrier arrived</button> : null}
-                    {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" && !selectedLoad.haulierCounterpartyId ? <span className="small-copy">Waiting for the assigned Driver to mark Arrived at destination on Mobile.</span> : null}
+                    {selectedLoad.direction === "incoming" && selectedLoad.status === "planned" && !selectedLoad.haulierCounterpartyId ? (
+                      <div className="wide">
+                        <p className="small-copy">Waiting for the assigned Driver to mark Arrived at destination on Mobile.</p>
+                        <details className="ticket-waiting-card">
+                          <summary>Driver cannot use Mobile?</summary>
+                          <div className="inline-form-grid">
+                            <label>
+                              <span>Fallback reason</span>
+                              <select value={manualArrivalReason} onChange={(event) => setManualArrivalReason(event.target.value as ManualArrivalReason | "")}>
+                                <option value="">Choose reason</option>
+                                <option value="DRIVER_NO_MOBILE_ACCESS">Driver has no Mobile access</option>
+                                <option value="DRIVER_DEVICE_UNAVAILABLE">Driver phone / device unavailable</option>
+                                <option value="CONNECTIVITY_ISSUE">Connectivity issue</option>
+                                <option value="SITE_CONFIRMED_PHYSICAL_ARRIVAL">Site confirmed physical arrival</option>
+                                <option value="OTHER">Other</option>
+                              </select>
+                            </label>
+                            <label><span>Note</span><textarea rows={2} maxLength={2000} value={manualArrivalNote} onChange={(event) => setManualArrivalNote(event.target.value)} /></label>
+                            <label className="desktop-inline-check"><input type="checkbox" checked={manualArrivalConfirmed} onChange={(event) => setManualArrivalConfirmed(event.target.checked)} />I confirm physical arrival at this site.</label>
+                            <button type="button" disabled={busy || !manualArrivalConfirmed || !manualArrivalReason} onClick={() => void manualArriveSelectedLoad()}>Confirm manual arrival</button>
+                          </div>
+                        </details>
+                      </div>
+                    ) : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button disabled={busy} onClick={() => loadAction("desktop_accept_load", "Load accepted locally and queued for sync.")}>Accept</button> : null}
                     {selectedLoad.direction === "incoming" && selectedLoad.status === "arrived" ? <button className="danger-button" disabled={busy} onClick={() => setRejectModalOpen(true)}>Reject load</button> : null}
                     {((selectedLoad.direction === "incoming" && selectedLoad.status === "accepted") || (selectedLoad.direction === "outgoing" && !["completed", "rejected", "cancelled"].includes(selectedLoad.status))) ? <button disabled={busy} onClick={() => void completeSelectedLoad()}>Finalise weights + Complete Load</button> : null}

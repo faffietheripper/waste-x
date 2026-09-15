@@ -1,7 +1,8 @@
 "use server";
 /* WASTE_X_JOB_SPECIFIC_PRICING_V2 */
+/* WASTE_X_EWC_EQUIVALENCE_BOOKING_V1 */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -15,10 +16,10 @@ import {
   drivers,
   ewcCodes,
   jobLoads,
+  jobLoadWasteItems,
   jobs,
   jobTemplates,
   materialProfiles,
-  permitEwcCodes,
   rates,
   sitePermits,
   sites,
@@ -30,6 +31,7 @@ import {
   bookingCommercialLines,
   parseIncomingBookingPricing,
 } from "@/modules/commercial/bookingPricing";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 
 type BookingContext = {
   userId: string;
@@ -165,6 +167,16 @@ export async function createJobAction(formData: FormData) {
   const driverId = cleanString(formData.get("driverId"));
   const vehicleId = cleanString(formData.get("vehicleId"));
   const materialProfileId = cleanString(formData.get("materialProfileId"));
+  const additionalMaterialProfileIds = formData
+    .getAll("additionalMaterialProfileId")
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const materialProfileIds = Array.from(
+    new Set(
+      [materialProfileId, ...additionalMaterialProfileIds].filter(Boolean),
+    ),
+  );
   const plannedLoads = parsePositiveInt(formData.get("plannedLoads"), 1, 100);
   const purchaseOrder = optionalString(formData.get("purchaseOrder"));
   const customerReference = optionalString(formData.get("customerReference"));
@@ -195,6 +207,7 @@ export async function createJobAction(formData: FormData) {
     bookingError("haulier_required");
   }
   if (!materialProfileId) bookingError("material_required");
+  if (materialProfileIds.length > 8) bookingError("too_many_waste_items");
   if (!plannedLoads) bookingError("invalid_load_count");
 
   if (source === "template") {
@@ -377,7 +390,7 @@ export async function createJobAction(formData: FormData) {
     }
   }
 
-  const [material] = await database
+  const materialRows = await database
     .select({
       id: materialProfiles.id,
       ewcCodeId: materialProfiles.ewcCodeId,
@@ -409,30 +422,59 @@ export async function createJobAction(formData: FormData) {
     )
     .where(
       and(
-        eq(materialProfiles.id, materialProfileId),
+        inArray(materialProfiles.id, materialProfileIds),
         eq(materialProfiles.organisationId, organisationId),
         eq(materialProfiles.isActive, true),
         eq(ewcCodes.isActive, true),
+        eq(ewcCodes.classificationUsable, true),
       ),
-    )
-    .limit(1);
+    );
 
-  if (!material) bookingError("invalid_material");
+  const materialById = new Map(
+    materialRows.map((row) => [row.id, row]),
+  );
+  const selectedMaterials = materialProfileIds
+    .map((id) => materialById.get(id))
+    .filter(
+      (row): row is (typeof materialRows)[number] => Boolean(row),
+    );
 
-  const [permitMatch] = await database
-    .select({ ewcCodeId: permitEwcCodes.ewcCodeId })
-    .from(permitEwcCodes)
-    .where(
-      and(
-        eq(permitEwcCodes.organisationId, organisationId),
-        eq(permitEwcCodes.permitId, primaryPermit.id),
-        eq(permitEwcCodes.ewcCodeId, material.ewcCodeId),
-        eq(permitEwcCodes.isActive, true),
-      ),
-    )
-    .limit(1);
+  if (selectedMaterials.length !== materialProfileIds.length) {
+    bookingError("invalid_material");
+  }
 
-  if (!permitMatch) bookingError("material_not_permitted_at_receiving_site");
+  const materialAcceptances: Array<{
+    material: (typeof materialRows)[number];
+    acceptance: Extract<
+      Awaited<ReturnType<typeof resolvePermitEwcAcceptance>>,
+      { allowed: true }
+    >;
+  }> = [];
+
+  for (const selectedMaterial of selectedMaterials) {
+    const acceptance = await resolvePermitEwcAcceptance({
+      organisationId,
+      siteId: receivingSite.id,
+      permitId: primaryPermit.id,
+      ewcCodeId: selectedMaterial.ewcCodeId,
+      at: jobDate,
+    });
+
+    if (!acceptance.allowed) {
+      bookingError("material_not_permitted_at_receiving_site");
+    }
+
+    materialAcceptances.push({
+      material: selectedMaterial,
+      acceptance,
+    });
+  }
+
+  const primarySelection = materialAcceptances[0];
+  if (!primarySelection) bookingError("material_required");
+
+  const material = primarySelection.material;
+  const permitAcceptance = primarySelection.acceptance;
 
   const sourceRate =
     pricing.sourceRateId
@@ -494,6 +536,22 @@ export async function createJobAction(formData: FormData) {
       clientSiteId,
       ownSiteId: receivingSite.id,
       sitePermitId: primaryPermit.id,
+      permitEwcMatchType: permitAcceptance.matchType,
+      permitEwcEquivalenceId: null,
+      regulatoryAuthorityActivationId:
+        permitAcceptance.matchType === "regulatory_authority"
+          ? permitAcceptance.activationId
+          : null,
+      permitEwcBasis:
+        permitAcceptance.matchType === "regulatory_authority"
+          ? permitAcceptance.basis
+          : null,
+      permitEwcReference:
+        permitAcceptance.matchType === "regulatory_authority"
+          ? permitAcceptance.reference
+          : null,
+      permitEwcCodeSnapshot: permitAcceptance.permittedEwcCode || material.ewcCode,
+      permitEwcCheckedAt: new Date(),
       thirdPartyDestinationSiteId: null,
       haulierCounterpartyId: resolvedHaulierId,
       driverId: resolvedDriverId,
@@ -531,6 +589,77 @@ export async function createJobAction(formData: FormData) {
     }));
 
     await tx.insert(jobLoads).values(loadRows);
+
+    await tx.insert(jobLoadWasteItems).values(
+      loadRows.flatMap((loadRow) =>
+        materialAcceptances.map(
+          ({ material: itemMaterial, acceptance }, itemIndex) => ({
+            id: crypto.randomUUID(),
+            organisationId,
+            jobLoadId: loadRow.id,
+            itemNumber: itemIndex + 1,
+            materialProfileId: itemMaterial.id,
+            ewcCodeId: itemMaterial.ewcCodeId,
+            ewcCodeSnapshot: itemMaterial.ewcCode,
+            wasteDescriptionSnapshot: itemMaterial.wasteDescription,
+            physicalFormSnapshot: itemMaterial.physicalForm,
+            numberOfContainers: itemMaterial.defaultNumberOfContainers,
+            containerTypeSnapshot: itemMaterial.defaultContainerType,
+            containsPops: itemMaterial.containsPops,
+            popsSourceOfComponents: itemMaterial.popsSourceOfComponents,
+            popsComponents: itemMaterial.popsComponents,
+            containsHazardous: itemMaterial.containsHazardous,
+            hazardousSourceOfComponents:
+              itemMaterial.hazardousSourceOfComponents,
+            hazardousHazCodes: itemMaterial.hazardousHazCodes,
+            hazardousComponents: itemMaterial.hazardousComponents,
+            disposalRecoveryCodeId:
+              itemMaterial.defaultDisposalRecoveryCodeId,
+            disposalRecoveryCodeSnapshot:
+              itemMaterial.disposalRecoveryCode,
+            weightMetric: itemMaterial.defaultWeightMetric,
+            weightAmount: null,
+            weightIsEstimate: false,
+            weightSource: "allocation" as const,
+            permitEwcMatchType: acceptance.matchType,
+            regulatoryAuthorityActivationId:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.activationId
+                : null,
+            regulatoryAcceptanceRuleId:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.authority.ruleId
+                : null,
+            regulatoryRuleKeySnapshot:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.authority.ruleKey
+                : null,
+            regulatoryRuleScopeSnapshot:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.authority.ruleScope
+                : null,
+            qualifyingAuthorisationRefSnapshot:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.authority.qualifyingAuthorisationRef
+                : null,
+            permitEwcBasis:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.basis
+                : null,
+            permitEwcReference:
+              acceptance.matchType === "regulatory_authority"
+                ? acceptance.reference
+                : null,
+            permitEwcCodeSnapshot:
+              acceptance.permittedEwcCode || itemMaterial.ewcCode,
+            permitEwcCheckedAt: new Date(),
+            createdByUserId: userId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        ),
+      ),
+    );
 
     const commercialLines = bookingCommercialLines(pricing);
 

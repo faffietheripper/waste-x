@@ -14,12 +14,12 @@ import {
 
 import { auth } from "@/auth";
 import { database } from "@/db/database";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 
 import {
   disposalRecoveryCodes,
   ewcCodes,
   materialProfiles,
-  permitEwcCodes,
   sitePermits,
   sites,
   users,
@@ -230,57 +230,86 @@ export default async function MaterialDetailPage({
   }
 
   /* =======================================================
-     CURRENT PERMIT CHECK
+     CURRENT RECEIVING ACCEPTANCE CHECK
   ======================================================= */
 
-  let permitted = false;
-
-  if (material.siteId) {
-    const permit =
-      await database.query.sitePermits.findFirst({
-        where: and(
-          eq(
-            sitePermits.organisationId,
-            currentUser.organisationId,
-          ),
-          eq(
-            sitePermits.siteId,
-            material.siteId,
-          ),
-          eq(
-            sitePermits.isPrimary,
-            true,
-          ),
-          eq(
-            sitePermits.status,
-            "active",
-          ),
+  const receivingSite =
+    await database.query.sites.findFirst({
+      where: and(
+        eq(
+          sites.organisationId,
+          currentUser.organisationId,
         ),
-      });
+        eq(
+          sites.siteType,
+          "waste_receiving_site",
+        ),
+        eq(
+          sites.isDefault,
+          true,
+        ),
+        eq(
+          sites.status,
+          "active",
+        ),
+      ),
+      columns: {
+        id: true,
+        name: true,
+      },
+    });
 
-    if (permit) {
-      const link =
-        await database.query.permitEwcCodes.findFirst({
+  const receivingPermit =
+    receivingSite
+      ? await database.query.sitePermits.findFirst({
           where: and(
             eq(
-              permitEwcCodes.permitId,
-              permit.id,
+              sitePermits.organisationId,
+              currentUser.organisationId,
             ),
             eq(
-              permitEwcCodes.ewcCodeId,
-              material.ewcId,
+              sitePermits.siteId,
+              receivingSite.id,
             ),
             eq(
-              permitEwcCodes.isActive,
+              sitePermits.isPrimary,
               true,
             ),
+            eq(
+              sitePermits.status,
+              "active",
+            ),
           ),
-        });
+          columns: {
+            id: true,
+            permitNumber: true,
+          },
+        })
+      : null;
 
-      permitted =
-        Boolean(link);
-    }
-  }
+  const receivingAcceptance =
+    receivingSite && receivingPermit
+      ? await resolvePermitEwcAcceptance({
+          organisationId:
+            currentUser.organisationId,
+          siteId:
+            receivingSite.id,
+          permitId:
+            receivingPermit.id,
+          ewcCodeId:
+            material.ewcId,
+        })
+      : null;
+
+  const acceptedHere =
+    receivingAcceptance?.allowed === true;
+
+  const regulatoryAuthority =
+    receivingAcceptance?.allowed &&
+    receivingAcceptance.matchType ===
+      "regulatory_authority"
+      ? receivingAcceptance.authority
+      : null;
 
   const success =
     firstParam(
@@ -357,30 +386,55 @@ export default async function MaterialDetailPage({
         )}
 
         {/* =================================================
-            PERMIT STATUS
+            RECEIVING ACCEPTANCE STATUS
         ================================================= */}
 
         <section
           className={
-            permitted
+            acceptedHere
               ? "rounded-[2rem] border border-green-200 bg-green-50 p-6"
-              : "rounded-[2rem] border border-red-200 bg-red-50 p-6"
+              : !receivingSite || !receivingPermit
+                ? "rounded-[2rem] border border-amber-200 bg-amber-50 p-6"
+                : "rounded-[2rem] border border-red-200 bg-red-50 p-6"
           }
         >
           <p className="text-xs font-semibold uppercase tracking-[0.18em]">
-            Current permit check
+            Current receiving acceptance
           </p>
 
           <h2 className="mt-2 text-xl font-semibold text-black">
-            {permitted
-              ? "✓ EWC currently configured against the receiving-site permit"
-              : "⚠ EWC is not currently configured against the active receiving-site permit"}
+            {!receivingSite
+              ? "No active default receiving site is configured"
+              : !receivingPermit
+                ? "No active primary permit is configured for the receiving site"
+                : regulatoryAuthority
+                  ? `✓ Accepted here via ${regulatoryAuthority.code.replaceAll("_", " ")}`
+                  : acceptedHere
+                    ? "✓ Accepted here by the active permit"
+                    : "⚠ This EWC is not currently accepted at this receiving site"}
           </h2>
 
           <p className="mt-2 text-sm text-black/50">
-            {material.siteName ??
-              "Receiving site not linked"}
+            {receivingSite?.name ??
+              "Receiving site unavailable"}
+            {receivingPermit
+              ? ` · Permit ${receivingPermit.permitNumber}`
+              : ""}
           </p>
+
+          {regulatoryAuthority &&
+            receivingAcceptance?.allowed &&
+            receivingAcceptance.matchType ===
+              "regulatory_authority" && (
+              <p className="mt-3 text-sm leading-6 text-black/60">
+                Actual EWC {material.ewcCode} is accepted against permit EWC{" "}
+                <span className="font-semibold">
+                  {receivingAcceptance.permittedEwcCode ||
+                    "the configured activity authority"}
+                </span>{" "}
+                under {regulatoryAuthority.code.replaceAll("_", " ")}.
+              </p>
+            )}
         </section>
 
         {/* =================================================
@@ -443,10 +497,10 @@ export default async function MaterialDetailPage({
             />
 
             <Detail
-              label="Receiving site"
+              label="Current receiving site"
               value={
-                material.siteName ??
-                "Not linked"
+                receivingSite?.name ??
+                "Not configured"
               }
             />
           </div>

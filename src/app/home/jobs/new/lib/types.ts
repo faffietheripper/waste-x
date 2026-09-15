@@ -65,6 +65,15 @@ export type BookJobPermittedEwc = {
   isHazardous: boolean | null;
 };
 
+export type BookJobRegulatoryAcceptance = {
+  acceptedEwcCodeId: string;
+  permittedEwcCodeId: string | null;
+  permittedEwcCode: string;
+  equivalenceId: string;
+  basis: string;
+  reference: string;
+};
+
 export type BookJobRate = {
   id: string;
   rateType:
@@ -95,8 +104,9 @@ export type BookJobFormData = {
     id: string;
     permitNumber: string;
   };
-  permittedEwcCodeIds: string[];
-  permittedEwcCodes: BookJobPermittedEwc[];
+  acceptedEwcCodeIds: string[];
+  acceptedEwcCodes: BookJobPermittedEwc[];
+  regulatoryEwcAcceptances: BookJobRegulatoryAcceptance[];
   ownCarrierDwt: BookJobOwnCarrierDwt;
   clients: BookJobClient[];
   clientSites: BookJobClientSite[];

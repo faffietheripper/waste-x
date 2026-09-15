@@ -2,6 +2,8 @@
 
 "use server";
 
+/* WASTE_X_MATERIAL_CLASSIFICATION_CATALOGUE_V1 */
+
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -18,9 +20,6 @@ import {
   disposalRecoveryCodes,
   ewcCodes,
   materialProfiles,
-  permitEwcCodes,
-  sitePermits,
-  sites,
   users,
 } from "@/db/schema";
 
@@ -286,123 +285,31 @@ function redirectMaterialError(
 }
 
 /* =========================================================
-   LOOKUP RECEIVING SITE + PERMIT
+   VALIDATE FACTUAL EWC CLASSIFICATION
+
+   Material Profiles describe the waste itself. They are not
+   an authorisation decision for a receiving site.
 ========================================================= */
 
-async function getReceivingContext(
-  organisationId: string,
+async function getClassificationEwc(
+  ewcCode: string,
 ) {
-  const receivingSite =
-    await database.query.sites.findFirst({
-      where: and(
-        eq(
-          sites.organisationId,
-          organisationId,
-        ),
-        eq(
-          sites.isDefault,
-          true,
-        ),
-        eq(
-          sites.status,
-          "active",
-        ),
+  return database.query.ewcCodes.findFirst({
+    where: and(
+      eq(
+        ewcCodes.code,
+        ewcCode,
       ),
-    });
-
-  if (!receivingSite) {
-    return {
-      receivingSite: null,
-      permit: null,
-    };
-  }
-
-  const permit =
-    await database.query.sitePermits.findFirst({
-      where: and(
-        eq(
-          sitePermits.organisationId,
-          organisationId,
-        ),
-        eq(
-          sitePermits.siteId,
-          receivingSite.id,
-        ),
-        eq(
-          sitePermits.isPrimary,
-          true,
-        ),
-        eq(
-          sitePermits.status,
-          "active",
-        ),
+      eq(
+        ewcCodes.isActive,
+        true,
       ),
-    });
-
-  return {
-    receivingSite,
-    permit: permit ?? null,
-  };
-}
-
-/* =========================================================
-   VALIDATE EWC AGAINST PERMIT
-========================================================= */
-
-async function getPermittedEwc({
-  organisationId,
-  permitId,
-  ewcCode,
-}: {
-  organisationId: string;
-  permitId: string;
-  ewcCode: string;
-}) {
-  const ewc =
-    await database.query.ewcCodes.findFirst({
-      where: and(
-        eq(
-          ewcCodes.code,
-          ewcCode,
-        ),
-        eq(
-          ewcCodes.isActive,
-          true,
-        ),
+      eq(
+        ewcCodes.classificationUsable,
+        true,
       ),
-    });
-
-  if (!ewc) {
-    return null;
-  }
-
-  const permitLink =
-    await database.query.permitEwcCodes.findFirst({
-      where: and(
-        eq(
-          permitEwcCodes.organisationId,
-          organisationId,
-        ),
-        eq(
-          permitEwcCodes.permitId,
-          permitId,
-        ),
-        eq(
-          permitEwcCodes.ewcCodeId,
-          ewc.id,
-        ),
-        eq(
-          permitEwcCodes.isActive,
-          true,
-        ),
-      ),
-    });
-
-  if (!permitLink) {
-    return null;
-  }
-
-  return ewc;
+    ),
+  });
 }
 
 /* =========================================================
@@ -586,46 +493,17 @@ export async function createMaterialProfileAction(
   }
 
   /* =======================================================
-     SITE + PERMIT
-  ======================================================= */
-
-  const {
-    receivingSite,
-    permit,
-  } = await getReceivingContext(
-    context.organisationId,
-  );
-
-  if (!receivingSite) {
-    redirectNewError(
-      "receiving_site_required",
-    );
-  }
-
-  if (!permit) {
-    redirectNewError(
-      "active_permit_required",
-    );
-  }
-
-  /* =======================================================
-     EWC MUST BE PERMITTED
+     EWC MUST BE A VALID FACTUAL CLASSIFICATION
   ======================================================= */
 
   const ewc =
-    await getPermittedEwc({
-      organisationId:
-        context.organisationId,
-
-      permitId:
-        permit.id,
-
+    await getClassificationEwc(
       ewcCode,
-    });
+    );
 
   if (!ewc) {
     redirectNewError(
-      "ewc_not_permitted",
+      "invalid_ewc",
     );
   }
 
@@ -732,7 +610,7 @@ export async function createMaterialProfileAction(
           context.organisationId,
 
         siteId:
-          receivingSite.id,
+          null,
 
         name,
 
@@ -1026,83 +904,21 @@ export async function updateMaterialProfileAction(
   }
 
   /* =======================================================
-     RECEIVING SITE
+     FACTUAL EWC CLASSIFICATION
 
-     Profile remains tied to its configured receiving facility.
+     Material Profiles are reusable classification records.
+     Receiving-site acceptance is checked when they are used.
   ======================================================= */
 
-  if (!existing.siteId) {
-    redirectMaterialError(
-      materialId,
-      "site_required",
-    );
-  }
-
-  const site =
-    await database.query.sites.findFirst({
-      where: and(
-        eq(
-          sites.id,
-          existing.siteId,
-        ),
-        eq(
-          sites.organisationId,
-          context.organisationId,
-        ),
-      ),
-    });
-
-  if (!site) {
-    redirectMaterialError(
-      materialId,
-      "site_not_found",
-    );
-  }
-
-  const permit =
-    await database.query.sitePermits.findFirst({
-      where: and(
-        eq(
-          sitePermits.organisationId,
-          context.organisationId,
-        ),
-        eq(
-          sitePermits.siteId,
-          site.id,
-        ),
-        eq(
-          sitePermits.isPrimary,
-          true,
-        ),
-        eq(
-          sitePermits.status,
-          "active",
-        ),
-      ),
-    });
-
-  if (!permit) {
-    redirectMaterialError(
-      materialId,
-      "active_permit_required",
-    );
-  }
-
   const ewc =
-    await getPermittedEwc({
-      organisationId:
-        context.organisationId,
-
-      permitId:
-        permit.id,
-
+    await getClassificationEwc(
       ewcCode,
-    });
+    );
 
   if (!ewc) {
     redirectMaterialError(
       materialId,
-      "ewc_not_permitted",
+      "invalid_ewc",
     );
   }
 

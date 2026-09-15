@@ -76,6 +76,7 @@ export function QuickAddTransportModal({
           ? {
               operation: "driver.create",
               data: {
+                id: crypto.randomUUID(),
                 name,
                 telephone: optional(telephone),
                 email: optional(email),
@@ -87,6 +88,7 @@ export function QuickAddTransportModal({
           : {
               operation: "vehicle.create",
               data: {
+                id: crypto.randomUUID(),
                 registrationNumber,
                 vehicleType: optional(vehicleType),
                 haulierCounterpartyId,
@@ -96,11 +98,15 @@ export function QuickAddTransportModal({
             };
 
       const result = await invoke<MutationResponse>(
-        "desktop_mutate_transport_master_data",
+        "desktop_mutate_transport_local",
         { input },
       );
 
-      await invoke("desktop_refresh_bootstrap");
+      try {
+        await invoke("desktop_sync_transport_mutations");
+      } catch {
+        // Local record is already durable and automatic sync will retry.
+      }
       await onCreated(kind, result.entityId);
       onClose();
     } catch (reason) {
@@ -242,8 +248,8 @@ export function QuickAddTransportModal({
 
           <div className="pilot-quick-modal-actions wide">
             <span>
-              Creates canonical Cloud master data and refreshes this
-              Desktop's encrypted working set.
+              Saves to this Desktop's encrypted working set first.
+              Waste X Cloud syncs automatically when available.
             </span>
 
             <button

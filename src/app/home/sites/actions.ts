@@ -1,6 +1,7 @@
 // src/app/home/sites/actions.ts
 
 "use server";
+/* WASTE_X_REGULATORY_ACCEPTANCE_ADMIN_V1 */
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -17,6 +18,10 @@ import { database } from "@/db/database";
 import {
   ewcCodes,
   permitEwcCodes,
+  regulatoryAcceptanceAuthorities,
+  regulatoryAcceptanceRules,
+  siteRegulatoryAuthorities,
+  siteRegulatoryAuthorityRules,
   sitePermits,
   sites,
   users,
@@ -61,6 +66,7 @@ const VALID_PERMIT_STATUSES: PermitStatus[] = [
   "revoked",
   "unknown",
 ];
+
 
 /* =========================================================
    AUTH
@@ -1042,7 +1048,7 @@ export async function addPermitEwcCodeAction(
             ewcCodeId,
           ),
           eq(
-            ewcCodes.isActive,
+            ewcCodes.authorisationUsable,
             true,
           ),
         ),
@@ -1200,5 +1206,410 @@ export async function removePermitEwcCodeAction(
 
   redirect(
     `/home/sites/${siteId}?success=ewc_removed#accepted-ewc`,
+  );
+}
+
+/* =========================================================
+   ADDITIONAL WASTE ACCEPTANCE AUTHORITIES
+========================================================= */
+
+export async function activateSiteRegulatoryAuthorityAction(
+  formData: FormData,
+) {
+  const context = await requireOrganisationAdmin();
+
+  const siteId = cleanString(formData.get("siteId"));
+  const permitId = cleanString(formData.get("permitId"));
+  const authorityId = cleanString(formData.get("authorityId"));
+  const reference = cleanString(formData.get("reference"));
+  const notes = cleanOptionalString(formData.get("notes"));
+  const validFrom = parseOptionalDate(formData.get("validFrom"));
+  const validUntil = parseOptionalDate(formData.get("validUntil"));
+  const conditionsConfirmed =
+    cleanString(formData.get("conditionsConfirmed")) === "yes";
+
+  if (!siteId || !permitId || !authorityId) {
+    redirectSiteError(
+      siteId || "unknown",
+      "missing_regulatory_authority_context",
+    );
+  }
+
+  if (!reference) {
+    redirectSiteError(siteId, "regulatory_authority_reference_required");
+  }
+
+  if (!conditionsConfirmed) {
+    redirectSiteError(
+      siteId,
+      "regulatory_authority_conditions_confirmation_required",
+    );
+  }
+
+  if (
+    validFrom &&
+    validUntil &&
+    validUntil.getTime() < validFrom.getTime()
+  ) {
+    redirectSiteError(siteId, "invalid_regulatory_authority_dates");
+  }
+
+  const permit = await database.query.sitePermits.findFirst({
+    where: and(
+      eq(sitePermits.id, permitId),
+      eq(sitePermits.siteId, siteId),
+      eq(sitePermits.organisationId, context.organisationId),
+    ),
+    columns: {
+      id: true,
+      regulator: true,
+    },
+  });
+
+  if (!permit) {
+    redirectSiteError(siteId, "permit_not_found");
+  }
+
+  const authorityRows = await database
+    .select({
+      id: regulatoryAcceptanceAuthorities.id,
+      regulator: regulatoryAcceptanceAuthorities.regulator,
+      status: regulatoryAcceptanceAuthorities.status,
+    })
+    .from(regulatoryAcceptanceAuthorities)
+    .where(eq(regulatoryAcceptanceAuthorities.id, authorityId))
+    .limit(1);
+
+  const authority = authorityRows[0];
+
+  if (!authority || authority.status !== "active") {
+    redirectSiteError(siteId, "regulatory_authority_not_available");
+  }
+
+  if (authority.regulator !== permit.regulator) {
+    redirectSiteError(siteId, "regulatory_authority_wrong_regulator");
+  }
+
+  const existingRows = await database
+    .select({ id: siteRegulatoryAuthorities.id })
+    .from(siteRegulatoryAuthorities)
+    .where(
+      and(
+        eq(
+          siteRegulatoryAuthorities.organisationId,
+          context.organisationId,
+        ),
+        eq(siteRegulatoryAuthorities.siteId, siteId),
+        eq(siteRegulatoryAuthorities.permitId, permitId),
+        eq(siteRegulatoryAuthorities.authorityId, authorityId),
+      ),
+    )
+    .limit(1);
+
+  const now = new Date();
+  const existing = existingRows[0];
+
+  if (existing) {
+    await database
+      .update(siteRegulatoryAuthorities)
+      .set({
+        reference,
+        notes,
+        validFrom,
+        validUntil,
+        conditionsConfirmedAt: now,
+        conditionsConfirmedByUserId: context.userId,
+        isActive: true,
+        createdByUserId: context.userId,
+        updatedAt: now,
+      })
+      .where(eq(siteRegulatoryAuthorities.id, existing.id));
+  } else {
+    await database.insert(siteRegulatoryAuthorities).values({
+      organisationId: context.organisationId,
+      siteId,
+      permitId,
+      authorityId,
+      reference,
+      notes,
+      validFrom,
+      validUntil,
+      conditionsConfirmedAt: now,
+      conditionsConfirmedByUserId: context.userId,
+      isActive: true,
+      createdByUserId: context.userId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  revalidatePath(`/home/sites/${siteId}`);
+
+  redirect(
+    `/home/sites/${siteId}?success=regulatory_authority_saved#additional-acceptance-authorities`,
+  );
+}
+
+
+export async function activateSiteRegulatoryRuleAction(
+  formData: FormData,
+) {
+  const context = await requireOrganisationAdmin();
+
+  const siteId = cleanString(formData.get("siteId"));
+  const permitId = cleanString(formData.get("permitId"));
+  const activationId = cleanString(formData.get("activationId"));
+  const ruleId = cleanString(formData.get("ruleId"));
+
+  const qualifyingAuthorisationRef = cleanOptionalString(
+    formData.get("qualifyingAuthorisationRef"),
+  );
+
+  const evidenceNote = cleanOptionalString(
+    formData.get("evidenceNote"),
+  );
+
+  const ruleConditionsConfirmed =
+    cleanString(formData.get("ruleConditionsConfirmed")) === "yes";
+
+  if (!siteId || !permitId || !activationId || !ruleId) {
+    redirectSiteError(
+      siteId || "unknown",
+      "missing_regulatory_rule_context",
+    );
+  }
+
+  if (!ruleConditionsConfirmed) {
+    redirectSiteError(
+      siteId,
+      "regulatory_rule_confirmation_required",
+    );
+  }
+
+  const activationRows = await database
+    .select({
+      id: siteRegulatoryAuthorities.id,
+      authorityId: siteRegulatoryAuthorities.authorityId,
+    })
+    .from(siteRegulatoryAuthorities)
+    .where(
+      and(
+        eq(siteRegulatoryAuthorities.id, activationId),
+        eq(
+          siteRegulatoryAuthorities.organisationId,
+          context.organisationId,
+        ),
+        eq(siteRegulatoryAuthorities.siteId, siteId),
+        eq(siteRegulatoryAuthorities.permitId, permitId),
+        eq(siteRegulatoryAuthorities.isActive, true),
+      ),
+    )
+    .limit(1);
+
+  const activation = activationRows[0];
+
+  if (!activation) {
+    redirectSiteError(siteId, "regulatory_authority_not_available");
+  }
+
+  const ruleRows = await database
+    .select({
+      id: regulatoryAcceptanceRules.id,
+      authorityId: regulatoryAcceptanceRules.authorityId,
+      underlyingEwcCodeId:
+        regulatoryAcceptanceRules.underlyingAuthorisationEwcCodeId,
+      requiresUnderlyingPermitCode:
+        regulatoryAcceptanceRules.requiresUnderlyingPermitCode,
+      qualifyingAuthorisationRefs:
+        regulatoryAcceptanceRules.qualifyingAuthorisationRefs,
+      isActive: regulatoryAcceptanceRules.isActive,
+    })
+    .from(regulatoryAcceptanceRules)
+    .where(eq(regulatoryAcceptanceRules.id, ruleId))
+    .limit(1);
+
+  const rule = ruleRows[0];
+
+  if (
+    !rule ||
+    !rule.isActive ||
+    rule.authorityId !== activation.authorityId
+  ) {
+    redirectSiteError(siteId, "regulatory_rule_not_available");
+  }
+
+  const allowedRefs = rule.qualifyingAuthorisationRefs ?? [];
+
+  if (
+    allowedRefs.length > 0 &&
+    (!qualifyingAuthorisationRef ||
+      !allowedRefs.includes(qualifyingAuthorisationRef))
+  ) {
+    redirectSiteError(
+      siteId,
+      "invalid_regulatory_rule_authorisation_reference",
+    );
+  }
+
+  if (
+    rule.requiresUnderlyingPermitCode &&
+    rule.underlyingEwcCodeId
+  ) {
+    const permitCodeRows = await database
+      .select({ ewcCodeId: permitEwcCodes.ewcCodeId })
+      .from(permitEwcCodes)
+      .where(
+        and(
+          eq(
+            permitEwcCodes.organisationId,
+            context.organisationId,
+          ),
+          eq(permitEwcCodes.permitId, permitId),
+          eq(
+            permitEwcCodes.ewcCodeId,
+            rule.underlyingEwcCodeId,
+          ),
+          eq(permitEwcCodes.isActive, true),
+        ),
+      )
+      .limit(1);
+
+    if (!permitCodeRows[0]) {
+      redirectSiteError(
+        siteId,
+        "regulatory_rule_underlying_code_missing",
+      );
+    }
+  }
+
+  const existingRows = await database
+    .select({ id: siteRegulatoryAuthorityRules.id })
+    .from(siteRegulatoryAuthorityRules)
+    .where(
+      and(
+        eq(
+          siteRegulatoryAuthorityRules.activationId,
+          activationId,
+        ),
+        eq(siteRegulatoryAuthorityRules.ruleId, ruleId),
+      ),
+    )
+    .limit(1);
+
+  const now = new Date();
+  const existing = existingRows[0];
+
+  if (existing) {
+    await database
+      .update(siteRegulatoryAuthorityRules)
+      .set({
+        qualifyingAuthorisationRef,
+        evidenceNote,
+        confirmedAt: now,
+        confirmedByUserId: context.userId,
+        isActive: true,
+        updatedAt: now,
+      })
+      .where(eq(siteRegulatoryAuthorityRules.id, existing.id));
+  } else {
+    await database.insert(siteRegulatoryAuthorityRules).values({
+      organisationId: context.organisationId,
+      siteId,
+      permitId,
+      activationId,
+      ruleId,
+      qualifyingAuthorisationRef,
+      evidenceNote,
+      confirmedAt: now,
+      confirmedByUserId: context.userId,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  revalidatePath(`/home/sites/${siteId}`);
+
+  redirect(
+    `/home/sites/${siteId}?success=regulatory_rule_saved#additional-acceptance-authorities`,
+  );
+}
+
+export async function deactivateSiteRegulatoryRuleAction(
+  formData: FormData,
+) {
+  const context = await requireOrganisationAdmin();
+
+  const siteId = cleanString(formData.get("siteId"));
+  const permitId = cleanString(formData.get("permitId"));
+  const selectionId = cleanString(formData.get("selectionId"));
+
+  if (!siteId || !permitId || !selectionId) {
+    redirectSiteError(
+      siteId || "unknown",
+      "missing_regulatory_rule_context",
+    );
+  }
+
+  await database
+    .update(siteRegulatoryAuthorityRules)
+    .set({
+      isActive: false,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(siteRegulatoryAuthorityRules.id, selectionId),
+        eq(
+          siteRegulatoryAuthorityRules.organisationId,
+          context.organisationId,
+        ),
+        eq(siteRegulatoryAuthorityRules.siteId, siteId),
+        eq(siteRegulatoryAuthorityRules.permitId, permitId),
+      ),
+    );
+
+  revalidatePath(`/home/sites/${siteId}`);
+
+  redirect(
+    `/home/sites/${siteId}?success=regulatory_rule_removed#additional-acceptance-authorities`,
+  );
+}
+
+export async function deactivateSiteRegulatoryAuthorityAction(
+  formData: FormData,
+) {
+  const context = await requireOrganisationAdmin();
+
+  const siteId = cleanString(formData.get("siteId"));
+  const permitId = cleanString(formData.get("permitId"));
+  const activationId = cleanString(formData.get("activationId"));
+
+  if (!siteId || !permitId || !activationId) {
+    redirect("/home/sites?error=missing_regulatory_authority_context");
+  }
+
+  await database
+    .update(siteRegulatoryAuthorities)
+    .set({
+      isActive: false,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(siteRegulatoryAuthorities.id, activationId),
+        eq(
+          siteRegulatoryAuthorities.organisationId,
+          context.organisationId,
+        ),
+        eq(siteRegulatoryAuthorities.siteId, siteId),
+        eq(siteRegulatoryAuthorities.permitId, permitId),
+      ),
+    );
+
+  revalidatePath(`/home/sites/${siteId}`);
+
+  redirect(
+    `/home/sites/${siteId}?success=regulatory_authority_removed#additional-acceptance-authorities`,
   );
 }

@@ -21,6 +21,7 @@ import type {
   WasteTrackingReferenceDataType,
 } from "../types/referenceData.types";
 
+import { isDwtContainerTypeCode } from "./containerTypes";
 
 /* =========================================================
    VALIDATION OPTIONS
@@ -187,6 +188,7 @@ function isValidNonNegativeInteger(value: unknown): boolean {
 
 /* =========================================================
    REFERENCE DATA LOOKUPS
+   WASTE_X_DWT_EWC_REFERENCE_CANONICAL_V1
 ========================================================= */
 
 function getReferenceItems(
@@ -216,9 +218,14 @@ function referenceCodeExists(
 
   if (items.length === 0) return true;
 
-  const normalisedCode = code.trim();
+  const normalisedCode =
+    type === "ewc_codes" ? normaliseEwcCodeInput(code) : code.trim();
 
-  return items.some((item) => item.code === normalisedCode);
+  return items.some((item) =>
+    type === "ewc_codes"
+      ? normaliseEwcCodeInput(item.code) === normalisedCode
+      : item.code === normalisedCode,
+  );
 }
 
 function findEwcReference(
@@ -231,7 +238,11 @@ function findEwcReference(
 
   const normalisedCode = normaliseEwcCodeInput(code);
 
-  return items.find((item) => item.code === normalisedCode) ?? null;
+  return (
+    items.find(
+      (item) => normaliseEwcCodeInput(item.code) === normalisedCode,
+    ) ?? null
+  );
 }
 
 function isWasteItemHazardousByReferenceData(
@@ -500,6 +511,14 @@ function validateWasteItem(params: {
         `${key}.typeOfContainers`,
         "NotProvided",
         "Container type is required.",
+      ),
+    );
+  } else if (!isDwtContainerTypeCode(cleanString(item.typeOfContainers))) {
+    errors.push(
+      error(
+        `${key}.typeOfContainers`,
+        "InvalidValue",
+        "Container type must be a valid Defra DWT container code.",
       ),
     );
   } else if (

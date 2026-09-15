@@ -10,7 +10,6 @@ import {
   auditEvents,
   ewcCodes,
   jobLoads,
-  permitEwcCodes,
   wasteReceiptItems,
   wasteReceipts,
   wasteTrackingSubmissions,
@@ -21,7 +20,11 @@ import { validateReceiveMovementInput } from "@/modules/digital-waste-tracking/c
 import { getWasteTrackingOrganisationSettings } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingOrganisationSettings";
 import { getWasteTrackingReferenceData } from "@/modules/digital-waste-tracking/data-access/getWasteTrackingReferenceData";
 import { prepareJobLoadWasteReceipt } from "@/modules/digital-waste-tracking/data-access/prepareJobLoadWasteReceipt";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 import { requireSoloPermission } from "@/modules/solo-permissions/core/requireSoloPermission";
+
+/* WASTE_X_DWT_REGULATORY_BATCH_V1 */
+/* WASTE_X_DWT_EWC_CANONICAL_LOOKUP_V1 */
 
 import type {
   BatchSubmissionItem,
@@ -135,6 +138,7 @@ async function validateBatchInternal(params: {
         id: true,
         direction: true,
         status: true,
+        ownSiteId: true,
         sitePermitId: true,
       },
     }),
@@ -185,34 +189,28 @@ async function validateBatchInternal(params: {
     activeOnly: true,
   });
 
-  const permitIds = Array.from(
-    new Set(loads.map((load) => load.sitePermitId).filter((value): value is string => Boolean(value))),
+  /*
+   * Waste X stores operator-facing EWC values such as "17 02 01", while the
+   * DWT payload uses the canonical six-digit value "170201". Build one active
+   * factual-classification map using canonical values so display formatting can
+   * never make a valid code look absent from the catalogue.
+   */
+  const operationalEwcRows = await database
+    .select({
+      id: ewcCodes.id,
+      code: ewcCodes.code,
+    })
+    .from(ewcCodes)
+    .where(
+      and(
+        eq(ewcCodes.isActive, true),
+        eq(ewcCodes.classificationUsable, true),
+      ),
+    );
+
+  const operationalEwcByCode = new Map(
+    operationalEwcRows.map((row) => [normaliseEwc(row.code), row.id]),
   );
-
-  const permittedRows =
-    permitIds.length === 0
-      ? []
-      : await database
-          .select({
-            permitId: permitEwcCodes.permitId,
-            code: ewcCodes.code,
-          })
-          .from(permitEwcCodes)
-          .innerJoin(ewcCodes, eq(ewcCodes.id, permitEwcCodes.ewcCodeId))
-          .where(
-            and(
-              eq(permitEwcCodes.organisationId, params.organisationId),
-              inArray(permitEwcCodes.permitId, permitIds),
-              eq(permitEwcCodes.isActive, true),
-            ),
-          );
-
-  const permittedCodesByPermit = new Map<string, Set<string>>();
-  for (const row of permittedRows) {
-    const existing = permittedCodesByPermit.get(row.permitId) ?? new Set<string>();
-    existing.add(normaliseEwc(row.code));
-    permittedCodesByPermit.set(row.permitId, existing);
-  }
 
   const items: BatchValidationItem[] = [];
 
@@ -293,29 +291,21 @@ async function validateBatchInternal(params: {
       continue;
     }
 
+    /*
+     * WASTE_X_DWT_REVALIDATE_AFTER_SOFTWARE_FIX_V1
+     *
+     * A previous DEFRA rejection is audit history, not a permanent lock on the
+     * receipt. Always rebuild and validate the current payload using the latest
+     * Waste X rules. This is essential when a software fix (for example,
+     * canonical container codes) makes an unchanged stored receipt valid.
+     */
     if (latestSubmission?.status === "rejected") {
-      const attemptedAt = latestSubmission.lastAttemptedAt?.getTime() ?? 0;
-      const receiptUpdatedAt = receipt.updatedAt?.getTime() ?? 0;
-
-      if (receiptUpdatedAt <= attemptedAt) {
-        const previousErrors = parseIssues(latestSubmission.validationErrors);
-        items.push({
-          jobLoadId,
-          ready: false,
-          alreadySubmitted: false,
-          errors:
-            previousErrors.length > 0
-              ? previousErrors
-              : [
-                  issue(
-                    "submission.rejected",
-                    "The previous Defra submission was rejected. Quick-fix the receipt before retrying.",
-                  ),
-                ],
-          warnings,
-        });
-        continue;
-      }
+      warnings.push(
+        issue(
+          "submission.previous_rejection",
+          "A previous Defra attempt was rejected. Waste X has rebuilt and revalidated the current payload using the latest rules. If this row is Ready, it can be submitted again.",
+        ),
+      );
     }
 
     const draft = await getJobLoadReceiveMovementDraft({
@@ -381,15 +371,14 @@ async function validateBatchInternal(params: {
       );
     }
 
-    if (!load.sitePermitId) {
+    if (!load.sitePermitId || !load.ownSiteId) {
       errors.push(
         issue(
           "receiver.authorisationNumber",
-          "The completed load is not linked to a receiving-site permit.",
+          "The completed load is not linked to a receiving site and permit.",
         ),
       );
     } else {
-      const permittedCodes = permittedCodesByPermit.get(load.sitePermitId) ?? new Set<string>();
       const submittedCodes = Array.from(
         new Set(
           draft.receiveMovementInput.wasteItems
@@ -400,11 +389,30 @@ async function validateBatchInternal(params: {
       );
 
       for (const code of submittedCodes) {
-        if (!permittedCodes.has(code)) {
+        const ewcCodeId = operationalEwcByCode.get(code);
+
+        if (!ewcCodeId) {
           errors.push(
             issue(
               "wasteItems.ewcCodes",
-              `EWC ${code} is not active on the receiving permit linked to this load.`,
+              `EWC ${code} is not present in the Waste X EWC catalogue.`,
+            ),
+          );
+          continue;
+        }
+
+        const acceptance = await resolvePermitEwcAcceptance({
+          organisationId: params.organisationId,
+          siteId: load.ownSiteId,
+          permitId: load.sitePermitId,
+          ewcCodeId,
+        });
+
+        if (!acceptance.allowed) {
+          errors.push(
+            issue(
+              "wasteItems.ewcCodes",
+              `EWC ${code} is not accepted by the receiving permit or an enabled regulatory authority.`,
             ),
           );
         }

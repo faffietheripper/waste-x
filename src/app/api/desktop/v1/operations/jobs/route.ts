@@ -1,7 +1,8 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { jobCommercialLines } from "@/db/commercial-schema";
+import { syncEntityVersions } from "@/db/client-sync-schema";
 import { database } from "@/db/database";
 import {
   counterparties,
@@ -13,9 +14,9 @@ import {
   drivers,
   ewcCodes,
   jobLoads,
+  jobLoadWasteItems,
   jobs,
   materialProfiles,
-  permitEwcCodes,
   rates,
   sitePermits,
   sites,
@@ -26,6 +27,7 @@ import {
   parseIncomingBookingPricing,
   parseOutgoingBookingPricing,
 } from "@/modules/commercial/bookingPricing";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 import {
   requireClientApiContext,
   requireOperationsRole,
@@ -38,6 +40,8 @@ import {
 } from "@/lib/client-api/http";
 
 export const dynamic = "force-dynamic";
+
+/* WASTE_X_DESKTOP_CLIENT_STABLE_JOB_IDS_V1 */
 
 const optionalText = z.string().trim().max(4000).nullable().optional();
 
@@ -60,6 +64,19 @@ const createJobSchema = z.object({
   vehicleId: z.string().trim().min(1).nullable().optional(),
 
   materialProfileId: z.string().trim().min(1),
+  materialProfileIds: z
+    .array(z.string().trim().min(1))
+    .max(8)
+    .optional(),
+
+  // Optional for compatibility with older online Desktop builds.
+  clientJobId: z.string().uuid().optional(),
+  clientJobNumber: z.string().trim().min(1).max(80).optional(),
+  clientLoadIds: z.array(z.string().uuid()).max(100).optional(),
+  clientWasteItemIds: z
+    .array(z.array(z.string().uuid()).max(8))
+    .max(100)
+    .optional(),
 
   pricing: z.record(z.string(), z.string().max(500)).default({}),
 });
@@ -117,6 +134,27 @@ async function generateJobNumber(
   throw new Error("Unable to generate a unique Waste X Job number.");
 }
 
+async function readEntityVersions(
+  organisationId: string,
+  entityIds: string[],
+) {
+  if (entityIds.length === 0) return [];
+
+  return database
+    .select({
+      entityType: syncEntityVersions.entityType,
+      entityId: syncEntityVersions.entityId,
+      version: syncEntityVersions.version,
+    })
+    .from(syncEntityVersions)
+    .where(
+      and(
+        eq(syncEntityVersions.organisationId, organisationId),
+        inArray(syncEntityVersions.entityId, entityIds),
+      ),
+    );
+}
+
 function pricingFormData(values: Record<string, string>) {
   const formData = new FormData();
 
@@ -152,6 +190,136 @@ export async function POST(request: Request) {
     }
 
     const input = parsed.data;
+
+    const identityParts = [
+      input.clientJobId,
+      input.clientJobNumber,
+      input.clientLoadIds,
+      input.clientWasteItemIds,
+    ];
+    const hasAnyClientIdentity = identityParts.some((value) => value !== undefined);
+    const hasFullClientIdentity = identityParts.every((value) => value !== undefined);
+
+    if (hasAnyClientIdentity && !hasFullClientIdentity) {
+      return clientApiError(
+        "INCOMPLETE_DESKTOP_JOB_IDENTITY",
+        400,
+        "Waste X Desktop must supply the complete offline Job identity bundle.",
+      );
+    }
+
+    /* Response-loss idempotency for locally-generated Job identities. */
+    if (input.clientJobId) {
+      const existingJob = await database.query.jobs.findFirst({
+        where: eq(jobs.id, input.clientJobId),
+      });
+
+      if (existingJob) {
+        if (existingJob.organisationId !== context.organisationId) {
+          return clientApiError(
+            "DESKTOP_JOB_ID_COLLISION",
+            409,
+            "That Desktop Job identity is not available.",
+          );
+        }
+
+        const existingLoads = await database
+          .select()
+          .from(jobLoads)
+          .where(
+            and(
+              eq(jobLoads.organisationId, context.organisationId),
+              eq(jobLoads.jobId, existingJob.id),
+            ),
+          )
+          .orderBy(asc(jobLoads.loadNumber));
+
+        const expectedLoadIds = input.clientLoadIds ?? [];
+        const idsMatch =
+          expectedLoadIds.length === existingLoads.length &&
+          existingLoads.every(
+            (load, index) => load.id === expectedLoadIds[index],
+          );
+
+        if (
+          existingLoads.length !== input.plannedLoads ||
+          !idsMatch ||
+          existingJob.jobNumber !== input.clientJobNumber
+        ) {
+          return clientApiError(
+            "DESKTOP_JOB_REPLAY_MISMATCH",
+            409,
+            "The stored Cloud Job does not match this Desktop replay identity.",
+          );
+        }
+
+        const entityVersions = await readEntityVersions(
+          context.organisationId,
+          [existingJob.id, ...existingLoads.map((load) => load.id)],
+        );
+
+        return clientApiJson({
+          ok: true,
+          duplicate: true,
+          job: existingJob,
+          jobLoads: existingLoads,
+          firstLoadId: existingLoads[0]?.id ?? null,
+          syncFeedWarning: false,
+          entityVersions,
+        });
+      }
+    }
+
+    if (
+      input.clientLoadIds &&
+      (input.clientLoadIds.length !== input.plannedLoads ||
+        new Set(input.clientLoadIds).size !== input.clientLoadIds.length)
+    ) {
+      return clientApiError(
+        "INVALID_DESKTOP_LOAD_IDENTITIES",
+        400,
+        "Desktop supplied invalid planned Load identities.",
+      );
+    }
+
+    const materialProfileIds = Array.from(
+      new Set([
+        input.materialProfileId,
+        ...(input.materialProfileIds ?? []),
+      ]),
+    );
+
+    if (input.clientWasteItemIds) {
+      const correctShape =
+        input.clientWasteItemIds.length === input.plannedLoads &&
+        input.clientWasteItemIds.every(
+          (row) => row.length === materialProfileIds.length,
+        );
+      const flatWasteItemIds = input.clientWasteItemIds.flat();
+
+      if (
+        !correctShape ||
+        new Set(flatWasteItemIds).size !== flatWasteItemIds.length
+      ) {
+        return clientApiError(
+          "INVALID_DESKTOP_WASTE_ITEM_IDENTITIES",
+          400,
+          "Desktop supplied invalid Waste Item identities.",
+        );
+      }
+    }
+
+    if (
+      input.direction === "outgoing" &&
+      materialProfileIds.length > 1
+    ) {
+      return clientApiError(
+        "MULTI_ITEM_INCOMING_ONLY",
+        400,
+        "This pilot enables multiple Waste Items on one physical Load for incoming receiving Jobs.",
+      );
+    }
+
     const jobDate = parseJobDate(input.jobDate);
 
     if (!jobDate) {
@@ -349,44 +517,73 @@ export async function POST(request: Request) {
       )
       .where(
         and(
-          eq(materialProfiles.id, input.materialProfileId),
+          inArray(materialProfiles.id, materialProfileIds),
           eq(materialProfiles.organisationId, context.organisationId),
           eq(materialProfiles.isActive, true),
           eq(ewcCodes.isActive, true),
+          eq(ewcCodes.classificationUsable, true),
         ),
-      )
-      .limit(1);
+      );
 
-    const material = materialRows[0];
+    const materialById = new Map(
+      materialRows.map((row) => [row.id, row]),
+    );
+    const selectedMaterials = materialProfileIds
+      .map((id) => materialById.get(id))
+      .filter(
+        (row): row is (typeof materialRows)[number] => Boolean(row),
+      );
+
+    if (selectedMaterials.length !== materialProfileIds.length) {
+      return clientApiError(
+        "INVALID_MATERIAL",
+        400,
+        "One or more selected Material / waste profiles are no longer available.",
+      );
+    }
+
+    const material = selectedMaterials[0];
 
     if (!material) {
       return clientApiError(
         "INVALID_MATERIAL",
         400,
-        "That Material / waste profile is no longer available.",
+        "Choose at least one Material / waste profile.",
       );
     }
 
-    const ownPermitMatch = await database
-      .select({ ewcCodeId: permitEwcCodes.ewcCodeId })
-      .from(permitEwcCodes)
-      .where(
-        and(
-          eq(permitEwcCodes.organisationId, context.organisationId),
-          eq(permitEwcCodes.permitId, primaryPermit.id),
-          eq(permitEwcCodes.ewcCodeId, material.ewcCodeId),
-          eq(permitEwcCodes.isActive, true),
-        ),
-      )
-      .limit(1);
+    const materialAcceptances: Array<{
+      material: (typeof materialRows)[number];
+      acceptance: Extract<
+        Awaited<ReturnType<typeof resolvePermitEwcAcceptance>>,
+        { allowed: true }
+      >;
+    }> = [];
 
-    if (!ownPermitMatch[0]) {
-      return clientApiError(
-        "MATERIAL_NOT_PERMITTED_AT_SITE",
-        400,
-        `${material.ewcCode} is not configured on this site's active primary permit.`,
-      );
+    for (const selectedMaterial of selectedMaterials) {
+      const acceptance = await resolvePermitEwcAcceptance({
+        organisationId: context.organisationId,
+        siteId: ownSite.id,
+        permitId: primaryPermit.id,
+        ewcCodeId: selectedMaterial.ewcCodeId,
+        at: jobDate,
+      });
+
+      if (!acceptance.allowed) {
+        return clientApiError(
+          "MATERIAL_NOT_PERMITTED_AT_SITE",
+          400,
+          `${selectedMaterial.ewcCode} has neither an exact permit match nor an enabled regulatory acceptance rule for this site.`,
+        );
+      }
+
+      materialAcceptances.push({
+        material: selectedMaterial,
+        acceptance,
+      });
     }
+
+    const ownPermitAcceptance = materialAcceptances[0]!.acceptance;
 
     let clientId: string | null = null;
     let clientSiteId: string | null = null;
@@ -554,12 +751,33 @@ export async function POST(request: Request) {
           })
         : null;
 
-    const jobId = crypto.randomUUID();
-    const jobNumber = await generateJobNumber(
-      context.organisationId,
-      jobDate,
-      input.direction,
-    );
+    const jobId = input.clientJobId ?? crypto.randomUUID();
+    const jobNumber =
+      input.clientJobNumber ??
+      (await generateJobNumber(
+        context.organisationId,
+        jobDate,
+        input.direction,
+      ));
+
+    if (input.clientJobNumber) {
+      const sameNumber = await database.query.jobs.findFirst({
+        where: and(
+          eq(jobs.organisationId, context.organisationId),
+          eq(jobs.jobNumber, input.clientJobNumber),
+        ),
+        columns: { id: true },
+      });
+
+      if (sameNumber && sameNumber.id !== jobId) {
+        return clientApiError(
+          "DESKTOP_JOB_NUMBER_COLLISION",
+          409,
+          "That Waste X Job reference already exists.",
+        );
+      }
+    }
+
     const now = new Date();
 
     await database.transaction(async (tx) => {
@@ -594,9 +812,10 @@ export async function POST(request: Request) {
         updatedAt: now,
       });
 
-      await tx.insert(jobLoads).values(
-        Array.from({ length: input.plannedLoads }, (_, index) => ({
-          id: crypto.randomUUID(),
+      const loadRows = Array.from(
+        { length: input.plannedLoads },
+        (_, index) => ({
+          id: input.clientLoadIds?.[index] ?? crypto.randomUUID(),
           organisationId: context.organisationId,
           jobId,
           loadNumber: index + 1,
@@ -607,6 +826,23 @@ export async function POST(request: Request) {
           clientSiteId,
           ownSiteId: ownSite.id,
           sitePermitId: primaryPermit.id,
+          permitEwcMatchType: ownPermitAcceptance.matchType,
+          permitEwcEquivalenceId: null,
+      regulatoryAuthorityActivationId:
+        ownPermitAcceptance.matchType === "regulatory_authority"
+          ? ownPermitAcceptance.activationId
+          : null,
+          permitEwcBasis:
+            ownPermitAcceptance.matchType === "regulatory_authority"
+              ? ownPermitAcceptance.basis
+              : null,
+          permitEwcReference:
+            ownPermitAcceptance.matchType === "regulatory_authority"
+              ? ownPermitAcceptance.reference
+              : null,
+          permitEwcCodeSnapshot:
+            ownPermitAcceptance.permittedEwcCode || material.ewcCode,
+          permitEwcCheckedAt: now,
           thirdPartyDestinationSiteId: destinationSiteId,
 
           haulierCounterpartyId: resolvedHaulierId,
@@ -655,7 +891,85 @@ export async function POST(request: Request) {
           createdByUserId: context.userId,
           createdAt: now,
           updatedAt: now,
-        })),
+        }),
+      );
+
+      await tx.insert(jobLoads).values(loadRows);
+
+      await tx.insert(jobLoadWasteItems).values(
+        loadRows.flatMap((loadRow, loadIndex) =>
+          materialAcceptances.map(
+            ({ material: itemMaterial, acceptance }, itemIndex) => ({
+              id:
+                input.clientWasteItemIds?.[loadIndex]?.[itemIndex] ??
+                crypto.randomUUID(),
+              organisationId: context.organisationId,
+              jobLoadId: loadRow.id,
+              itemNumber: itemIndex + 1,
+              materialProfileId: itemMaterial.id,
+              ewcCodeId: itemMaterial.ewcCodeId,
+              ewcCodeSnapshot: itemMaterial.ewcCode,
+              wasteDescriptionSnapshot: itemMaterial.wasteDescription,
+              physicalFormSnapshot: itemMaterial.physicalForm,
+              numberOfContainers:
+                itemMaterial.defaultNumberOfContainers,
+              containerTypeSnapshot:
+                itemMaterial.defaultContainerType,
+              containsPops: itemMaterial.containsPops,
+              popsSourceOfComponents:
+                itemMaterial.popsSourceOfComponents,
+              popsComponents: itemMaterial.popsComponents,
+              containsHazardous: itemMaterial.containsHazardous,
+              hazardousSourceOfComponents:
+                itemMaterial.hazardousSourceOfComponents,
+              hazardousHazCodes: itemMaterial.hazardousHazCodes,
+              hazardousComponents: itemMaterial.hazardousComponents,
+              disposalRecoveryCodeId:
+                itemMaterial.defaultDisposalRecoveryCodeId,
+              disposalRecoveryCodeSnapshot:
+                itemMaterial.disposalRecoveryCode,
+              weightMetric: itemMaterial.defaultWeightMetric,
+              weightAmount: null,
+              weightIsEstimate: false,
+              weightSource: "allocation" as const,
+              permitEwcMatchType: acceptance.matchType,
+              regulatoryAuthorityActivationId:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.activationId
+                  : null,
+              regulatoryAcceptanceRuleId:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.authority.ruleId
+                  : null,
+              regulatoryRuleKeySnapshot:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.authority.ruleKey
+                  : null,
+              regulatoryRuleScopeSnapshot:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.authority.ruleScope
+                  : null,
+              qualifyingAuthorisationRefSnapshot:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.authority.qualifyingAuthorisationRef
+                  : null,
+              permitEwcBasis:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.basis
+                  : null,
+              permitEwcReference:
+                acceptance.matchType === "regulatory_authority"
+                  ? acceptance.reference
+                  : null,
+              permitEwcCodeSnapshot:
+                acceptance.permittedEwcCode || itemMaterial.ewcCode,
+              permitEwcCheckedAt: now,
+              createdByUserId: context.userId,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          ),
+        ),
       );
 
       const commercialLines = bookingCommercialLines(pricing);
@@ -700,6 +1014,27 @@ export async function POST(request: Request) {
       )
       .orderBy(asc(jobLoads.loadNumber));
 
+    const createdLoadIds = createdLoads.map((load) => load.id);
+    const createdWasteItems =
+      createdLoadIds.length > 0
+        ? await database
+            .select()
+            .from(jobLoadWasteItems)
+            .where(
+              and(
+                eq(
+                  jobLoadWasteItems.organisationId,
+                  context.organisationId,
+                ),
+                inArray(jobLoadWasteItems.jobLoadId, createdLoadIds),
+              ),
+            )
+            .orderBy(
+              asc(jobLoadWasteItems.jobLoadId),
+              asc(jobLoadWasteItems.itemNumber),
+            )
+        : [];
+
     if (!createdJob || createdLoads.length !== input.plannedLoads) {
       throw new Error(
         "Waste X created the Job but could not verify its planned Load rows.",
@@ -728,7 +1063,12 @@ export async function POST(request: Request) {
           siteId: ownSite.id,
           entityType: "job_load",
           entityId: load.id,
-          payload: load,
+          payload: {
+            ...load,
+            wasteItems: createdWasteItems.filter(
+              (item) => item.jobLoadId === load.id,
+            ),
+          },
         });
       }
     } catch (error) {
@@ -743,6 +1083,11 @@ export async function POST(request: Request) {
       );
     }
 
+    const entityVersions = await readEntityVersions(
+      context.organisationId,
+      [createdJob.id, ...createdLoadIds],
+    );
+
     return clientApiJson(
       {
         ok: true,
@@ -750,6 +1095,7 @@ export async function POST(request: Request) {
         jobLoads: createdLoads,
         firstLoadId: createdLoads[0]?.id ?? null,
         syncFeedWarning,
+        entityVersions,
       },
       { status: 201 },
     );

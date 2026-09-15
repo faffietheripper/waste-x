@@ -1,4 +1,5 @@
 // src/app/home/materials/new/page.tsx
+/* WASTE_X_MATERIAL_CLASSIFICATION_CATALOGUE_V1 */
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -6,7 +7,6 @@ import { redirect } from "next/navigation";
 import {
   and,
   asc,
-  desc,
   eq,
 } from "drizzle-orm";
 
@@ -16,9 +16,6 @@ import { database } from "@/db/database";
 import {
   disposalRecoveryCodes,
   ewcCodes,
-  permitEwcCodes,
-  sitePermits,
-  sites,
   users,
 } from "@/db/schema";
 
@@ -86,15 +83,6 @@ function errorMessage(
 
     dr_code_required:
       "Choose a default disposal or recovery code.",
-
-    receiving_site_required:
-      "Configure your receiving site first.",
-
-    active_permit_required:
-      "Configure an active environmental permit first.",
-
-    ewc_not_permitted:
-      "That EWC code is not configured against the receiving site's permit.",
 
     invalid_dr_code:
       "Choose a valid disposal or recovery code.",
@@ -171,98 +159,29 @@ export default async function NewMaterialPage({
     );
 
   /* =======================================================
-     RECEIVING SITE
+     FACTUAL EWC CLASSIFICATION CATALOGUE
+
+     Material Profiles describe what the waste actually is.
+     Receiving-site authorisation is checked later when the
+     profile is used on a Job.
   ======================================================= */
 
-  const receivingSite =
-    await database.query.sites.findFirst({
-      where: and(
-        eq(
-          sites.organisationId,
-          organisationId,
+  const classificationEwc =
+    await database
+      .select({
+        id: ewcCodes.id,
+        code: ewcCodes.code,
+        description: ewcCodes.description,
+        isHazardous: ewcCodes.isHazardous,
+      })
+      .from(ewcCodes)
+      .where(
+        and(
+          eq(ewcCodes.isActive, true),
+          eq(ewcCodes.classificationUsable, true),
         ),
-        eq(
-          sites.isDefault,
-          true,
-        ),
-        eq(
-          sites.status,
-          "active",
-        ),
-      ),
-    });
-
-  /* =======================================================
-     PERMIT
-  ======================================================= */
-
-  const permit =
-    receivingSite
-      ? await database.query.sitePermits.findFirst({
-          where: and(
-            eq(
-              sitePermits.organisationId,
-              organisationId,
-            ),
-            eq(
-              sitePermits.siteId,
-              receivingSite.id,
-            ),
-            eq(
-              sitePermits.isPrimary,
-              true,
-            ),
-            eq(
-              sitePermits.status,
-              "active",
-            ),
-          ),
-        })
-      : null;
-
-  /* =======================================================
-     PERMITTED EWC
-  ======================================================= */
-
-  const permittedEwc =
-    permit
-      ? await database
-          .select({
-            id: ewcCodes.id,
-            code: ewcCodes.code,
-            description:
-              ewcCodes.description,
-            isHazardous:
-              ewcCodes.isHazardous,
-          })
-          .from(permitEwcCodes)
-          .innerJoin(
-            ewcCodes,
-            eq(
-              permitEwcCodes.ewcCodeId,
-              ewcCodes.id,
-            ),
-          )
-          .where(
-            and(
-              eq(
-                permitEwcCodes.permitId,
-                permit.id,
-              ),
-              eq(
-                permitEwcCodes.isActive,
-                true,
-              ),
-              eq(
-                ewcCodes.isActive,
-                true,
-              ),
-            ),
-          )
-          .orderBy(
-            asc(ewcCodes.code),
-          )
-      : [];
+      )
+      .orderBy(asc(ewcCodes.code));
 
   /* =======================================================
      D/R
@@ -328,53 +247,20 @@ export default async function NewMaterialPage({
         )}
 
         {/* =================================================
-            REQUIRE SITE/PERMIT
+            FACTUAL CLASSIFICATION AVAILABILITY
         ================================================= */}
 
-        {!receivingSite ||
-        !permit ? (
-          <section className="rounded-[2rem] border border-orange-200 bg-orange-50 p-8">
-            <h2 className="text-xl font-semibold text-black">
-              Receiving-site setup
-              required
-            </h2>
-
-            <p className="mt-3 text-sm leading-6 text-black/55">
-              Waste X needs the
-              facility and its active
-              environmental
-              authorisation before
-              creating receiving
-              Material Profiles.
-            </p>
-
-            <Link
-              href="/home/sites"
-              className="mt-6 inline-flex rounded-2xl bg-black px-6 py-3 text-sm font-semibold text-orange-400"
-            >
-              Configure Site & Permit
-            </Link>
-          </section>
-        ) : permittedEwc.length ===
+        {classificationEwc.length ===
           0 ? (
           <section className="rounded-[2rem] border border-orange-200 bg-orange-50 p-8">
             <h2 className="text-xl font-semibold">
-              Add permitted EWC codes
-              first
+              EWC classification catalogue unavailable
             </h2>
 
             <p className="mt-3 text-sm text-black/55">
-              The permit currently has
-              no active EWC codes
-              configured in Waste X.
+              Waste X does not currently have any active EWC codes available
+              for factual waste classification.
             </p>
-
-            <Link
-              href={`/home/sites/${receivingSite.id}#accepted-ewc`}
-              className="mt-6 inline-flex rounded-2xl bg-black px-6 py-3 text-sm font-semibold text-orange-400"
-            >
-              Configure Permitted EWC
-            </Link>
           </section>
         ) : (
           <form
@@ -402,19 +288,19 @@ export default async function NewMaterialPage({
 
                 <label>
                   <Label>
-                    Permitted EWC Code
+                    Actual EWC classification
                   </Label>
 
                   <input
                     name="ewcCode"
-                    list="permitted-ewc"
+                    list="classification-ewc"
                     placeholder="17 09 04"
                     required
                     className={inputClass}
                   />
 
-                  <datalist id="permitted-ewc">
-                    {permittedEwc.map(
+                  <datalist id="classification-ewc">
+                    {classificationEwc.map(
                       (ewc) => (
                         <option
                           key={
@@ -435,13 +321,11 @@ export default async function NewMaterialPage({
                     )}
                   </datalist>
 
-                  <p className="mt-2 text-xs text-black/35">
-                    Only EWC codes
-                    configured against{" "}
-                    {
-                      permit.permitNumber
-                    }{" "}
-                    can be saved.
+                  <p className="mt-2 text-xs leading-5 text-black/45">
+                    Choose the code that describes what the waste actually is.
+                    This does not by itself authorise the receiving site to accept it.
+                    Waste X checks the active permit and any enabled regulatory
+                    acceptance rule when the profile is used on a Job.
                   </p>
                 </label>
 

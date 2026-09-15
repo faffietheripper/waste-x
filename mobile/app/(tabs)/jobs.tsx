@@ -16,6 +16,7 @@ import {
   fieldOpsStyles,
 } from "@/field-ops/components";
 import { AssignmentTable } from "@/field-ops/assignment-table";
+import { AssignmentSearch } from "@/field-ops/assignment-search";
 import { useFieldOps } from "@/field-ops/context";
 import { bucketMobileAssignments } from "@/field-ops/presentation";
 
@@ -121,6 +122,12 @@ export default function JobsScreen() {
         </ScrollView>
 
         <View style={styles.listBlock}>
+          {/* WASTE_X_MOBILE_GLOBAL_ASSIGNMENT_SEARCH_SLOT_V1 */}
+          <AssignmentSearch
+            assignments={workingSet?.assignments ?? []}
+            onOpen={openAssignment}
+          />
+
           {visible.length > 0 ? (
             <AssignmentTable
               assignments={visible}

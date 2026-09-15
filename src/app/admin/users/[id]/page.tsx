@@ -19,13 +19,19 @@ export default async function AdminUserDetailPage({ params }: PageProps) {
 
   return (
     <div className="space-y-7">
-      <AdminPageHeader eyebrow="Platform Access" title={user.name} description="User identity, customer organisation membership, access state and high-level platform activity." actions={<Link href="/admin/users" className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-bold text-white hover:border-red-500">← Users</Link>} />
+      <AdminPageHeader eyebrow="Platform Access" title={user.name} description="User identity, customer organisation membership, access state and high-level platform activity." actions={<><Link href="/admin/users" className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-bold text-white hover:border-red-500">← Users</Link><Link href={`/admin/diagnostics?userId=${encodeURIComponent(user.id)}`} className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-red-700">Diagnostics</Link></>} />
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <AdminMetric label="Role" value={formatLabel(user.role)} helper={user.organisation?.teamName ?? "Platform / unassigned"} />
         <AdminMetric label="Jobs created" value={user.createdJobs.length} helper="Customer-side job records created" />
         <AdminMetric label="Loads completed" value={completedLoads} helper={`${user.createdJobLoads.length} loads created`} />
         <AdminMetric label="DWT issues" value={dwtIssues} helper={`${dwtAccepted} accepted DWT attempts`} danger={dwtIssues > 0} />
+        <AdminMetric
+          label="Mobile access"
+          value={user.linkedDriver ? formatLabel(user.linkedDriver.mobileAccessStatus) : "Not linked"}
+          helper={user.linkedDriver ? `Driver: ${user.linkedDriver.name}` : "No Driver record linked"}
+          danger={Boolean(user.linkedDriver && ["SUSPENDED", "REVOKED"].includes(user.linkedDriver.mobileAccessStatus))}
+        />
       </section>
 
       <section className="grid gap-6 xl:grid-cols-2">
@@ -56,6 +62,26 @@ export default async function AdminUserDetailPage({ params }: PageProps) {
           </div>
         </AdminPanel>
       </section>
+
+      <AdminPanel
+        eyebrow="Transport Identity"
+        title="Driver & Mobile linkage"
+        description="Read-only relationship between this Waste X user and a Driver record. Device registrations and device/session controls are intentionally handled in Patch B."
+      >
+        {user.linkedDriver ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <Info label="Driver" value={user.linkedDriver.name} />
+            <Info label="Driver status" value={user.linkedDriver.isActive ? "Active" : "Archived"} />
+            <Info label="Mobile access" value={formatLabel(user.linkedDriver.mobileAccessStatus)} />
+            <Info label="Default vehicle" value={user.linkedDriver.defaultVehicle?.registrationNumber ?? "Not set"} />
+            <Info label="Driver email" value={user.linkedDriver.email ?? "Not recorded"} />
+          </div>
+        ) : (
+          <p className="text-sm font-semibold leading-6 text-black/45">
+            This user is not linked to a Driver record. That is normal for office, management and other non-driving users.
+          </p>
+        )}
+      </AdminPanel>
     </div>
   );
 }

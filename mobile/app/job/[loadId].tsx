@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,7 +17,10 @@ import type {
   MobileAssignmentV1,
 } from "@waste-x/contracts";
 
-import { getLocalMobileAssignmentByLoadId } from "@/assignments/local-working-set";
+import {
+  getLocalMobileAssignmentByLoadId,
+  refreshMobileAssignmentWorkingSet,
+} from "@/assignments/local-working-set";
 import {
   getMobileAuthSnapshot,
   type MobileAuthSnapshot,
@@ -54,6 +58,7 @@ export default function MobileJobDetailScreen() {
   const [rejectReason, setRejectReason] = useState("");
   const [rejectBusy, setRejectBusy] = useState(false);
   const [ticketBusy, setTicketBusy] = useState(false);
+  const [cloudRefreshing, setCloudRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +70,57 @@ export default function MobileJobDetailScreen() {
     setAssignment(localAssignment);
     setSyncStatus(localSync);
     return localAssignment;
+  }
+
+  async function refreshCurrentJobFromCloud(showMessage = false) {
+    setCloudRefreshing(true);
+    setError(null);
+
+    try {
+      const snapshot = await getMobileAuthSnapshot();
+      setAuth(snapshot);
+
+      if (!snapshot.authenticated) {
+        router.replace("/");
+        return null;
+      }
+
+      if (snapshot.onlineAuthenticated) {
+        const localSync = await getMobileSyncStatus();
+
+        /*
+          Push Driver-owned evidence before replacing the authorised working
+          set. This keeps the Mobile offline-first contract intact.
+        */
+        if (localSync.pending > 0 || localSync.sending > 0) {
+          await syncPendingMobileEvents();
+        }
+
+        /*
+          WASTE_X_MOBILE_REMOTE_SITE_REFRESH_V1
+
+          A Driver can have zero queued events while the receiving site changes
+          the canonical Load from Desktop/Web. Pull the complete authorised
+          bootstrap so manual arrival, site acceptance, item weights and all
+          Waste Items become visible without requiring a Driver event first.
+        */
+        await refreshMobileAssignmentWorkingSet();
+      }
+
+      const refreshed = await reloadLocalDetail();
+      if (showMessage && refreshed) {
+        setMessage("Job refreshed from Waste X.");
+      }
+      return refreshed;
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      setError(
+        `Waste X could not refresh this Job from Cloud. Cached offline work is still available. ${detail}`,
+      );
+      return null;
+    } finally {
+      setCloudRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -85,6 +141,24 @@ export default function MobileJobDetailScreen() {
         setAuth(snapshot);
         setSyncStatus(localSync);
         setAssignment(localAssignment);
+
+        if (snapshot.onlineAuthenticated) {
+          try {
+            if (localSync.pending > 0 || localSync.sending > 0) {
+              await syncPendingMobileEvents();
+            }
+            await refreshMobileAssignmentWorkingSet();
+            if (cancelled) return;
+            await reloadLocalDetail();
+          } catch (refreshError) {
+            if (!cancelled) {
+              console.warn(
+                "[MOBILE_DRIVER] Job-detail Cloud refresh deferred",
+                refreshError,
+              );
+            }
+          }
+        }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -257,6 +331,8 @@ export default function MobileJobDetailScreen() {
   const loadStatus = assignment.load.status.toLowerCase();
   const terminal = ["completed", "rejected", "cancelled", "canceled"].includes(loadStatus);
   const atDestination = workflow.step === "ARRIVED_DESTINATION";
+  const siteRecordedArrival =
+    !atDestination && (loadStatus === "arrived" || loadStatus === "accepted");
   const siteClosedAtDestination = atDestination && (loadStatus === "completed" || loadStatus === "rejected");
   const canRejectBeforeCollection =
     !readOnly &&
@@ -266,16 +342,36 @@ export default function MobileJobDetailScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={cloudRefreshing}
+            onRefresh={() => void refreshCurrentJobFromCloud(true)}
+          />
+        }
+      >
         <View style={styles.topBar}>
           <Pressable onPress={() => router.back()} hitSlop={10} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
           </Pressable>
-          <View style={[styles.connectionPill, auth?.onlineAuthenticated ? styles.onlinePill : styles.offlinePill]}>
-            <View style={[styles.connectionDot, auth?.onlineAuthenticated ? styles.onlineDot : styles.offlineDot]} />
-            <Text style={styles.connectionText}>
-              {auth?.onlineAuthenticated ? "Online" : "Offline"}{pending > 0 ? ` · ${pending} queued` : ""}
-            </Text>
+          <View style={styles.topBarActions}>
+            <Pressable
+              onPress={() => void refreshCurrentJobFromCloud(true)}
+              disabled={cloudRefreshing}
+              style={styles.refreshJobButton}
+            >
+              <Text style={styles.refreshJobButtonText}>
+                {cloudRefreshing ? "Refreshing…" : "Refresh"}
+              </Text>
+            </Pressable>
+            <View style={[styles.connectionPill, auth?.onlineAuthenticated ? styles.onlinePill : styles.offlinePill]}>
+              <View style={[styles.connectionDot, auth?.onlineAuthenticated ? styles.onlineDot : styles.offlineDot]} />
+              <Text style={styles.connectionText}>
+                {auth?.onlineAuthenticated ? "Online" : "Offline"}{pending > 0 ? ` · ${pending} queued` : ""}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -324,7 +420,15 @@ export default function MobileJobDetailScreen() {
             })}
           </View>
 
-          {!readOnly && nextAction ? (
+          {siteRecordedArrival ? (
+            <View style={styles.handoffCard}>
+              <Text style={styles.handoffEyebrow}>SITE ARRIVAL FALLBACK</Text>
+              <Text style={styles.handoffTitle}>The receiving site has taken control of this load.</Text>
+              <Text style={styles.handoffBody}>
+                Site staff recorded the physical arrival without a Driver Mobile arrival. Your Driver timeline above remains exactly as recorded; the site now owns acceptance, rejection, weights and completion.
+              </Text>
+            </View>
+          ) : !readOnly && nextAction ? (
             <View style={styles.actionBlock}>
               <Text style={styles.actionEyebrow}>NEXT DRIVER ACTION</Text>
               <Text style={styles.actionTitle}>{nextAction.label}</Text>
@@ -439,13 +543,68 @@ export default function MobileJobDetailScreen() {
           <SiteCard label={assignment.job.direction === "incoming" ? "DESTINATION SITE" : "DELIVERY SITE"} location={assignment.destination} />
         </Section>
 
-        <Section title="Booked waste">
-          <View style={styles.detailGrid}>
-            <DetailTile label="EWC" value={assignment.load.ewcCode ?? "Not set"} />
-            <DetailTile label="SITE NET" value={weight ?? "Pending site weight"} />
-          </View>
-          <DetailRow label="Booked description" value={assignment.load.wasteDescription ?? assignment.material?.name ?? "Not set"} />
-          <Text style={styles.readOnlyHint}>Waste description and weight are site-controlled records on Driver Mobile.</Text>
+        <Section title="Waste on this load">
+          {(assignment.load.wasteItems ?? []).length > 0 ? (
+            <View style={{ gap: 10 }}>
+              {(assignment.load.wasteItems ?? []).map((item) => (
+                <View
+                  key={item.id}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: "#e2e8f0",
+                    borderRadius: 14,
+                    padding: 12,
+                    backgroundColor: "#ffffff",
+                  }}
+                >
+                  <Text style={styles.detailLabel}>
+                    WASTE ITEM {item.itemNumber}
+                  </Text>
+                  <Text style={styles.detailValue}>
+                    {item.ewcCode} · {item.wasteDescription}
+                  </Text>
+                  <Text style={styles.readOnlyHint}>
+                    {item.weightAmount
+                      ? `${item.weightAmount} ${item.weightMetric}${item.weightIsEstimate ? " · estimated allocation" : ""}`
+                      : "Site weight allocation pending"}
+                    {item.permitEwcMatchType === "regulatory_authority"
+                      ? ` · regulatory authority${item.permitEwcBasis ? ` · ${item.permitEwcBasis.replaceAll("_", " ")}` : ""}`
+                      : " · exact permit match"}
+                  </Text>
+                </View>
+              ))}
+              <DetailTile
+                label="SITE NET"
+                value={weight ?? "Pending site weight"}
+              />
+            </View>
+          ) : (
+            <>
+              <View style={styles.detailGrid}>
+                <DetailTile
+                  label="EWC"
+                  value={assignment.load.ewcCode ?? "Not set"}
+                />
+                <DetailTile
+                  label="SITE NET"
+                  value={weight ?? "Pending site weight"}
+                />
+              </View>
+              <DetailRow
+                label="Booked description"
+                value={
+                  assignment.load.wasteDescription ??
+                  assignment.material?.name ??
+                  "Not set"
+                }
+              />
+            </>
+          )}
+          <Text style={styles.readOnlyHint}>
+            Driver Mobile keeps one transport workflow for this lorry. Waste
+            classifications, item allocations and receiving decisions are
+            read-only site records.
+          </Text>
         </Section>
 
         <Section title="Driver & vehicle">
@@ -564,6 +723,9 @@ const styles = StyleSheet.create({
   emptyTitle: { marginTop: 10, color: "#111827", fontSize: 24, lineHeight: 29, fontWeight: "800" },
   emptyBody: { marginTop: 10, color: "#64748b", fontSize: 13, lineHeight: 20 },
   topBar: { paddingTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  topBarActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  refreshJobButton: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#e2e8f0" },
+  refreshJobButtonText: { color: "#334155", fontSize: 11, fontWeight: "800" },
   backButton: { paddingVertical: 8, paddingRight: 12 },
   backButtonText: { color: "#334155", fontSize: 13, fontWeight: "800" },
   connectionPill: { flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999 },

@@ -510,7 +510,7 @@ function ScenarioCard({
 
           {result.listingId ? (
             <Link
-              href={`/admin/audit/chain/${result.listingId}`}
+              href={`/admin/audit?q=${encodeURIComponent(String(result.listingId))}`}
               className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-black/65 transition hover:border-red-300 hover:text-red-600"
             >
               Chain

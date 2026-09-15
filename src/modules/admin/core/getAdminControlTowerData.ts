@@ -1,8 +1,9 @@
-import { desc, eq, gte, ilike, or } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, or } from "drizzle-orm";
 
 import { database } from "@/db/database";
 import {
   auditEvents,
+  drivers,
   errorLogs,
   jobLoads,
   jobs,
@@ -382,6 +383,22 @@ export async function getAdminOrganisationOverview(organisationId: string) {
         },
       },
       materialProfiles: true,
+      drivers: {
+        with: {
+          linkedUser: {
+            columns: {
+              id: true,
+              name: true,
+              email: true,
+              status: true,
+              isActive: true,
+              isSuspended: true,
+            },
+          },
+          defaultVehicle: true,
+        },
+      },
+      vehicles: true,
       jobs: true,
       jobLoads: true,
       wasteTrackingSettings: true,
@@ -408,7 +425,7 @@ export async function getAdminUsers(search = "") {
 }
 
 export async function getAdminUser(userId: string) {
-  return database.query.users.findFirst({
+  const user = await database.query.users.findFirst({
     where: eq(users.id, userId),
     with: {
       organisation: true,
@@ -424,6 +441,25 @@ export async function getAdminUser(userId: string) {
       },
     },
   });
+
+  if (!user) return undefined;
+
+  const linkedDriver = user.organisationId
+    ? await database.query.drivers.findFirst({
+        where: and(
+          eq(drivers.linkedUserId, userId),
+          eq(drivers.organisationId, user.organisationId),
+        ),
+        with: {
+          defaultVehicle: true,
+        },
+      })
+    : null;
+
+  return {
+    ...user,
+    linkedDriver,
+  };
 }
 
 export async function getAdminAuditFeed(limit = 150) {

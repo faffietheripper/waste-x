@@ -9,7 +9,6 @@ import { database } from "@/db/database";
 import {
   ewcCodes,
   jobLoads,
-  permitEwcCodes,
   users,
   wasteReceipts,
   wasteTrackingOrganisationSettings,
@@ -34,6 +33,7 @@ import {
   parseDefraWarnings,
   parseDefraWasteTrackingId,
 } from "../core/parseDefraValidationErrors";
+import { canonicaliseDwtContainer } from "../core/containerTypes";
 import {
   flattenValidationResults,
   validateReceiveMovementInput,
@@ -41,6 +41,9 @@ import {
 import { createJobLoadWasteTrackingSubmission } from "../data-access/createJobLoadWasteTrackingSubmission";
 import { getWasteTrackingReferenceData } from "../data-access/getWasteTrackingReferenceData";
 import { getLatestWasteTrackingSubmissionByJobLoad } from "../data-access/getWasteTrackingSubmissionByJobLoad";
+import { resolvePermitEwcAcceptance } from "@/modules/permits/core/resolvePermitEwcAcceptance";
+
+/* WASTE_X_DWT_REGULATORY_SUBMIT_V1 */
 import { updateWasteTrackingSubmission } from "../data-access/updateWasteTrackingSubmission";
 
 import type {
@@ -336,24 +339,25 @@ export async function submitJobLoadReceiveMovementAction(
   }
 
   /*
-    Solo safety check outside the approved Defra payload engine.
+    Job Load / DWT safety boundary.
 
-    The legacy /home/receiving action is intentionally untouched. For the new
-    Job Load workflow we additionally verify that every EWC the reviewer is
-    about to submit is still on the permit linked to the completed load. This
-    prevents a manual DWT edit from bypassing the permit check that happened in
-    operations.
+    The submitted factual EWC must be accepted by the receiving site's
+    canonical acceptance resolver. This supports both exact permit matches and
+    explicitly enabled regulatory-authority rules such as RPS 241.
+
+    The factual EWC sent to Defra is never replaced by the underlying permit EWC.
   */
-  if (!load.sitePermitId) {
+  if (!load.sitePermitId || !load.ownSiteId) {
     return {
       success: false,
-      message: "This Job Load is not linked to a receiving-site permit.",
+      message:
+        "This Job Load is not linked to a receiving site and permit.",
       errors: [
         {
           key: "receiver.authorisationNumber",
           errorType: "BusinessRuleViolation",
           message:
-            "Link the Job Load to the correct receiving permit before submitting DWT.",
+            "Link the Job Load to the correct receiving site and permit before submitting DWT.",
         },
       ],
     };
@@ -371,39 +375,68 @@ export async function submitJobLoadReceiveMovementAction(
     ),
   );
 
-  const permittedRows = await database
-    .select({ code: ewcCodes.code })
-    .from(permitEwcCodes)
-    .innerJoin(ewcCodes, eq(ewcCodes.id, permitEwcCodes.ewcCodeId))
+  /*
+   * WASTE_X_DWT_EWC_CANONICAL_LOOKUP_V1
+   *
+   * Waste X stores operator-facing values such as "17 02 01" while DWT
+   * carries "170201". Resolve the active factual catalogue by canonical value
+   * instead of comparing the raw formatted database text.
+   */
+  const operationalEwcRows = await database
+    .select({
+      id: ewcCodes.id,
+      code: ewcCodes.code,
+    })
+    .from(ewcCodes)
     .where(
       and(
-        eq(permitEwcCodes.organisationId, organisationId),
-        eq(permitEwcCodes.permitId, load.sitePermitId),
-        eq(permitEwcCodes.isActive, true),
+        eq(ewcCodes.isActive, true),
+        eq(ewcCodes.classificationUsable, true),
       ),
     );
 
-  const permittedCodes = new Set(
-    permittedRows.map((row) => normaliseEwc(row.code)),
+  const ewcByCode = new Map(
+    operationalEwcRows.map((row) => [
+      normaliseEwc(row.code),
+      row.id,
+    ]),
   );
 
-  const unpermittedCodes = submittedEwcCodes.filter(
-    (code) => !permittedCodes.has(code),
-  );
+  const permitErrors: DefraValidationResult[] = [];
 
-  if (unpermittedCodes.length > 0) {
-    const permitErrors: DefraValidationResult[] = unpermittedCodes.map(
-      (code) => ({
+  for (const code of submittedEwcCodes) {
+    const ewcCodeId = ewcByCode.get(code);
+
+    if (!ewcCodeId) {
+      permitErrors.push({
         key: "wasteItems.ewcCodes",
         errorType: "BusinessRuleViolation",
-        message: `EWC ${code} is not configured as permitted on the receiving permit linked to this load.`,
-      }),
-    );
+        message: `EWC ${code} is not present in the Waste X EWC catalogue.`,
+      });
+      continue;
+    }
 
+    const acceptance = await resolvePermitEwcAcceptance({
+      organisationId,
+      siteId: load.ownSiteId,
+      permitId: load.sitePermitId,
+      ewcCodeId,
+    });
+
+    if (!acceptance.allowed) {
+      permitErrors.push({
+        key: "wasteItems.ewcCodes",
+        errorType: "BusinessRuleViolation",
+        message: `EWC ${code} is not accepted by the receiving permit or an enabled regulatory authority.`,
+      });
+    }
+  }
+
+  if (permitErrors.length > 0) {
     return {
       success: false,
       message:
-        "The reviewed waste classification does not match the receiving permit.",
+        "The reviewed waste classification is not authorised for this receiving site.",
       errors: permitErrors,
       flattenedErrors: flattenValidationResults(permitErrors),
       warnings: [],
@@ -415,9 +448,28 @@ export async function submitJobLoadReceiveMovementAction(
     activeOnly: true,
   });
 
+  /*
+   * WASTE_X_DWT_CONTAINER_CANONICAL_SUBMIT_V1
+   *
+   * Final safety boundary: even legacy/manual receipt values are converted to
+   * DEFRA's case-sensitive container codes before local validation and before
+   * any network request is made.
+   */
   const receiveMovementInput: ReceiveMovementInput = {
     ...input.receiveMovementInput,
     receiverApiCode,
+    wasteItems: input.receiveMovementInput.wasteItems.map((item) => {
+      const container = canonicaliseDwtContainer({
+        typeOfContainers: item.typeOfContainers,
+        numberOfContainers: item.numberOfContainers,
+      });
+
+      return {
+        ...item,
+        numberOfContainers: container.numberOfContainers,
+        typeOfContainers: container.code,
+      };
+    }),
   };
 
   const validation = validateReceiveMovementInput(receiveMovementInput, {

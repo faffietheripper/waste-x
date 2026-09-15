@@ -46,6 +46,10 @@ export default function AdminNav({
           >
             Workflow Health
           </Link>
+
+          <Link href="/admin/jobs" className={linkClass("/admin/jobs")}>
+            Jobs & Loads
+          </Link>
         </NavGroup>
 
         <NavGroup label="Customers">
@@ -58,6 +62,10 @@ export default function AdminNav({
 
           <Link href="/admin/users" className={linkClass("/admin/users")}>
             Users & Access
+          </Link>
+
+          <Link href="/admin/devices" className={linkClass("/admin/devices")}>
+            Devices
           </Link>
         </NavGroup>
 
@@ -165,6 +173,13 @@ export default function AdminNav({
             className={linkClass("/admin/errors")}
           >
             System Health
+          </Link>
+
+          <Link
+            href="/admin/diagnostics"
+            className={linkClass("/admin/diagnostics")}
+          >
+            Diagnostics
           </Link>
 
           <Link

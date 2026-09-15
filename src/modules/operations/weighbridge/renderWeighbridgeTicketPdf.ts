@@ -286,6 +286,51 @@ export async function renderWeighbridgeTicketPdf(ticket: WeighbridgeTicketData) 
     ticket.permitNumber,
   );
 
+  if (ticket.permitEwcMatchType === "regulatory_authority") {
+    fieldRow(
+      "Acceptance authority",
+      `Actual ${ticket.ewcCode} against permit EWC ${ticket.permitEwcCode || "NOT RECORDED"}`,
+      "Authority / reference",
+      [ticket.permitEwcBasis, ticket.permitEwcReference]
+        .filter(Boolean)
+        .join(" · ") || "NOT RECORDED",
+    );
+  }
+
+  if (ticket.wasteItems.length > 1) {
+    sectionTitle("Waste items on this load");
+
+    for (const item of ticket.wasteItems) {
+      fieldRow(
+        `Item ${item.itemNumber} · ${item.ewcCode}`,
+        item.wasteDescription,
+        "Allocated weight",
+        item.weightAmount
+          ? `${item.weightAmount} ${item.weightMetric}${
+              item.weightIsEstimate ? " · ESTIMATED" : ""
+            }`
+          : "Not recorded",
+      );
+
+      fieldRow(
+        "Receiving acceptance",
+        item.permitEwcMatchType === "regulatory_authority"
+          ? [
+              "Regulatory authority",
+              item.permitEwcBasis,
+              item.permitEwcReference,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : "Exact permit match",
+        "Underlying permit EWC",
+        item.permitEwcMatchType === "regulatory_authority"
+          ? item.permitEwcCode || "Not recorded"
+          : item.ewcCode,
+      );
+    }
+  }
+
   if (y > 120) {
     y -= 6;
     page.drawText(

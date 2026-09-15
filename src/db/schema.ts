@@ -336,6 +336,21 @@ export const ewcCodes = pgTable(
     entryType: text("entryType"),
     isHazardous: boolean("isHazardous"),
 
+    /*
+      Waste-code reference usage is deliberately split:
+      - classificationUsable: may describe the factual waste/load
+      - authorisationUsable: may appear in permit / exemption scope
+
+      A legacy permit code such as 02 01 99 can therefore remain truthful
+      authorisation data without becoming selectable as the factual waste.
+    */
+    classificationUsable: boolean("classificationUsable")
+      .notNull()
+      .default(true),
+    authorisationUsable: boolean("authorisationUsable")
+      .notNull()
+      .default(true),
+
     source: text("source").notNull().default("official"),
     sourceVersion: text("sourceVersion"),
 
@@ -347,6 +362,12 @@ export const ewcCodes = pgTable(
   (table) => ({
     codeUnique: uniqueIndex("ewc_code_unique").on(table.code),
     activeIdx: index("ewc_active_idx").on(table.isActive),
+    classificationUsableIdx: index("ewc_classification_usable_idx").on(
+      table.classificationUsable,
+    ),
+    authorisationUsableIdx: index("ewc_authorisation_usable_idx").on(
+      table.authorisationUsable,
+    ),
     hazardousIdx: index("ewc_hazardous_idx").on(table.isHazardous),
   }),
 );
@@ -474,6 +495,367 @@ export const permitEwcCodes = pgTable(
     orgIdx: index("permit_ewc_org_idx").on(table.organisationId),
     permitIdx: index("permit_ewc_permit_idx").on(table.permitId),
     ewcIdx: index("permit_ewc_code_idx").on(table.ewcCodeId),
+  }),
+);
+
+
+/* =========================================================
+   PERMIT EWC EQUIVALENCE / LEGACY ACCEPTANCE
+   ---------------------------------------------------------
+   WASTE_X_PERMIT_EWC_EQUIVALENCE_V1
+
+   This is NOT a generic permit override.
+
+   It records a controlled regulatory basis for accepting an
+   actual/current EWC code where the site's active permit still
+   carries a different legacy/general code or another regulator-
+   approved equivalent.
+
+   The actual EWC remains the factual Job Load classification.
+========================================================= */
+
+export const permitEwcEquivalences = pgTable(
+  "bb_permit_ewc_equivalence",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    permitId: text("permitId")
+      .notNull()
+      .references(() => sitePermits.id, { onDelete: "cascade" }),
+
+    permittedEwcCodeId: text("permittedEwcCodeId")
+      .notNull()
+      .references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    acceptedEwcCodeId: text("acceptedEwcCodeId")
+      .notNull()
+      .references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    basis: text("basis")
+      .$type<
+        | "RPS_241"
+        | "REGULATOR_APPROVAL"
+        | "PERMIT_VARIATION"
+        | "LEGACY_EQUIVALENCE"
+        | "OTHER"
+      >()
+      .notNull(),
+
+    reference: text("reference").notNull(),
+
+    validFrom: timestamp("validFrom", { mode: "date" }),
+    validUntil: timestamp("validUntil", { mode: "date" }),
+
+    notes: text("notes"),
+    documentKey: text("documentKey"),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("permit_ewc_equivalence_org_idx").on(table.organisationId),
+    permitIdx: index("permit_ewc_equivalence_permit_idx").on(table.permitId),
+    acceptedIdx: index("permit_ewc_equivalence_accepted_idx").on(
+      table.acceptedEwcCodeId,
+    ),
+    activeIdx: index("permit_ewc_equivalence_active_idx").on(
+      table.permitId,
+      table.isActive,
+    ),
+  }),
+);
+
+
+/* WASTE_X_REGULATORY_ACCEPTANCE_V1 */
+
+/* =========================================================
+   REGULATORY WASTE ACCEPTANCE LIBRARY
+   ---------------------------------------------------------
+   The library describes external regulatory authority. A site
+   then activates an authority against its own authorisation.
+
+   This replaces runtime dependence on the earlier narrow
+   bb_permit_ewc_equivalence model. That table is intentionally
+   retained temporarily for rollback/audit compatibility only.
+========================================================= */
+
+export const regulatoryAcceptanceAuthorities = pgTable(
+  "bb_regulatory_acceptance_authority",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    code: text("code").notNull(),
+    name: text("name").notNull(),
+
+    regulator: text("regulator")
+      .$type<PermitRegulator>()
+      .notNull(),
+
+    jurisdiction: text("jurisdiction").notNull(),
+
+    authorityType: text("authorityType")
+      .$type<
+        | "RPS"
+        | "PERMIT_VARIATION"
+        | "REGULATOR_APPROVAL"
+        | "EXEMPTION"
+        | "OTHER"
+      >()
+      .notNull(),
+
+    ruleType: text("ruleType")
+      .$type<
+        | "code_substitution"
+        | "additional_code"
+        | "conditional"
+      >()
+      .notNull(),
+
+    status: text("status")
+      .$type<"active" | "withdrawn" | "superseded">()
+      .notNull()
+      .default("active"),
+
+    sourceUrl: text("sourceUrl"),
+    validFrom: timestamp("validFrom", { mode: "date" }),
+    validUntil: timestamp("validUntil", { mode: "date" }),
+    reviewAt: timestamp("reviewAt", { mode: "date" }),
+
+    conditionsSummary: text("conditionsSummary"),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    codeUnique: uniqueIndex("reg_acceptance_authority_code_unique").on(
+      table.code,
+    ),
+    regulatorIdx: index("reg_acceptance_authority_regulator_idx").on(
+      table.regulator,
+    ),
+    statusIdx: index("reg_acceptance_authority_status_idx").on(
+      table.status,
+    ),
+  }),
+);
+
+export const regulatoryAcceptanceRules = pgTable(
+  "bb_regulatory_acceptance_rule",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    authorityId: text("authorityId")
+      .notNull()
+      .references(() => regulatoryAcceptanceAuthorities.id, {
+        onDelete: "cascade",
+      }),
+
+    /*
+      Stable library key. This is intentionally distinct from the EWC pair:
+      RPS 241 can contain more than one rule for the same old/new code pair
+      where the waste description or qualifying authorisation differs.
+    */
+    ruleKey: text("ruleKey").notNull(),
+
+    legacyWasteDescription: text("legacyWasteDescription"),
+    actualWasteDescription: text("actualWasteDescription"),
+
+    qualifyingAuthorisationRefs: text(
+      "qualifyingAuthorisationRefs",
+    ).array(),
+
+    originSubChapterCode: text("originSubChapterCode"),
+    specialConditions: text("specialConditions"),
+
+    actualEwcCodeId: text("actualEwcCodeId")
+      .notNull()
+      .references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    underlyingAuthorisationEwcCodeId: text(
+      "underlyingAuthorisationEwcCodeId",
+    ).references(() => ewcCodes.id, { onDelete: "restrict" }),
+
+    requiresUnderlyingPermitCode: boolean(
+      "requiresUnderlyingPermitCode",
+    )
+      .notNull()
+      .default(false),
+
+    requiresManualConfirmation: boolean(
+      "requiresManualConfirmation",
+    )
+      .notNull()
+      .default(true),
+
+    ruleNote: text("ruleNote"),
+    sourceLocator: text("sourceLocator"),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    authorityIdx: index("reg_acceptance_rule_authority_idx").on(
+      table.authorityId,
+    ),
+    actualEwcIdx: index("reg_acceptance_rule_actual_ewc_idx").on(
+      table.actualEwcCodeId,
+    ),
+    underlyingEwcIdx: index("reg_acceptance_rule_underlying_ewc_idx").on(
+      table.underlyingAuthorisationEwcCodeId,
+    ),
+    uniqueRule: uniqueIndex("reg_acceptance_rule_unique").on(
+      table.authorityId,
+      table.ruleKey,
+    ),
+  }),
+);
+
+export const siteRegulatoryAuthorities = pgTable(
+  "bb_site_regulatory_authority",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    siteId: text("siteId")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+
+    permitId: text("permitId")
+      .references(() => sitePermits.id, { onDelete: "cascade" }),
+
+    authorityId: text("authorityId")
+      .notNull()
+      .references(() => regulatoryAcceptanceAuthorities.id, {
+        onDelete: "restrict",
+      }),
+
+    reference: text("reference").notNull(),
+    notes: text("notes"),
+    documentKey: text("documentKey"),
+
+    validFrom: timestamp("validFrom", { mode: "date" }),
+    validUntil: timestamp("validUntil", { mode: "date" }),
+
+    conditionsConfirmedAt: timestamp("conditionsConfirmedAt", {
+      mode: "date",
+    }),
+    conditionsConfirmedByUserId: text(
+      "conditionsConfirmedByUserId",
+    ).references(() => users.id, { onDelete: "set null" }),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("site_reg_authority_org_idx").on(table.organisationId),
+    siteIdx: index("site_reg_authority_site_idx").on(table.siteId),
+    permitIdx: index("site_reg_authority_permit_idx").on(table.permitId),
+    authorityIdx: index("site_reg_authority_authority_idx").on(
+      table.authorityId,
+    ),
+    uniqueActivation: uniqueIndex("site_reg_authority_unique").on(
+      table.siteId,
+      table.permitId,
+      table.authorityId,
+    ),
+  }),
+);
+
+
+/* WASTE_X_REGULATORY_RULE_SCOPE_V1 */
+
+export const siteRegulatoryAuthorityRules = pgTable(
+  "bb_site_regulatory_authority_rule",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    siteId: text("siteId")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+
+    permitId: text("permitId")
+      .notNull()
+      .references(() => sitePermits.id, { onDelete: "cascade" }),
+
+    activationId: text("activationId")
+      .notNull()
+      .references(() => siteRegulatoryAuthorities.id, {
+        onDelete: "cascade",
+      }),
+
+    ruleId: text("ruleId")
+      .notNull()
+      .references(() => regulatoryAcceptanceRules.id, {
+        onDelete: "restrict",
+      }),
+
+    qualifyingAuthorisationRef: text(
+      "qualifyingAuthorisationRef",
+    ),
+
+    evidenceNote: text("evidenceNote"),
+
+    confirmedAt: timestamp("confirmedAt", { mode: "date" })
+      .notNull()
+      .defaultNow(),
+
+    confirmedByUserId: text("confirmedByUserId").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+
+    isActive: boolean("isActive").notNull().default(true),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("site_reg_rule_org_idx").on(table.organisationId),
+    siteIdx: index("site_reg_rule_site_idx").on(table.siteId),
+    permitIdx: index("site_reg_rule_permit_idx").on(table.permitId),
+    activationIdx: index("site_reg_rule_activation_idx").on(
+      table.activationId,
+    ),
+    ruleIdx: index("site_reg_rule_rule_idx").on(table.ruleId),
+    uniqueSelection: uniqueIndex("site_reg_rule_unique").on(
+      table.activationId,
+      table.ruleId,
+    ),
   }),
 );
 
@@ -1465,6 +1847,32 @@ export const jobLoads = pgTable(
       mode: "date",
     }),
 
+    /*
+      Permit acceptance snapshot.
+
+      ewcCodeId / ewcCodeSnapshot remain the ACTUAL factual EWC.
+      These fields preserve why that EWC was accepted against the
+      permit at the time of the receiving decision.
+    */
+    permitEwcMatchType: text("permitEwcMatchType").$type<
+      "exact" | "regulatory_authority"
+    >(),
+
+    permitEwcEquivalenceId: text("permitEwcEquivalenceId").references(
+      () => permitEwcEquivalences.id,
+      { onDelete: "set null" },
+    ),
+    regulatoryAuthorityActivationId: text(
+      "regulatoryAuthorityActivationId",
+    ).references(() => siteRegulatoryAuthorities.id, {
+      onDelete: "set null",
+    }),
+
+    permitEwcBasis: text("permitEwcBasis"),
+    permitEwcReference: text("permitEwcReference"),
+    permitEwcCodeSnapshot: text("permitEwcCodeSnapshot"),
+    permitEwcCheckedAt: timestamp("permitEwcCheckedAt", { mode: "date" }),
+
     ticketNumber: text("ticketNumber"),
     purchaseOrder: text("purchaseOrder"),
     customerReference: text("customerReference"),
@@ -1515,6 +1923,12 @@ export const jobLoads = pgTable(
     receivedAtIdx: index("job_load_received_at_idx").on(table.receivedAt),
     ownSiteIdx: index("job_load_own_site_idx").on(table.ownSiteId),
     sitePermitIdx: index("job_load_site_permit_idx").on(table.sitePermitId),
+    permitEwcEquivalenceIdx: index("job_load_permit_ewc_equivalence_idx").on(
+      table.permitEwcEquivalenceId,
+    ),
+    regulatoryAuthorityActivationIdx: index(
+      "job_load_regulatory_authority_activation_idx",
+    ).on(table.regulatoryAuthorityActivationId),
     haulierIdx: index("job_load_haulier_idx").on(
       table.haulierCounterpartyId,
     ),
@@ -1527,6 +1941,152 @@ export const jobLoads = pgTable(
   }),
 );
 
+
+
+/* WASTE_X_MULTI_WASTE_ITEM_LOAD_V1 */
+/* =========================================================
+   JOB LOAD WASTE ITEMS
+   ---------------------------------------------------------
+   One bb_job_load is one physical vehicle movement.
+   Each identifiable waste stream on that vehicle is one row.
+   Legacy material/EWC columns on bb_job_load remain during the
+   compatibility phase and mirror item 1.
+========================================================= */
+export const jobLoadWasteItems = pgTable(
+  "bb_job_load_waste_item",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+
+    organisationId: text("organisationId")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+
+    jobLoadId: text("jobLoadId")
+      .notNull()
+      .references(() => jobLoads.id, { onDelete: "cascade" }),
+
+    itemNumber: integer("itemNumber").notNull(),
+
+    materialProfileId: text("materialProfileId").references(
+      () => materialProfiles.id,
+      { onDelete: "set null" },
+    ),
+
+    ewcCodeId: text("ewcCodeId").references(() => ewcCodes.id, {
+      onDelete: "set null",
+    }),
+
+    ewcCodeSnapshot: text("ewcCodeSnapshot").notNull(),
+    wasteDescriptionSnapshot: text("wasteDescriptionSnapshot").notNull(),
+
+    physicalFormSnapshot: text("physicalFormSnapshot").$type<
+      "Gas" | "Liquid" | "Solid" | "Powder" | "Sludge" | "Mixed"
+    >(),
+
+    numberOfContainers: integer("numberOfContainers"),
+    containerTypeSnapshot: text("containerTypeSnapshot"),
+
+    containsPops: boolean("containsPops").notNull().default(false),
+    popsSourceOfComponents: text("popsSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+    popsComponents: text("popsComponents"),
+
+    containsHazardous: boolean("containsHazardous")
+      .notNull()
+      .default(false),
+    hazardousSourceOfComponents: text("hazardousSourceOfComponents").$type<
+      "NOT_PROVIDED" | "PROVIDED_WITH_WASTE" | "GUIDANCE" | "OWN_TESTING"
+    >(),
+    hazardousHazCodes: text("hazardousHazCodes"),
+    hazardousComponents: text("hazardousComponents"),
+
+    disposalRecoveryCodeId: text("disposalRecoveryCodeId").references(
+      () => disposalRecoveryCodes.id,
+      { onDelete: "set null" },
+    ),
+    disposalRecoveryCodeSnapshot: text("disposalRecoveryCodeSnapshot"),
+
+    /*
+      Gross/tare/net remain load-level because the weighbridge weighs the lorry.
+      weightAmount is this waste item's allocation of the final load net.
+    */
+    weightMetric: text("weightMetric")
+      .$type<"Grams" | "Kilograms" | "Tonnes">()
+      .notNull()
+      .default("Tonnes"),
+
+    weightAmount: numeric("weightAmount", {
+      precision: 14,
+      scale: 3,
+    }),
+
+    weightIsEstimate: boolean("weightIsEstimate").notNull().default(false),
+
+    weightSource: text("weightSource")
+      .$type<"allocation" | "measured" | "declared">()
+      .notNull()
+      .default("allocation"),
+
+    /*
+      Acceptance belongs to the waste item, not the whole lorry.
+      This allows one exact-permit item and one regulatory-authority item
+      to travel on the same physical load without losing the legal basis.
+    */
+    permitEwcMatchType: text("permitEwcMatchType").$type<
+      "exact" | "regulatory_authority"
+    >(),
+
+    regulatoryAuthorityActivationId: text(
+      "regulatoryAuthorityActivationId",
+    ).references(() => siteRegulatoryAuthorities.id, {
+      onDelete: "set null",
+    }),
+
+    regulatoryAcceptanceRuleId: text(
+      "regulatoryAcceptanceRuleId",
+    ).references(() => regulatoryAcceptanceRules.id, {
+      onDelete: "set null",
+    }),
+
+    regulatoryRuleKeySnapshot: text("regulatoryRuleKeySnapshot"),
+    regulatoryRuleScopeSnapshot: text("regulatoryRuleScopeSnapshot"),
+    qualifyingAuthorisationRefSnapshot: text(
+      "qualifyingAuthorisationRefSnapshot",
+    ),
+
+    permitEwcBasis: text("permitEwcBasis"),
+    permitEwcReference: text("permitEwcReference"),
+    permitEwcCodeSnapshot: text("permitEwcCodeSnapshot"),
+    permitEwcCheckedAt: timestamp("permitEwcCheckedAt", { mode: "date" }),
+
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
+    updatedAt: timestamp("updatedAt", { mode: "date" }).defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("job_load_waste_item_org_idx").on(table.organisationId),
+    loadIdx: index("job_load_waste_item_load_idx").on(table.jobLoadId),
+    ewcIdx: index("job_load_waste_item_ewc_idx").on(table.ewcCodeId),
+    materialIdx: index("job_load_waste_item_material_idx").on(
+      table.materialProfileId,
+    ),
+    activationIdx: index(
+      "job_load_waste_item_regulatory_activation_idx",
+    ).on(table.regulatoryAuthorityActivationId),
+    ruleIdx: index("job_load_waste_item_regulatory_rule_idx").on(
+      table.regulatoryAcceptanceRuleId,
+    ),
+    loadItemUnique: uniqueIndex(
+      "job_load_waste_item_load_number_unique",
+    ).on(table.jobLoadId, table.itemNumber),
+  }),
+);
 
 export const invoices = pgTable(
   "bb_invoice",
@@ -4217,9 +4777,58 @@ export const jobLoadsRelations = relations(jobLoads, ({ one, many }) => ({
 
   receipt: one(wasteReceipts),
 
+  wasteItems: many(jobLoadWasteItems),
+
   submissions: many(wasteTrackingSubmissions),
   notifications: many(notifications),
 }));
+
+
+
+export const jobLoadWasteItemsRelations = relations(
+  jobLoadWasteItems,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [jobLoadWasteItems.organisationId],
+      references: [organisations.id],
+    }),
+
+    jobLoad: one(jobLoads, {
+      fields: [jobLoadWasteItems.jobLoadId],
+      references: [jobLoads.id],
+    }),
+
+    materialProfile: one(materialProfiles, {
+      fields: [jobLoadWasteItems.materialProfileId],
+      references: [materialProfiles.id],
+    }),
+
+    ewcCode: one(ewcCodes, {
+      fields: [jobLoadWasteItems.ewcCodeId],
+      references: [ewcCodes.id],
+    }),
+
+    disposalRecoveryCode: one(disposalRecoveryCodes, {
+      fields: [jobLoadWasteItems.disposalRecoveryCodeId],
+      references: [disposalRecoveryCodes.id],
+    }),
+
+    regulatoryAuthorityActivation: one(siteRegulatoryAuthorities, {
+      fields: [jobLoadWasteItems.regulatoryAuthorityActivationId],
+      references: [siteRegulatoryAuthorities.id],
+    }),
+
+    regulatoryAcceptanceRule: one(regulatoryAcceptanceRules, {
+      fields: [jobLoadWasteItems.regulatoryAcceptanceRuleId],
+      references: [regulatoryAcceptanceRules.id],
+    }),
+
+    createdBy: one(users, {
+      fields: [jobLoadWasteItems.createdByUserId],
+      references: [users.id],
+    }),
+  }),
+);
 
 
 /* ================= WASTE LISTINGS ================= */

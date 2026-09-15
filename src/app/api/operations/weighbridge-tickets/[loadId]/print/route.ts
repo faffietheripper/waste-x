@@ -314,7 +314,61 @@ export async function GET(
         ${field("Waste description", ticket.wasteDescription)}
         ${field("Permit / authorisation", ticket.permitNumber)}
         ${field("Direction", ticket.direction.toUpperCase())}
+        ${
+          ticket.permitEwcMatchType === "regulatory_authority"
+            ? field(
+                "Acceptance authority",
+                `Actual ${ticket.ewcCode} against permit EWC ${ticket.permitEwcCode || "NOT RECORDED"}`,
+              ) +
+              field(
+                "Authority / reference",
+                [ticket.permitEwcBasis, ticket.permitEwcReference]
+                  .filter(Boolean)
+                  .join(" · ") || "NOT RECORDED",
+              )
+            : ""
+        }
       </div>
+
+      ${
+        ticket.wasteItems.length > 1
+          ? `
+      <div class="section-title">Waste items on this load</div>
+      <div class="grid">
+        ${ticket.wasteItems
+          .map(
+            (item) =>
+              field(
+                `Item ${item.itemNumber} · ${item.ewcCode}`,
+                `${item.wasteDescription} · ${
+                  item.weightAmount
+                    ? `${item.weightAmount} ${item.weightMetric}${
+                        item.weightIsEstimate ? " · ESTIMATED" : ""
+                      }`
+                    : "weight not recorded"
+                }`,
+              ) +
+              field(
+                "Receiving acceptance",
+                item.permitEwcMatchType === "regulatory_authority"
+                  ? [
+                      "Regulatory authority",
+                      item.permitEwcBasis,
+                      item.permitEwcReference,
+                      item.permitEwcCode
+                        ? `underlying permit EWC ${item.permitEwcCode}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : "Exact permit match",
+              ),
+          )
+          .join("")}
+      </div>
+      `
+          : ""
+      }
 
       <div class="section-title">References</div>
       <div class="grid">

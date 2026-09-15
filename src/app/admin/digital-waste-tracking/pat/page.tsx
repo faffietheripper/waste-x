@@ -108,7 +108,7 @@ export default async function DigitalWasteTrackingPatPage() {
               </Link>
 
               <Link
-                href="/admin/audit/compliance"
+                href="/admin/audit?q=dwt"
                 className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-700"
               >
                 Compliance audit

@@ -222,9 +222,12 @@ fn sync_status(connection: &Connection, running: bool) -> Result<DesktopSyncStat
         last_success_at: metadata(connection, "sync_last_success_at")?,
         last_error,
         cursor: metadata(connection, "sync_cursor")?,
-        pending: count(connection, "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'PENDING'")?,
+        /* WASTE_X_DESKTOP_MASTER_MUTATION_STATUS_V1 */
+        pending: count(connection, "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'PENDING'")?
+            + count(connection, "SELECT COUNT(*) FROM local_cloud_mutation_queue WHERE status IN ('PENDING','SENDING')")?,
         retryable_failed: count(connection, "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'FAILED' AND (last_error LIKE 'NETWORK:%' OR last_error LIKE 'RETRYABLE:%' OR last_error LIKE 'INTERRUPTED:%')")?,
-        permanent_failed: count(connection, "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'FAILED' AND NOT (COALESCE(last_error, '') LIKE 'NETWORK:%' OR COALESCE(last_error, '') LIKE 'RETRYABLE:%' OR COALESCE(last_error, '') LIKE 'INTERRUPTED:%')")?,
+        permanent_failed: count(connection, "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'FAILED' AND NOT (COALESCE(last_error, '') LIKE 'NETWORK:%' OR COALESCE(last_error, '') LIKE 'RETRYABLE:%' OR COALESCE(last_error, '') LIKE 'INTERRUPTED:%')")?
+            + count(connection, "SELECT COUNT(*) FROM local_cloud_mutation_queue WHERE status = 'FAILED'")?,
         conflicts: count(connection, "SELECT COUNT(*) FROM local_sync_queue WHERE status = 'CONFLICT'")?,
         deferred_remote_changes: count(connection, "SELECT COUNT(*) FROM local_sync_remote_conflict WHERE resolved_at IS NULL")?,
     })
@@ -290,6 +293,28 @@ fn next_push_batch(connection: &Connection) -> Result<Vec<QueueRow>, String> {
         })
         .map_err(|e| e.to_string())?;
 
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    /*
+     * WASTE_X_SYNC_DEPENDENCY_ORDERING_V1
+     *
+     * SITE_TICKET_ISSUED is physically downstream of LOAD_COMPLETED.
+     * A ticket must never be uploaded while any completion for that load is
+     * still unsynchronised. Crucially, this is a dependency skip rather than an
+     * entity block: if an older ticket is already in CONFLICT but Waste X has
+     * created a certified replacement completion later in the queue, the
+     * replacement completion is still allowed to reach Cloud first.
+     */
+    let completion_dependencies: HashSet<(String, String)> = rows
+        .iter()
+        .filter(|row| {
+            row.entity_type == "job_load" && row.event_type == "LOAD_COMPLETED"
+        })
+        .map(|row| (row.entity_type.clone(), row.entity_id.clone()))
+        .collect();
+
     /* A conflict belongs to the affected entity, not to the entire yard. Keep
      * later events for that same entity behind its review item, but continue to
      * upload unrelated jobs/loads. We also send at most one event per entity in
@@ -298,9 +323,16 @@ fn next_push_batch(connection: &Connection) -> Result<Vec<QueueRow>, String> {
     let mut blocked_entities: HashSet<(String, String)> = HashSet::new();
     let mut selected_entities: HashSet<(String, String)> = HashSet::new();
     for row in rows {
-        let row = row.map_err(|e| e.to_string())?;
         let entity_key = (row.entity_type.clone(), row.entity_id.clone());
         if blocked_entities.contains(&entity_key) || selected_entities.contains(&entity_key) {
+            continue;
+        }
+
+        if row.event_type == "SITE_TICKET_ISSUED"
+            && completion_dependencies.contains(&entity_key)
+        {
+            // Park the ticket behind completion without blocking a certified
+            // replacement completion that may have a later device sequence.
             continue;
         }
 
@@ -405,6 +437,192 @@ fn push_request_body(device_id: &str, batch: &[QueueRow]) -> Result<Value, Strin
     }))
 }
 
+
+/*
+ * WASTE_X_SYNC_DEPENDENT_TICKET_REQUEUE_V1
+ *
+ * Old builds could send SITE_TICKET_ISSUED before a repaired completion
+ * reached Cloud. If that produced the exact dependency conflict/rejection below,
+ * a successful completion ACK is authoritative proof that the ticket may now be
+ * retried at the completion's returned Cloud entity version.
+ *
+ * We never retry the consumed Cloud event id. The stale local ticket event is
+ * superseded and a fresh id/device-sequence is queued with the same immutable
+ * ticket payload and occurrence time.
+ */
+fn requeue_stale_ticket_after_completion_ack(
+    transaction: &Transaction<'_>,
+    completion: &QueueRow,
+    completion_cloud_version: i64,
+) -> Result<usize, String> {
+    if completion.entity_type != "job_load" || completion.event_type != "LOAD_COMPLETED" {
+        return Ok(0);
+    }
+
+    type StaleTicketRow = (
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<i64>,
+        i64,
+        String,
+        String,
+        String,
+    );
+
+    let rows: Vec<StaleTicketRow> = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT event_id, organisation_id, site_id, device_id,
+                        actor_user_id, base_version, device_sequence,
+                        payload_json, payload_hash, occurred_at
+                 FROM local_sync_queue
+                 WHERE entity_type = 'job_load'
+                   AND entity_id = ?1
+                   AND event_type = 'SITE_TICKET_ISSUED'
+                   AND (
+                     (status = 'CONFLICT'
+                      AND last_error = 'CONFLICT:ENTITY_VERSION_CONFLICT')
+                     OR
+                     (status = 'FAILED'
+                      AND last_error = 'REJECTED:SITE_TICKET_REQUIRES_COMPLETED_LOAD')
+                   )
+                 ORDER BY device_sequence",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mapped = statement
+            .query_map(params![&completion.entity_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+
+    let mut repaired = 0usize;
+
+    for (
+        stale_event_id,
+        organisation_id,
+        site_id,
+        device_id,
+        actor_user_id,
+        stale_base_version,
+        stale_device_sequence,
+        payload_json,
+        payload_hash,
+        occurred_at,
+    ) in rows
+    {
+        let replacement_event_id = Uuid::now_v7().to_string();
+        let replacement_sequence: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(device_sequence), 0) + 1
+                 FROM local_sync_queue",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let now = now_iso();
+
+        transaction
+            .execute(
+                "UPDATE local_sync_queue
+                 SET status = 'SYNCED',
+                     last_error = 'LOCAL_SUPERSEDED:DEPENDENCY_REQUEUED_AFTER_LOAD_COMPLETED_ACK',
+                     updated_at = ?1
+                 WHERE event_id = ?2
+                   AND (
+                     (status = 'CONFLICT'
+                      AND last_error = 'CONFLICT:ENTITY_VERSION_CONFLICT')
+                     OR
+                     (status = 'FAILED'
+                      AND last_error = 'REJECTED:SITE_TICKET_REQUIRES_COMPLETED_LOAD')
+                   )",
+                params![now, stale_event_id],
+            )
+            .map_err(|e| e.to_string())?;
+
+        transaction
+            .execute(
+                "INSERT INTO local_sync_queue (
+                    event_id, organisation_id, site_id, device_id, actor_user_id,
+                    entity_type, entity_id, event_type, base_version,
+                    device_sequence, payload_json, payload_hash, occurred_at,
+                    recorded_at, status, attempt_count, updated_at
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5,
+                    'job_load', ?6, 'SITE_TICKET_ISSUED', ?7,
+                    ?8, ?9, ?10, ?11,
+                    ?12, 'PENDING', 0, ?12
+                 )",
+                params![
+                    replacement_event_id,
+                    organisation_id,
+                    site_id,
+                    device_id,
+                    actor_user_id,
+                    completion.entity_id,
+                    completion_cloud_version,
+                    replacement_sequence,
+                    payload_json,
+                    payload_hash,
+                    occurred_at,
+                    now,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+
+        transaction
+            .execute(
+                "INSERT INTO local_audit_event (
+                    event_id, actor_user_id, action, entity_type, entity_id,
+                    payload_json, created_at
+                 ) VALUES (
+                    ?1, ?2, 'SYNC_REQUEUE_SITE_TICKET_AFTER_COMPLETION_ACK',
+                    'job_load', ?3, ?4, ?5
+                 )",
+                params![
+                    replacement_event_id,
+                    actor_user_id,
+                    completion.entity_id,
+                    serde_json::to_string(&json!({
+                        "supersededEventId": stale_event_id,
+                        "replacementEventId": replacement_event_id,
+                        "dependency": "LOAD_COMPLETED",
+                        "completionEventId": completion.event_id,
+                        "completionCloudVersion": completion_cloud_version,
+                        "previousTicketBaseVersion": stale_base_version,
+                        "previousTicketDeviceSequence": stale_device_sequence,
+                    }))
+                    .map_err(|e| e.to_string())?,
+                    now,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+
+        repaired += 1;
+    }
+
+    Ok(repaired)
+}
+
 fn apply_push_results(
     connection: &mut Connection,
     batch: &[QueueRow],
@@ -468,6 +686,19 @@ fn apply_push_results(
                 params![status, last_error, server_version, event.event_id],
             )
             .map_err(|e| e.to_string())?;
+
+        if status == "SYNCED"
+            && event.entity_type == "job_load"
+            && event.event_type == "LOAD_COMPLETED"
+        {
+            if let Some(completion_cloud_version) = server_version {
+                requeue_stale_ticket_after_completion_ack(
+                    &transaction,
+                    event,
+                    completion_cloud_version,
+                )?;
+            }
+        }
     }
 
     transaction.commit().map_err(|e| e.to_string())?;
@@ -1189,4 +1420,188 @@ pub async fn desktop_sync_now(
     let result = run_sync(&app).await;
     sync_state.running.store(false, Ordering::SeqCst);
     result
+}
+
+
+#[cfg(test)]
+mod sync_dependency_hardening_tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE local_sync_queue (
+                    event_id TEXT PRIMARY KEY,
+                    organisation_id TEXT NOT NULL,
+                    site_id TEXT,
+                    device_id TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    base_version INTEGER,
+                    device_sequence INTEGER NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    server_entity_version INTEGER,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE local_audit_event (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT,
+                    actor_user_id TEXT,
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                ",
+            )
+            .expect("queue test schema");
+        connection
+    }
+
+    fn insert_event(
+        connection: &Connection,
+        event_id: &str,
+        event_type: &str,
+        base_version: i64,
+        sequence: i64,
+        status: &str,
+        last_error: Option<&str>,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO local_sync_queue (
+                    event_id, organisation_id, site_id, device_id, actor_user_id,
+                    entity_type, entity_id, event_type, base_version,
+                    device_sequence, payload_json, payload_hash, occurred_at,
+                    recorded_at, status, attempt_count, last_error, updated_at
+                 ) VALUES (
+                    ?1, 'org', 'site', 'device', 'user',
+                    'job_load', 'load-1', ?2, ?3,
+                    ?4, '{}', 'hash', '2026-09-12T20:00:00.000Z',
+                    '2026-09-12T20:00:00.000Z', ?5, 0, ?6,
+                    '2026-09-12T20:00:00.000Z'
+                 )",
+                params![
+                    event_id,
+                    event_type,
+                    base_version,
+                    sequence,
+                    status,
+                    last_error,
+                ],
+            )
+            .expect("insert queue event");
+    }
+
+    #[test]
+    fn sync_dependency_ticket_conflict_does_not_block_replacement_completion() {
+        let connection = connection();
+        insert_event(
+            &connection,
+            "ticket-old",
+            "SITE_TICKET_ISSUED",
+            7,
+            14,
+            "CONFLICT",
+            Some("CONFLICT:ENTITY_VERSION_CONFLICT"),
+        );
+        insert_event(
+            &connection,
+            "completion-replacement",
+            "LOAD_COMPLETED",
+            6,
+            15,
+            "PENDING",
+            None,
+        );
+
+        let batch = next_push_batch(&connection).expect("next batch");
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].event_id, "completion-replacement");
+        assert_eq!(batch[0].event_type, "LOAD_COMPLETED");
+    }
+
+    #[test]
+    fn sync_dependency_completion_ack_requeues_stale_ticket_at_cloud_version() {
+        let mut connection = connection();
+        insert_event(
+            &connection,
+            "ticket-old",
+            "SITE_TICKET_ISSUED",
+            7,
+            14,
+            "CONFLICT",
+            Some("CONFLICT:ENTITY_VERSION_CONFLICT"),
+        );
+
+        let completion = QueueRow {
+            event_id: "completion-replacement".to_string(),
+            organisation_id: "org".to_string(),
+            site_id: Some("site".to_string()),
+            device_id: "device".to_string(),
+            actor_user_id: "user".to_string(),
+            entity_type: "job_load".to_string(),
+            entity_id: "load-1".to_string(),
+            event_type: "LOAD_COMPLETED".to_string(),
+            base_version: Some(6),
+            device_sequence: 15,
+            payload_json: "{}".to_string(),
+            payload_hash: "hash".to_string(),
+            occurred_at: "2026-09-12T20:01:00.000Z".to_string(),
+            recorded_at: "2026-09-12T20:01:00.000Z".to_string(),
+            status: "PENDING".to_string(),
+            last_error: None,
+        };
+
+        let transaction = connection.transaction().expect("transaction");
+        let repaired = requeue_stale_ticket_after_completion_ack(
+            &transaction,
+            &completion,
+            7,
+        )
+        .expect("requeue");
+        transaction.commit().expect("commit");
+
+        assert_eq!(repaired, 1);
+
+        let old_status: (String, String) = connection
+            .query_row(
+                "SELECT status, last_error
+                 FROM local_sync_queue
+                 WHERE event_id = 'ticket-old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("old ticket state");
+        assert_eq!(old_status.0, "SYNCED");
+        assert_eq!(
+            old_status.1,
+            "LOCAL_SUPERSEDED:DEPENDENCY_REQUEUED_AFTER_LOAD_COMPLETED_ACK"
+        );
+
+        let replacement: (String, i64) = connection
+            .query_row(
+                "SELECT status, base_version
+                 FROM local_sync_queue
+                 WHERE event_type = 'SITE_TICKET_ISSUED'
+                   AND event_id != 'ticket-old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("replacement ticket");
+        assert_eq!(replacement.0, "PENDING");
+        assert_eq!(replacement.1, 7);
+    }
 }

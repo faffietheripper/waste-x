@@ -6,6 +6,7 @@ import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import {
   commercialSettings,
   customerInvoiceJobs,
+  customerInvoiceLoads,
   customerInvoices,
   jobCommercialLines,
 } from "@/db/commercial-schema";
@@ -18,6 +19,7 @@ import {
   addCustomJobCommercialLineAction,
   archiveJobCommercialLineAction,
   createDraftInvoiceAction,
+  createDraftLoadInvoiceAction,
   issueInvoiceAction,
   markInvoicePaidAction,
   saveCommercialSettingsAction,
@@ -74,6 +76,7 @@ const SUCCESS_MESSAGES: Record<string, string> = {
   commercial_line_archived: "Commercial line removed from future calculations.",
   legacy_price_applied: "Legacy Rate/Load price copied as this Job's confirmed price.",
   invoice_draft_created: "Draft customer invoice created.",
+  load_invoice_draft_created: "Draft invoice created for the completed Load.",
   invoice_issued: "Invoice issued with a sequential invoice number.",
   invoice_paid: "Invoice marked as paid.",
   invoice_voided: "Draft invoice voided.",
@@ -99,7 +102,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_payment_terms: "Payment terms must be between 0 and 365 days.",
   invoice_jobs_must_be_completed: "Only completed Jobs can be invoiced.",
   invoice_one_customer_only: "One invoice can only contain Jobs for the same customer.",
-  job_already_invoiced: "One of those Jobs already belongs to an active invoice.",
+  job_already_invoiced: "That Job already belongs to an active whole-Job invoice.",
+  load_required: "Choose a Load to invoice.",
+  load_not_found: "That Load could not be found.",
+  invoice_load_must_be_completed: "Only a completed Load can be invoiced.",
+  load_already_invoiced: "That Load already belongs to an active invoice.",
+  load_invoice_job_unit_pricing:
+    "This Job uses a per-Job customer charge. Use the Job invoice flow instead of creating a separate invoice for each Load.",
   job_missing_customer_price: "A selected Job has no customer/revenue price.",
   job_missing_invoice_quantity: "A selected per-tonne/per-load charge has no completed quantity yet.",
   invoice_party_missing: "Supplier or customer details are missing.",
@@ -175,8 +184,11 @@ export default async function CommercialPage({
   );
   const relevantJobs = Array.from(relevantJobsById.values());
   const jobIds = relevantJobs.map((job) => job.id);
+  const loadIds = relevantJobs.flatMap((job) =>
+    job.loads.map((load) => load.id),
+  );
 
-  const [commercialLines, activeInvoiceLinks] = await Promise.all([
+  const [commercialLines, activeInvoiceLinks, activeInvoiceLoadLinks] = await Promise.all([
     jobIds.length
       ? database.query.jobCommercialLines.findMany({
           where: and(
@@ -206,6 +218,27 @@ export default async function CommercialPage({
             ),
           )
       : Promise.resolve([]),
+    loadIds.length
+      ? database
+          .select({
+            jobId: customerInvoiceLoads.jobId,
+            loadId: customerInvoiceLoads.jobLoadId,
+            invoiceId: customerInvoiceLoads.invoiceId,
+            status: customerInvoices.status,
+          })
+          .from(customerInvoiceLoads)
+          .innerJoin(
+            customerInvoices,
+            eq(customerInvoiceLoads.invoiceId, customerInvoices.id),
+          )
+          .where(
+            and(
+              eq(customerInvoiceLoads.organisationId, access.organisationId),
+              inArray(customerInvoiceLoads.jobLoadId, loadIds),
+              ne(customerInvoices.status, "void"),
+            ),
+          )
+      : Promise.resolve([]),
   ]);
 
   const linesByJob = new Map<string, typeof commercialLines>();
@@ -217,6 +250,17 @@ export default async function CommercialPage({
 
   const activeInvoiceByJob = new Map(
     activeInvoiceLinks.map((link) => [link.jobId, link]),
+  );
+  const activeInvoiceByLoad = new Map(
+    activeInvoiceLoadLinks.map((link) => [link.loadId, link]),
+  );
+  const loadScopedInvoiceIds = new Set(
+    activeInvoiceLoadLinks.map((link) => link.invoiceId),
+  );
+  const activeWholeJobInvoiceByJob = new Map(
+    activeInvoiceLinks
+      .filter((link) => !loadScopedInvoiceIds.has(link.invoiceId))
+      .map((link) => [link.jobId, link]),
   );
 
   function mapCommercialJob(job: (typeof relevantJobs)[number]) {
@@ -232,6 +276,30 @@ export default async function CommercialPage({
   }
 
   const commercialJobs = relevantJobs.map(mapCommercialJob);
+
+  const loadInvoiceReadyCount = commercialJobs.reduce((count, { job, lines }) => {
+    const hasJobUnitRevenue = lines.some(
+      (line) => line.kind === "revenue" && line.unit === "job",
+    );
+    const wholeJobInvoice = activeWholeJobInvoiceByJob.get(job.id);
+
+    if (hasJobUnitRevenue || wholeJobInvoice) return count;
+
+    return (
+      count +
+      job.loads.filter((load) => {
+        if (load.status !== "completed") return false;
+        if (activeInvoiceByLoad.has(load.id)) return false;
+
+        const loadSummary = calculateJobCommercials({
+          lines: lines.filter((line) => line.kind === "revenue"),
+          loads: [load],
+        });
+
+        return loadSummary.hasRevenue && !loadSummary.missingQuantity;
+      }).length
+    );
+  }, 0);
 
   const invoiceReady = unbilledCompletedJobs
     .map(mapCommercialJob)
@@ -365,7 +433,7 @@ export default async function CommercialPage({
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <Metric label="Pricing needed" value={pricingNeeded} warning={pricingNeeded > 0} />
-          <Metric label="Ready to invoice" value={invoiceReady.length} highlight />
+          <Metric label="Loads ready to invoice" value={loadInvoiceReadyCount} highlight />
           <Metric label="Draft invoices" value={draftInvoices.length} />
           <Metric label="Issued" value={issuedInvoices.length} />
           <Metric label="Paid" value={paidInvoices.length} />
@@ -458,152 +526,299 @@ export default async function CommercialPage({
                       </p>
                     </div>
 
-                    {activeInvoice ? (
-                      <div className="w-full rounded-xl border border-black/10 bg-black/5 px-4 py-2.5 text-center text-[10px] font-semibold text-black/45 xl:w-[160px]">
-                        Pricing locked by invoice
-                      </div>
-                    ) : (
-                    <details className="w-full xl:w-[160px]">
-                      <summary className="cursor-pointer list-none rounded-xl bg-black px-4 py-2.5 text-center text-xs font-semibold text-white hover:bg-orange-500 hover:text-black">
-                        Set / edit pricing
-                      </summary>
-                      <div className="mt-3 rounded-2xl border border-black/10 bg-[#fbfaf7] p-4 xl:absolute xl:right-[5vw] xl:z-20 xl:w-[700px] xl:shadow-2xl">
-                        <form action={saveCoreJobPricingAction} className="grid gap-4">
-                          <input type="hidden" name="jobId" value={job.id} />
+                    <div className="w-full space-y-2 xl:w-[190px]">
+                      {activeInvoice ? (
+                        <div className="rounded-xl border border-black/10 bg-black/5 px-4 py-2.5 text-center text-[10px] font-semibold text-black/45">
+                          Pricing locked by invoice
+                        </div>
+                      ) : (
+                        <a
+                          href={`#pricing-${job.id}`}
+                          className="block rounded-xl bg-black px-4 py-2.5 text-center text-xs font-semibold text-white hover:bg-orange-500 hover:text-black"
+                        >
+                          Set / edit pricing
+                        </a>
+                      )}
 
-                          <div className="grid gap-3 md:grid-cols-[1.2fr_0.55fr_0.55fr_0.45fr]">
-                            <Field
-                              label={
-                                job.direction === "outgoing"
-                                  ? "Revenue / material sale description"
-                                  : "Customer description"
-                              }
-                            >
-                              <input
-                                name="customerChargeDescription"
-                                defaultValue={
-                                  revenueLine?.description ??
-                                  (job.direction === "outgoing"
-                                    ? "Material sale / outgoing service"
-                                    : "Waste acceptance / disposal")
-                                }
-                                className={inputClass}
-                              />
-                            </Field>
-                            <Field
-                              label={
-                                job.direction === "outgoing"
-                                  ? "Revenue £"
-                                  : "Customer price £"
-                              }
-                            >
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                name="customerChargeAmount"
-                                defaultValue={revenueLine?.amount ?? ""}
-                                className={inputClass}
-                              />
-                            </Field>
-                            <Field label="Unit">
-                              <RateUnitSelect name="customerChargeUnit" value={revenueLine?.unit ?? "tonne"} />
-                            </Field>
-                            <Field label="VAT %">
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                step="0.01"
-                                name="customerVatRate"
-                                defaultValue={revenueLine?.vatRate ?? "20.00"}
-                                className={inputClass}
-                              />
-                            </Field>
-                          </div>
+                      {job.loads
+                        .filter((load) => load.status === "completed")
+                        .sort((a, b) => a.loadNumber - b.loadNumber)
+                        .map((load) => {
+                          const loadInvoice = activeInvoiceByLoad.get(load.id);
+                          const wholeJobInvoice = activeWholeJobInvoiceByJob.get(job.id);
+                          const hasJobUnitRevenue = lines.some(
+                            (line) => line.kind === "revenue" && line.unit === "job",
+                          );
+                          const loadSummary = calculateJobCommercials({
+                            lines: lines.filter((line) => line.kind === "revenue"),
+                            loads: [load],
+                          });
+                          const loadTonnes = tonnes(loadSummary.tonnes);
 
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <div className="grid grid-cols-[1fr_120px] gap-2 rounded-xl border border-black/5 bg-white p-3">
-                              <Field label="Haulage cost £">
-                                <input type="number" min="0" step="0.01" name="haulageCostAmount" defaultValue={haulageCostLine?.amount ?? ""} className={inputClass} />
-                              </Field>
-                              <Field label="Unit">
-                                <RateUnitSelect name="haulageCostUnit" value={haulageCostLine?.unit ?? "load"} />
-                              </Field>
-                            </div>
-                            <div className="grid grid-cols-[1fr_120px] gap-2 rounded-xl border border-black/5 bg-white p-3">
-                              <Field label="Tipping cost £">
-                                <input type="number" min="0" step="0.01" name="tippingCostAmount" defaultValue={tippingCostLine?.amount ?? ""} className={inputClass} />
-                              </Field>
-                              <Field label="Unit">
-                                <RateUnitSelect name="tippingCostUnit" value={tippingCostLine?.unit ?? "tonne"} />
-                              </Field>
-                            </div>
-                          </div>
+                          if (loadInvoice) {
+                            return (
+                              <a
+                                key={load.id}
+                                href={`/api/commercial/invoices/${loadInvoice.invoiceId}/pdf`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block rounded-xl border border-orange-200 bg-orange-50 px-3 py-2.5 text-center text-[10px] font-semibold text-orange-800 hover:bg-orange-100"
+                              >
+                                {loadInvoice.status === "draft" ? "Preview" : "Download"} invoice
+                                <span className="mt-0.5 block text-[9px] font-normal text-orange-700/65">
+                                  Load {load.loadNumber} · {loadTonnes}
+                                </span>
+                              </a>
+                            );
+                          }
 
-                          <button className="h-11 rounded-xl bg-black px-4 text-xs font-semibold text-white hover:bg-orange-500 hover:text-black">
-                            Save this Job's pricing
-                          </button>
-                        </form>
+                          if (wholeJobInvoice) {
+                            return (
+                              <a
+                                key={load.id}
+                                href={`/api/commercial/invoices/${wholeJobInvoice.invoiceId}/pdf`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block rounded-xl border border-black/10 bg-white px-3 py-2.5 text-center text-[10px] font-semibold text-black/55 hover:border-orange-300 hover:text-orange-700"
+                              >
+                                Download Job invoice
+                              </a>
+                            );
+                          }
 
-                        {legacyAmount && legacyUnit && (
-                          <form action={useLegacyPriceSuggestionAction} className="mt-3 rounded-xl border border-orange-200 bg-orange-50 p-3">
-                            <input type="hidden" name="jobId" value={job.id} />
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                              <div>
-                                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-700">Old Rate / Load snapshot suggestion</p>
-                                <p className="mt-1 text-xs text-orange-900/70">{money(legacyAmount)} / {unitLabel(legacyUnit)} — use only if it is correct for this Job.</p>
+                          if (hasJobUnitRevenue) {
+                            return (
+                              <div
+                                key={load.id}
+                                className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[9px] font-semibold text-amber-800"
+                              >
+                                Load {load.loadNumber} · use Job invoice
                               </div>
-                              <button className="rounded-lg border border-orange-300 bg-white px-3 py-2 text-xs font-semibold text-orange-800">
-                                Use suggestion
+                            );
+                          }
+
+                          if (!loadSummary.hasRevenue || loadSummary.missingQuantity) {
+                            return (
+                              <div
+                                key={load.id}
+                                className="rounded-xl border border-black/10 bg-black/5 px-3 py-2 text-center text-[9px] font-semibold text-black/35"
+                              >
+                                Load {load.loadNumber} · pricing/weight needed
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <form key={load.id} action={createDraftLoadInvoiceAction}>
+                              <input type="hidden" name="jobLoadId" value={load.id} />
+                              <input
+                                type="hidden"
+                                name="paymentTermsDays"
+                                value={
+                                  job.client?.paymentTermsDays ??
+                                  settings?.defaultPaymentTermsDays ??
+                                  30
+                                }
+                              />
+                              <button className="w-full rounded-xl bg-orange-500 px-3 py-2.5 text-[10px] font-bold text-black hover:bg-black hover:text-white">
+                                Invoice Load {load.loadNumber}
+                                <span className="mt-0.5 block text-[9px] font-normal opacity-70">
+                                  {loadTonnes} · {money(loadSummary.revenue)}
+                                </span>
+                              </button>
+                            </form>
+                          );
+                        })}
+                    </div>
+
+                    {!activeInvoice && (
+                      <div
+                        id={`pricing-${job.id}`}
+                        className="fixed inset-0 z-50 hidden overflow-y-auto bg-black/55 p-4 backdrop-blur-sm target:block sm:p-8"
+                      >
+                        <div className="mx-auto mt-[6vh] w-full max-w-[780px] rounded-[26px] border border-black/10 bg-[#fbfaf7] p-5 shadow-2xl">
+                          <div className="mb-4 flex items-start justify-between gap-4 border-b border-black/10 pb-4">
+                            <div>
+                              <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-orange-600">
+                                {job.jobNumber}
+                              </p>
+                              <h3 className="mt-1 text-xl font-semibold">Set / edit pricing</h3>
+                            </div>
+                            <a
+                              href={`#job-${job.id}`}
+                              className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-black/55 hover:border-orange-300 hover:text-orange-700"
+                            >
+                              Close
+                            </a>
+                          </div>
+
+                          <form action={saveCoreJobPricingAction} className="grid gap-4">
+                            <input type="hidden" name="jobId" value={job.id} />
+
+                            <div className="grid gap-3 md:grid-cols-[1.2fr_0.55fr_0.55fr_0.45fr]">
+                              <Field
+                                label={
+                                  job.direction === "outgoing"
+                                    ? "Revenue / material sale description"
+                                    : "Customer description"
+                                }
+                              >
+                                <input
+                                  name="customerChargeDescription"
+                                  defaultValue={
+                                    revenueLine?.description ??
+                                    (job.direction === "outgoing"
+                                      ? "Material sale / outgoing service"
+                                      : "Waste acceptance / disposal")
+                                  }
+                                  className={inputClass}
+                                />
+                              </Field>
+                              <Field
+                                label={
+                                  job.direction === "outgoing"
+                                    ? "Revenue £"
+                                    : "Customer price £"
+                                }
+                              >
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  name="customerChargeAmount"
+                                  defaultValue={revenueLine?.amount ?? ""}
+                                  className={inputClass}
+                                />
+                              </Field>
+                              <Field label="Unit">
+                                <RateUnitSelect
+                                  name="customerChargeUnit"
+                                  value={revenueLine?.unit ?? "tonne"}
+                                />
+                              </Field>
+                              <Field label="VAT %">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.01"
+                                  name="customerVatRate"
+                                  defaultValue={revenueLine?.vatRate ?? "20.00"}
+                                  className={inputClass}
+                                />
+                              </Field>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="grid grid-cols-[1fr_120px] gap-2 rounded-xl border border-black/5 bg-white p-3">
+                                <Field label="Haulage cost £">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    name="haulageCostAmount"
+                                    defaultValue={haulageCostLine?.amount ?? ""}
+                                    className={inputClass}
+                                  />
+                                </Field>
+                                <Field label="Unit">
+                                  <RateUnitSelect
+                                    name="haulageCostUnit"
+                                    value={haulageCostLine?.unit ?? "load"}
+                                  />
+                                </Field>
+                              </div>
+                              <div className="grid grid-cols-[1fr_120px] gap-2 rounded-xl border border-black/5 bg-white p-3">
+                                <Field label="Tipping cost £">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    name="tippingCostAmount"
+                                    defaultValue={tippingCostLine?.amount ?? ""}
+                                    className={inputClass}
+                                  />
+                                </Field>
+                                <Field label="Unit">
+                                  <RateUnitSelect
+                                    name="tippingCostUnit"
+                                    value={tippingCostLine?.unit ?? "tonne"}
+                                  />
+                                </Field>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap justify-end gap-2">
+                              <a
+                                href={`#job-${job.id}`}
+                                className="h-11 rounded-xl border border-black/10 bg-white px-4 py-3 text-xs font-semibold text-black/55"
+                              >
+                                Cancel
+                              </a>
+                              <button className="h-11 rounded-xl bg-black px-5 text-xs font-semibold text-white hover:bg-orange-500 hover:text-black">
+                                Save this Job&apos;s pricing
                               </button>
                             </div>
                           </form>
-                        )}
 
-                        <div className="mt-4 border-t border-black/10 pt-4">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-black/35">Additional revenue / cost line</p>
-                          <form action={addCustomJobCommercialLineAction} className="mt-3 grid gap-2 md:grid-cols-[110px_145px_1fr_110px_105px_90px_auto]">
-                            <input type="hidden" name="jobId" value={job.id} />
-                            <select name="kind" defaultValue="revenue" className={inputClass}>
-                              <option value="revenue">Revenue</option>
-                              <option value="cost">Cost</option>
-                            </select>
-                            <select name="category" defaultValue="surcharge" className={inputClass}>
-                              <option value="haulage_charge">Haulage charge</option>
-                              <option value="material_sale">Material sale</option>
-                              <option value="surcharge">Surcharge</option>
-                              <option value="discount">Discount</option>
-                              <option value="other">Other</option>
-                              <option value="haulage_cost">Haulage cost</option>
-                              <option value="tipping_cost">Tipping cost</option>
-                            </select>
-                            <input name="description" required placeholder="Description" className={inputClass} />
-                            <input name="amount" type="number" step="0.01" required placeholder="£" className={inputClass} />
-                            <RateUnitSelect name="unit" value="job" />
-                            <input name="vatRate" type="number" min="0" max="100" step="0.01" defaultValue="20.00" className={inputClass} />
-                            <button className="rounded-lg bg-orange-500 px-3 text-xs font-bold text-black">Add</button>
-                          </form>
-                        </div>
-
-                        {lines.filter((line) => !["customer_charge", "material_sale", "haulage_cost", "tipping_cost"].includes(line.category)).length > 0 && (
-                          <div className="mt-4 space-y-2">
-                            {lines
-                              .filter((line) => !["customer_charge", "material_sale", "haulage_cost", "tipping_cost"].includes(line.category))
-                              .map((line) => (
-                                <div key={line.id} className="flex items-center justify-between rounded-lg border border-black/5 bg-white px-3 py-2 text-xs">
-                                  <span>{line.description} · {money(line.amount)} / {unitLabel(line.unit)}</span>
-                                  <form action={archiveJobCommercialLineAction}>
-                                    <input type="hidden" name="lineId" value={line.id} />
-                                    <input type="hidden" name="jobId" value={job.id} />
-                                    <button className="font-semibold text-red-600">Remove</button>
-                                  </form>
+                          {legacyAmount && legacyUnit && (
+                            <form action={useLegacyPriceSuggestionAction} className="mt-3 rounded-xl border border-orange-200 bg-orange-50 p-3">
+                              <input type="hidden" name="jobId" value={job.id} />
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                  <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-700">Old Rate / Load snapshot suggestion</p>
+                                  <p className="mt-1 text-xs text-orange-900/70">{money(legacyAmount)} / {unitLabel(legacyUnit)} — use only if it is correct for this Job.</p>
                                 </div>
-                              ))}
+                                <button className="rounded-lg border border-orange-300 bg-white px-3 py-2 text-xs font-semibold text-orange-800">
+                                  Use suggestion
+                                </button>
+                              </div>
+                            </form>
+                          )}
+
+                          <div className="mt-4 border-t border-black/10 pt-4">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-black/35">Additional revenue / cost line</p>
+                            <form action={addCustomJobCommercialLineAction} className="mt-3 grid gap-2 md:grid-cols-[110px_145px_1fr_110px_105px_90px_auto]">
+                              <input type="hidden" name="jobId" value={job.id} />
+                              <select name="kind" defaultValue="revenue" className={inputClass}>
+                                <option value="revenue">Revenue</option>
+                                <option value="cost">Cost</option>
+                              </select>
+                              <select name="category" defaultValue="surcharge" className={inputClass}>
+                                <option value="haulage_charge">Haulage charge</option>
+                                <option value="material_sale">Material sale</option>
+                                <option value="surcharge">Surcharge</option>
+                                <option value="discount">Discount</option>
+                                <option value="other">Other</option>
+                                <option value="haulage_cost">Haulage cost</option>
+                                <option value="tipping_cost">Tipping cost</option>
+                              </select>
+                              <input name="description" required placeholder="Description" className={inputClass} />
+                              <input name="amount" type="number" step="0.01" required placeholder="£" className={inputClass} />
+                              <RateUnitSelect name="unit" value="job" />
+                              <input name="vatRate" type="number" min="0" max="100" step="0.01" defaultValue="20.00" className={inputClass} />
+                              <button className="rounded-lg bg-orange-500 px-3 text-xs font-bold text-black">Add</button>
+                            </form>
                           </div>
-                        )}
+
+                          {lines.filter((line) => !["customer_charge", "material_sale", "haulage_cost", "tipping_cost"].includes(line.category)).length > 0 && (
+                            <div className="mt-4 space-y-2">
+                              {lines
+                                .filter((line) => !["customer_charge", "material_sale", "haulage_cost", "tipping_cost"].includes(line.category))
+                                .map((line) => (
+                                  <div key={line.id} className="flex items-center justify-between rounded-lg border border-black/5 bg-white px-3 py-2 text-xs">
+                                    <span>{line.description} · {money(line.amount)} / {unitLabel(line.unit)}</span>
+                                    <form action={archiveJobCommercialLineAction}>
+                                      <input type="hidden" name="lineId" value={line.id} />
+                                      <input type="hidden" name="jobId" value={job.id} />
+                                      <button className="font-semibold text-red-600">Remove</button>
+                                    </form>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </details>
                     )}
                   </div>
                 </article>

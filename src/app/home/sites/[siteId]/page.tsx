@@ -22,6 +22,10 @@ import { database } from "@/db/database";
 import {
   ewcCodes,
   permitEwcCodes,
+  regulatoryAcceptanceAuthorities,
+  regulatoryAcceptanceRules,
+  siteRegulatoryAuthorities,
+  siteRegulatoryAuthorityRules,
   sitePermits,
   sites,
   users,
@@ -34,7 +38,11 @@ import {
 
 import {
   addPermitEwcCodeAction,
+  activateSiteRegulatoryAuthorityAction,
+  activateSiteRegulatoryRuleAction,
   createSitePermitAction,
+  deactivateSiteRegulatoryAuthorityAction,
+  deactivateSiteRegulatoryRuleAction,
   removePermitEwcCodeAction,
   updateReceivingSiteAction,
   updateSitePermitAction,
@@ -113,6 +121,40 @@ function errorMessage(
     missing_ewc_context:
       "Waste X could not determine which permit or EWC code to update.",
 
+
+    missing_regulatory_authority_context:
+      "Waste X could not determine which acceptance authority to update.",
+
+    regulatory_authority_reference_required:
+      "Enter the reference/evidence you are relying on for this authority.",
+
+    regulatory_authority_conditions_confirmation_required:
+      "Confirm that this site and activity meet the conditions of the selected regulatory authority.",
+
+    invalid_regulatory_authority_dates:
+      "The authority end date cannot be earlier than its start date.",
+
+    regulatory_authority_not_available:
+      "That regulatory authority is not active in the Waste X library.",
+
+    regulatory_authority_wrong_regulator:
+      "That regulatory authority does not apply to this permit regulator.",
+
+    missing_regulatory_rule_context:
+      "Waste X could not determine which regulatory acceptance rule to update.",
+
+    regulatory_rule_confirmation_required:
+      "Confirm that the selected rule applies to this site and waste scope.",
+
+    regulatory_rule_not_available:
+      "That regulatory acceptance rule is not available for the selected authority.",
+
+    invalid_regulatory_rule_authorisation_reference:
+      "Select one of the qualifying permit, standard rules or exemption references defined by this regulatory rule.",
+
+    regulatory_rule_underlying_code_missing:
+      "This rule cannot be enabled because its required underlying EWC is not active on the site authorisation.",
+
     receiving_site_already_exists:
       "This organisation already has a primary receiving site.",
   };
@@ -144,6 +186,18 @@ function successMessage(
 
     ewc_removed:
       "EWC code removed from the permit.",
+
+    regulatory_authority_saved:
+      "Additional waste acceptance authority activated.",
+
+    regulatory_authority_removed:
+      "Additional waste acceptance authority deactivated.",
+
+    regulatory_rule_saved:
+      "Specific regulatory acceptance rule enabled for this site.",
+
+    regulatory_rule_removed:
+      "Specific regulatory acceptance rule disabled for this site.",
   };
 
   return (
@@ -418,7 +472,7 @@ export default async function ReceivingSiteDetailPage({
         .where(
           and(
             eq(
-              ewcCodes.isActive,
+              ewcCodes.authorisationUsable,
               true,
             ),
 
@@ -434,6 +488,142 @@ export default async function ReceivingSiteDetailPage({
         )
         .limit(40);
   }
+
+
+  const availableRegulatoryAuthorities = permit
+    ? await database
+        .select({
+          id: regulatoryAcceptanceAuthorities.id,
+          code: regulatoryAcceptanceAuthorities.code,
+          name: regulatoryAcceptanceAuthorities.name,
+          authorityType: regulatoryAcceptanceAuthorities.authorityType,
+          ruleType: regulatoryAcceptanceAuthorities.ruleType,
+          jurisdiction: regulatoryAcceptanceAuthorities.jurisdiction,
+          sourceUrl: regulatoryAcceptanceAuthorities.sourceUrl,
+          reviewAt: regulatoryAcceptanceAuthorities.reviewAt,
+          conditionsSummary:
+            regulatoryAcceptanceAuthorities.conditionsSummary,
+        })
+        .from(regulatoryAcceptanceAuthorities)
+        .where(
+          and(
+            eq(
+              regulatoryAcceptanceAuthorities.regulator,
+              permit.regulator,
+            ),
+            eq(
+              regulatoryAcceptanceAuthorities.status,
+              "active",
+            ),
+          ),
+        )
+        .orderBy(asc(regulatoryAcceptanceAuthorities.code))
+    : [];
+
+  const regulatoryAuthorityActivations = permit
+    ? await database
+        .select({
+          id: siteRegulatoryAuthorities.id,
+          authorityId: siteRegulatoryAuthorities.authorityId,
+          reference: siteRegulatoryAuthorities.reference,
+          validFrom: siteRegulatoryAuthorities.validFrom,
+          validUntil: siteRegulatoryAuthorities.validUntil,
+          conditionsConfirmedAt:
+            siteRegulatoryAuthorities.conditionsConfirmedAt,
+          code: regulatoryAcceptanceAuthorities.code,
+          name: regulatoryAcceptanceAuthorities.name,
+          authorityType:
+            regulatoryAcceptanceAuthorities.authorityType,
+          ruleType: regulatoryAcceptanceAuthorities.ruleType,
+        })
+        .from(siteRegulatoryAuthorities)
+        .innerJoin(
+          regulatoryAcceptanceAuthorities,
+          eq(
+            regulatoryAcceptanceAuthorities.id,
+            siteRegulatoryAuthorities.authorityId,
+          ),
+        )
+        .where(
+          and(
+            eq(
+              siteRegulatoryAuthorities.organisationId,
+              organisationId,
+            ),
+            eq(siteRegulatoryAuthorities.siteId, site.id),
+            eq(siteRegulatoryAuthorities.permitId, permit.id),
+            eq(siteRegulatoryAuthorities.isActive, true),
+          ),
+        )
+        .orderBy(asc(regulatoryAcceptanceAuthorities.code))
+    : [];
+
+
+  const regulatoryAcceptanceRuleRows = permit
+    ? await database
+        .select({
+          id: regulatoryAcceptanceRules.id,
+          authorityId: regulatoryAcceptanceRules.authorityId,
+          ruleKey: regulatoryAcceptanceRules.ruleKey,
+          legacyWasteDescription:
+            regulatoryAcceptanceRules.legacyWasteDescription,
+          actualWasteDescription:
+            regulatoryAcceptanceRules.actualWasteDescription,
+          qualifyingAuthorisationRefs:
+            regulatoryAcceptanceRules.qualifyingAuthorisationRefs,
+          originSubChapterCode:
+            regulatoryAcceptanceRules.originSubChapterCode,
+          specialConditions:
+            regulatoryAcceptanceRules.specialConditions,
+          actualEwcCodeId:
+            regulatoryAcceptanceRules.actualEwcCodeId,
+          underlyingEwcCodeId:
+            regulatoryAcceptanceRules.underlyingAuthorisationEwcCodeId,
+          requiresUnderlyingPermitCode:
+            regulatoryAcceptanceRules.requiresUnderlyingPermitCode,
+        })
+        .from(regulatoryAcceptanceRules)
+        .where(eq(regulatoryAcceptanceRules.isActive, true))
+        .orderBy(asc(regulatoryAcceptanceRules.ruleKey))
+    : [];
+
+  const regulatoryRuleSelections = permit
+    ? await database
+        .select({
+          id: siteRegulatoryAuthorityRules.id,
+          activationId: siteRegulatoryAuthorityRules.activationId,
+          ruleId: siteRegulatoryAuthorityRules.ruleId,
+          qualifyingAuthorisationRef:
+            siteRegulatoryAuthorityRules.qualifyingAuthorisationRef,
+          evidenceNote: siteRegulatoryAuthorityRules.evidenceNote,
+          confirmedAt: siteRegulatoryAuthorityRules.confirmedAt,
+        })
+        .from(siteRegulatoryAuthorityRules)
+        .where(
+          and(
+            eq(
+              siteRegulatoryAuthorityRules.organisationId,
+              organisationId,
+            ),
+            eq(siteRegulatoryAuthorityRules.siteId, site.id),
+            eq(siteRegulatoryAuthorityRules.permitId, permit.id),
+            eq(siteRegulatoryAuthorityRules.isActive, true),
+          ),
+        )
+    : [];
+
+  const regulatoryCodeRows = permit
+    ? await database
+        .select({
+          id: ewcCodes.id,
+          code: ewcCodes.code,
+        })
+        .from(ewcCodes)
+    : [];
+
+  const regulatoryCodeById = new Map(
+    regulatoryCodeRows.map((row) => [row.id, row.code]),
+  );
 
   /* =======================================================
      RENDER
@@ -1195,6 +1385,479 @@ export default async function ReceivingSiteDetailPage({
                     </div>
                   )}
                 </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {/* =================================================
+            ADDITIONAL WASTE ACCEPTANCE AUTHORITIES
+        ================================================= */}
+
+        <section
+          id="additional-acceptance-authorities"
+          className="rounded-[2rem] border border-amber-200 bg-amber-50 p-7 shadow-sm"
+        >
+          <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-start">
+            <SectionTitle
+              eyebrow="Regulatory authority"
+              title="Additional Waste Acceptance Authorities"
+              description="Activate a recognised regulatory authority for this site. Waste X keeps factual waste classification separate from literal permit scope and only applies rules held in the regulatory library."
+            />
+
+            {permit && (
+              <span className="shrink-0 rounded-full bg-amber-900 px-4 py-2 text-xs font-semibold text-amber-100">
+                {regulatoryAuthorityActivations.length} active
+              </span>
+            )}
+          </div>
+
+          {!permit ? (
+            <EmptyState>
+              Add the environmental authorisation before activating additional acceptance authorities.
+            </EmptyState>
+          ) : (
+            <>
+              <div className="mt-5 space-y-3">
+                {regulatoryAuthorityActivations.map((activation) => (
+                  <div
+                    key={activation.id}
+                    className="rounded-2xl border border-amber-200 bg-white p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-900">
+                            {activation.code.replaceAll("_", " ")}
+                          </span>
+                          <span className="text-xs font-semibold text-black/45">
+                            {activation.ruleType.replaceAll("_", " ")}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm font-semibold text-black">
+                          {activation.name}
+                        </p>
+                        <p className="mt-1 text-xs text-black/50">
+                          Reference: {activation.reference}
+                        </p>
+                      </div>
+
+                      {canEdit && (
+                        <form action={deactivateSiteRegulatoryAuthorityAction}>
+                          <input type="hidden" name="siteId" value={site.id} />
+                          <input type="hidden" name="permitId" value={permit.id} />
+                          <input
+                            type="hidden"
+                            name="activationId"
+                            value={activation.id}
+                          />
+                          <button
+                            type="submit"
+                            className="rounded-lg border border-black/10 px-3 py-2 text-xs font-semibold text-black/55 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                          >
+                            Deactivate
+                          </button>
+                        </form>
+                      )}
+                    </div>
+
+                    <div className="mt-5 border-t border-amber-100 pt-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-black/40">
+                        Specific Acceptance Rules
+                      </p>
+
+                      <div className="mt-3 space-y-2">
+                        {regulatoryRuleSelections
+                          .filter(
+                            (selection) =>
+                              selection.activationId === activation.id,
+                          )
+                          .map((selection) => {
+                            const rule = regulatoryAcceptanceRuleRows.find(
+                              (candidate) => candidate.id === selection.ruleId,
+                            );
+
+                            if (!rule) return null;
+
+                            const actualCode =
+                              regulatoryCodeById.get(
+                                rule.actualEwcCodeId,
+                              ) ?? "Unknown";
+
+                            const underlyingCode =
+                              rule.underlyingEwcCodeId
+                                ? regulatoryCodeById.get(
+                                    rule.underlyingEwcCodeId,
+                                  ) ?? "Unknown"
+                                : null;
+
+                            return (
+                              <div
+                                key={selection.id}
+                                className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-emerald-950">
+                                      {underlyingCode
+                                        ? `${underlyingCode} → ${actualCode}`
+                                        : `Additional code ${actualCode}`}
+                                    </p>
+                                    <p className="mt-1 text-xs leading-5 text-emerald-950/65">
+                                      {rule.legacyWasteDescription ??
+                                        rule.actualWasteDescription ??
+                                        rule.ruleKey}
+                                    </p>
+                                    {selection.qualifyingAuthorisationRef && (
+                                      <p className="mt-1 text-[11px] text-emerald-900/55">
+                                        Qualifying authority:{" "}
+                                        {selection.qualifyingAuthorisationRef}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  {canEdit && (
+                                    <form
+                                      action={
+                                        deactivateSiteRegulatoryRuleAction
+                                      }
+                                    >
+                                      <input
+                                        type="hidden"
+                                        name="siteId"
+                                        value={site.id}
+                                      />
+                                      <input
+                                        type="hidden"
+                                        name="permitId"
+                                        value={permit.id}
+                                      />
+                                      <input
+                                        type="hidden"
+                                        name="selectionId"
+                                        value={selection.id}
+                                      />
+                                      <button
+                                        type="submit"
+                                        className="rounded-lg border border-emerald-300 px-3 py-2 text-[11px] font-semibold text-emerald-900"
+                                      >
+                                        Disable rule
+                                      </button>
+                                    </form>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                        {regulatoryRuleSelections.filter(
+                          (selection) =>
+                            selection.activationId === activation.id,
+                        ).length === 0 && (
+                          <p className="rounded-xl border border-dashed border-amber-200 bg-amber-50 p-3 text-xs text-amber-900/60">
+                            No specific rule is enabled. This authority currently permits nothing.
+                          </p>
+                        )}
+                      </div>
+
+                      {canEdit && (
+                        <div className="mt-4 space-y-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-black/40">
+                            Available library rules
+                          </p>
+
+                          {regulatoryAcceptanceRuleRows
+                            .filter(
+                              (rule) =>
+                                rule.authorityId === activation.authorityId &&
+                                !regulatoryRuleSelections.some(
+                                  (selection) =>
+                                    selection.activationId === activation.id &&
+                                    selection.ruleId === rule.id,
+                                ),
+                            )
+                            .map((rule) => {
+                              const actualCode =
+                                regulatoryCodeById.get(
+                                  rule.actualEwcCodeId,
+                                ) ?? "Unknown";
+
+                              const underlyingCode =
+                                rule.underlyingEwcCodeId
+                                  ? regulatoryCodeById.get(
+                                      rule.underlyingEwcCodeId,
+                                    ) ?? "Unknown"
+                                  : null;
+
+                              const underlyingPresent =
+                                !rule.requiresUnderlyingPermitCode ||
+                                (rule.underlyingEwcCodeId
+                                  ? acceptedIds.has(
+                                      rule.underlyingEwcCodeId,
+                                    )
+                                  : false);
+
+                              return (
+                                <form
+                                  key={rule.id}
+                                  action={activateSiteRegulatoryRuleAction}
+                                  className="rounded-xl border border-black/10 bg-white p-4"
+                                >
+                                  <input
+                                    type="hidden"
+                                    name="siteId"
+                                    value={site.id}
+                                  />
+                                  <input
+                                    type="hidden"
+                                    name="permitId"
+                                    value={permit.id}
+                                  />
+                                  <input
+                                    type="hidden"
+                                    name="activationId"
+                                    value={activation.id}
+                                  />
+                                  <input
+                                    type="hidden"
+                                    name="ruleId"
+                                    value={rule.id}
+                                  />
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="rounded-md bg-black px-2 py-1 text-[10px] font-bold text-white">
+                                      {underlyingCode
+                                        ? `${underlyingCode} → ${actualCode}`
+                                        : actualCode}
+                                    </span>
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-black/40">
+                                      {rule.ruleKey}
+                                    </span>
+                                  </div>
+
+                                  <p className="mt-2 text-xs leading-5 text-black/65">
+                                    {rule.legacyWasteDescription ??
+                                      rule.actualWasteDescription ??
+                                      "Regulatory acceptance rule"}
+                                  </p>
+
+                                  {rule.actualWasteDescription && (
+                                    <p className="mt-1 text-xs leading-5 text-black/45">
+                                      Actual waste:{" "}
+                                      {rule.actualWasteDescription}
+                                    </p>
+                                  )}
+
+                                  {rule.specialConditions && (
+                                    <p className="mt-2 rounded-lg bg-amber-50 p-2 text-[11px] leading-4 text-amber-950/65">
+                                      {rule.specialConditions}
+                                    </p>
+                                  )}
+
+                                  {!underlyingPresent && (
+                                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3">
+                                      <p className="text-[11px] font-semibold leading-5 text-red-800">
+                                        This rule cannot be enabled yet.
+                                      </p>
+                                      <p className="mt-1 text-[11px] leading-5 text-red-700/80">
+                                        Your active permit must first contain EWC{" "}
+                                        <span className="font-bold">
+                                          {underlyingCode ?? "required by this rule"}
+                                        </span>
+                                        . Add that code to the permit above, then return here to review and enable this rule.
+                                      </p>
+                                      <button
+                                        type="button"
+                                        disabled
+                                        className="mt-3 cursor-not-allowed rounded-lg bg-black/10 px-4 py-2 text-xs font-bold text-black/35"
+                                      >
+                                        Cannot enable yet · permit code missing
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {underlyingPresent && (
+                                    <>
+                                      {(rule.qualifyingAuthorisationRefs ??
+                                        []).length > 0 && (
+                                        <label className="mt-3 block">
+                                          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                            Qualifying permit / exemption
+                                          </span>
+                                          <select
+                                            name="qualifyingAuthorisationRef"
+                                            required
+                                            className="mt-1 h-10 w-full rounded-lg border border-black/10 bg-white px-3 text-xs"
+                                          >
+                                            <option value="">
+                                              Choose applicable authority
+                                            </option>
+                                            {(
+                                              rule.qualifyingAuthorisationRefs ??
+                                              []
+                                            ).map((reference) => (
+                                              <option
+                                                key={reference}
+                                                value={reference}
+                                              >
+                                                {reference}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </label>
+                                      )}
+
+                                      <label className="mt-3 block">
+                                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                          Evidence note
+                                        </span>
+                                        <input
+                                          name="evidenceNote"
+                                          placeholder="Why this specific rule applies to this site"
+                                          className="mt-1 h-10 w-full rounded-lg border border-black/10 px-3 text-xs"
+                                        />
+                                      </label>
+
+                                      <label className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3">
+                                        <input
+                                          type="checkbox"
+                                          name="ruleConditionsConfirmed"
+                                          value="yes"
+                                          required
+                                          className="mt-0.5"
+                                        />
+                                        <span className="text-[11px] leading-4 text-amber-950/70">
+                                          I confirm this exact regulatory rule,
+                                          waste scope and qualifying
+                                          authorisation apply to this site.
+                                        </span>
+                                      </label>
+
+                                      <button
+                                        type="submit"
+                                        className="mt-3 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white"
+                                      >
+                                        Enable this rule
+                                      </button>
+                                    </>
+                                  )}
+                                </form>
+                              );
+                            })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {regulatoryAuthorityActivations.length === 0 && (
+                  <p className="rounded-2xl border border-dashed border-amber-300 bg-white/50 p-4 text-xs leading-5 text-amber-900/60">
+                    No additional authority is active. Only exact permit-code matching will be accepted.
+                  </p>
+                )}
+              </div>
+
+              {canEdit && (
+                <form
+                  action={activateSiteRegulatoryAuthorityAction}
+                  className="mt-6 grid gap-4 rounded-2xl border border-amber-200 bg-white p-5 lg:grid-cols-2"
+                >
+                  <input type="hidden" name="siteId" value={site.id} />
+                  <input type="hidden" name="permitId" value={permit.id} />
+
+                  <label className="lg:col-span-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-black/40">
+                      Waste X regulatory library
+                    </span>
+                    <select
+                      name="authorityId"
+                      required
+                      className="mt-1 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm"
+                    >
+                      <option value="">Choose authority</option>
+                      {availableRegulatoryAuthorities
+                        .filter(
+                          (authority) =>
+                            !regulatoryAuthorityActivations.some(
+                              (activation) =>
+                                activation.authorityId === authority.id,
+                            ),
+                        )
+                        .map((authority) => (
+                          <option key={authority.id} value={authority.id}>
+                            {authority.code.replaceAll("_", " ")} · {authority.name}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+
+                  <label className="lg:col-span-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-black/40">
+                      Site reference / evidence
+                    </span>
+                    <input
+                      name="reference"
+                      required
+                      placeholder="e.g. RPS 241; permit variation ref; regulator approval ref"
+                      className="mt-1 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-black/40">
+                      Site validity from
+                    </span>
+                    <input
+                      type="date"
+                      name="validFrom"
+                      className="mt-1 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-black/40">
+                      Site validity until
+                    </span>
+                    <input
+                      type="date"
+                      name="validUntil"
+                      className="mt-1 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label className="lg:col-span-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-black/40">
+                      Notes
+                    </span>
+                    <input
+                      name="notes"
+                      placeholder="Site-specific scope or evidence note"
+                      className="mt-1 h-11 w-full rounded-xl border border-black/10 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label className="lg:col-span-2 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <input
+                      type="checkbox"
+                      name="conditionsConfirmed"
+                      value="yes"
+                      required
+                      className="mt-1"
+                    />
+                    <span className="text-xs leading-5 text-amber-950/75">
+                      I confirm that this site, permit/exemption and activity meet the conditions of the selected regulatory authority.
+                    </span>
+                  </label>
+
+                  <div className="lg:col-span-2">
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-bold text-black"
+                    >
+                      Activate authority
+                    </button>
+                  </div>
+                </form>
               )}
             </>
           )}

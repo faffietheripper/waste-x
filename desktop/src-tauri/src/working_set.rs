@@ -60,6 +60,7 @@ fn bootstrap_ids(bootstrap: &Value, key: &str) -> Result<HashSet<String>, String
     Ok(ids)
 }
 
+/* WASTE_X_DESKTOP_OFFLINE_JOB_WORKING_SET_PROTECTION_V1 */
 fn has_unsynced_entity_change(
     transaction: &Transaction<'_>,
     entity_type: &str,
@@ -68,12 +69,42 @@ fn has_unsynced_entity_change(
     transaction
         .query_row(
             "SELECT 1
-             FROM local_sync_queue
+             FROM (
+               SELECT entity_type, entity_id
+               FROM local_sync_queue
+               WHERE status IN ('PENDING','SENDING','CONFLICT','FAILED')
+               UNION ALL
+               SELECT entity_type, entity_id
+               FROM local_cloud_mutation_queue
+               WHERE status IN ('PENDING','SENDING','FAILED')
+             ) local_change
              WHERE entity_type = ?1
                AND entity_id = ?2
-               AND status IN ('PENDING','SENDING','CONFLICT','FAILED')
              LIMIT 1",
             params![entity_type, entity_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(|e| e.to_string())
+}
+
+fn load_parent_has_pending_job_create(
+    transaction: &Transaction<'_>,
+    load_id: &str,
+) -> Result<bool, String> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM local_job_load load
+             INNER JOIN local_cloud_mutation_queue mutation
+               ON mutation.entity_type = 'job'
+              AND mutation.entity_id = load.job_id
+             WHERE load.id = ?1
+               AND mutation.mutation_kind = 'job'
+               AND mutation.status IN ('PENDING','SENDING','FAILED')
+             LIMIT 1",
+            params![load_id],
             |row| row.get::<_, i64>(0),
         )
         .optional()
@@ -154,7 +185,9 @@ pub fn reconcile_bootstrap(
         if cloud_load_ids.contains(&load_id) {
             continue;
         }
-        if has_unsynced_entity_change(&transaction, "job_load", &load_id)? {
+        if has_unsynced_entity_change(&transaction, "job_load", &load_id)?
+            || load_parent_has_pending_job_create(&transaction, &load_id)?
+        {
             job_loads_stale_protected += 1;
             continue;
         }

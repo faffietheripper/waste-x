@@ -7,6 +7,7 @@ import {
   counterpartySiteAuthorisations,
   counterpartySiteEwcCodes,
   counterpartySites,
+  disposalRecoveryCodes,
   drivers,
   ewcCodes,
   materialProfiles,
@@ -24,8 +25,11 @@ import {
   clientApiJson,
   handleClientApiError,
 } from "@/lib/client-api/http";
+import { listPermitEwcAcceptances } from "@/modules/permits/core/resolvePermitEwcAcceptance";
 
 export const dynamic = "force-dynamic";
+
+/* WASTE_X_DESKTOP_OFFLINE_JOB_OPTIONS_V1 */
 
 export async function GET(request: Request) {
   try {
@@ -201,16 +205,38 @@ export async function GET(request: Request) {
           ewcCode: ewcCodes.code,
           wasteDescription: materialProfiles.wasteDescription,
           physicalForm: materialProfiles.physicalForm,
+          defaultNumberOfContainers:
+            materialProfiles.defaultNumberOfContainers,
+          defaultContainerType: materialProfiles.defaultContainerType,
+          containsPops: materialProfiles.containsPops,
+          popsSourceOfComponents: materialProfiles.popsSourceOfComponents,
+          popsComponents: materialProfiles.popsComponents,
+          containsHazardous: materialProfiles.containsHazardous,
+          hazardousSourceOfComponents:
+            materialProfiles.hazardousSourceOfComponents,
+          hazardousHazCodes: materialProfiles.hazardousHazCodes,
+          hazardousComponents: materialProfiles.hazardousComponents,
+          defaultDisposalRecoveryCodeId:
+            materialProfiles.defaultDisposalRecoveryCodeId,
+          disposalRecoveryCode: disposalRecoveryCodes.code,
           defaultWeightMetric: materialProfiles.defaultWeightMetric,
           isFavourite: materialProfiles.isFavourite,
         })
         .from(materialProfiles)
         .innerJoin(ewcCodes, eq(materialProfiles.ewcCodeId, ewcCodes.id))
+        .leftJoin(
+          disposalRecoveryCodes,
+          eq(
+            materialProfiles.defaultDisposalRecoveryCodeId,
+            disposalRecoveryCodes.id,
+          ),
+        )
         .where(
           and(
             eq(materialProfiles.organisationId, context.organisationId),
             eq(materialProfiles.isActive, true),
             eq(ewcCodes.isActive, true),
+            eq(ewcCodes.classificationUsable, true),
           ),
         )
         .orderBy(asc(materialProfiles.name)),
@@ -320,11 +346,29 @@ export async function GET(request: Request) {
       permittedByFacility.set(facilityId, current);
     }
 
+    const permitAcceptances = await listPermitEwcAcceptances({
+      organisationId: context.organisationId,
+      siteId: ownSite.id,
+      permitId: primaryPermit.id,
+    });
+
+    const effectivePermitEwcCodeIds = Array.from(
+      new Set([
+        ...permitAcceptances.exactEwcCodeIds,
+        ...permitAcceptances.regulatory.map(
+          (row) => row.acceptedEwcCodeId,
+        ),
+      ]),
+    );
+
     return clientApiJson({
       ok: true,
+      offlineCreateSchemaVersion: 1,
       ownSite,
       primaryPermit,
-      permittedEwcCodeIds: ownPermitEwcs.map((row) => row.ewcCodeId),
+      permittedEwcCodeIds: effectivePermitEwcCodeIds,
+      exactPermittedEwcCodeIds: permitAcceptances.exactEwcCodeIds,
+      regulatoryAcceptanceAuthorities: permitAcceptances.regulatory,
       clients,
       clientSites,
       hauliers,

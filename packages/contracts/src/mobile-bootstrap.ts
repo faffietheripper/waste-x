@@ -82,6 +82,22 @@ export interface MobileAssignmentLocationV1 {
   postcode: string | null;
 }
 
+export interface MobileWasteItemV1 {
+  id: string;
+  itemNumber: number;
+  materialProfileId: string | null;
+  ewcCodeId: string | null;
+  ewcCode: string;
+  wasteDescription: string;
+  weightAmount: string | null;
+  weightMetric: "Grams" | "Kilograms" | "Tonnes";
+  weightIsEstimate: boolean;
+  permitEwcMatchType: "exact" | "regulatory_authority" | null;
+  permitEwcCode: string | null;
+  permitEwcBasis: string | null;
+  permitEwcReference: string | null;
+}
+
 export interface MobileAssignmentV1 {
   job: {
     id: string;
@@ -102,6 +118,7 @@ export interface MobileAssignmentV1 {
     movementAt: string | null;
     ewcCode: string | null;
     wasteDescription: string | null;
+    wasteItems?: MobileWasteItemV1[];
     grossWeight?: string | null;
     tareWeight?: string | null;
     netWeight: string | null;

@@ -11,6 +11,7 @@ import {
   customerInvoiceCounters,
   customerInvoiceJobs,
   customerInvoiceLines,
+  customerInvoiceLoads,
   customerInvoices,
   jobCommercialLines,
   type JobCommercialCategory,
@@ -141,6 +142,69 @@ async function jobHasActiveInvoice(organisationId: string, jobId: string) {
     .limit(1);
 
   return Boolean(row);
+}
+
+
+async function loadHasActiveInvoice(
+  organisationId: string,
+  jobLoadId: string,
+) {
+  const [row] = await database
+    .select({
+      invoiceId: customerInvoiceLoads.invoiceId,
+      status: customerInvoices.status,
+    })
+    .from(customerInvoiceLoads)
+    .innerJoin(
+      customerInvoices,
+      eq(customerInvoiceLoads.invoiceId, customerInvoices.id),
+    )
+    .where(
+      and(
+        eq(customerInvoiceLoads.organisationId, organisationId),
+        eq(customerInvoiceLoads.jobLoadId, jobLoadId),
+        ne(customerInvoices.status, "void"),
+      ),
+    )
+    .limit(1);
+
+  return row ?? null;
+}
+
+async function jobHasWholeJobActiveInvoice(
+  organisationId: string,
+  jobId: string,
+) {
+  const rows = await database
+    .select({ invoiceId: customerInvoiceJobs.invoiceId })
+    .from(customerInvoiceJobs)
+    .innerJoin(
+      customerInvoices,
+      eq(customerInvoiceJobs.invoiceId, customerInvoices.id),
+    )
+    .where(
+      and(
+        eq(customerInvoiceJobs.organisationId, organisationId),
+        eq(customerInvoiceJobs.jobId, jobId),
+        ne(customerInvoices.status, "void"),
+      ),
+    );
+
+  if (rows.length === 0) return false;
+
+  const invoiceIds = rows.map((row) => row.invoiceId);
+  const loadScoped = await database
+    .select({ invoiceId: customerInvoiceLoads.invoiceId })
+    .from(customerInvoiceLoads)
+    .where(
+      and(
+        eq(customerInvoiceLoads.organisationId, organisationId),
+        inArray(customerInvoiceLoads.invoiceId, invoiceIds),
+      ),
+    );
+
+  const loadScopedIds = new Set(loadScoped.map((row) => row.invoiceId));
+  return rows.some((row) => !loadScopedIds.has(row.invoiceId));
 }
 
 async function ensurePricingUnlocked(organisationId: string, jobId: string) {
@@ -561,6 +625,227 @@ function customerAddress(customer: {
   return [customer.fullAddress, customer.postcode].filter(Boolean).join(", ");
 }
 
+
+/*
+ * WASTE_X_PER_LOAD_CUSTOMER_INVOICE_V1
+ *
+ * Create one draft customer invoice for one completed physical Load. Job-level
+ * commercial terms remain the pricing authority; the completed Load supplies
+ * the actual per-load / per-tonne quantity.
+ */
+export async function createDraftLoadInvoiceAction(formData: FormData) {
+  const access = await requireAdminValueAccess();
+  const jobLoadId = cleanString(formData.get("jobLoadId"));
+
+  if (!jobLoadId) {
+    commercialRedirect("error", "load_required", "job-pricing");
+  }
+
+  const paymentTermsDays = parsePositiveInt(
+    formData.get("paymentTermsDays"),
+    30,
+    0,
+    365,
+  );
+
+  if (paymentTermsDays === null) {
+    commercialRedirect("error", "invalid_payment_terms", "job-pricing");
+  }
+
+  const load = await database.query.jobLoads.findFirst({
+    where: and(
+      eq(jobLoads.id, jobLoadId),
+      eq(jobLoads.organisationId, access.organisationId),
+    ),
+  });
+
+  if (!load) {
+    commercialRedirect("error", "load_not_found", "job-pricing");
+  }
+
+  if (load.status !== "completed") {
+    commercialRedirect("error", "invoice_load_must_be_completed", `job-${load.jobId}`);
+  }
+
+  const existingLoadInvoice = await loadHasActiveInvoice(
+    access.organisationId,
+    load.id,
+  );
+
+  if (existingLoadInvoice) {
+    commercialRedirect("error", "load_already_invoiced", `job-${load.jobId}`);
+  }
+
+  if (await jobHasWholeJobActiveInvoice(access.organisationId, load.jobId)) {
+    commercialRedirect("error", "job_already_invoiced", `job-${load.jobId}`);
+  }
+
+  const job = await requireJob(access.organisationId, load.jobId);
+  if (!job) {
+    commercialRedirect("error", "job_not_found", "job-pricing");
+  }
+
+  if (!job.clientCounterpartyId) {
+    commercialRedirect("error", "invoice_party_missing", `job-${job.id}`);
+  }
+
+  const commercialLines = await database.query.jobCommercialLines.findMany({
+    where: and(
+      eq(jobCommercialLines.organisationId, access.organisationId),
+      eq(jobCommercialLines.jobId, job.id),
+      eq(jobCommercialLines.isActive, true),
+      eq(jobCommercialLines.kind, "revenue"),
+    ),
+  });
+
+  if (commercialLines.some((line) => line.unit === "job")) {
+    commercialRedirect(
+      "error",
+      "load_invoice_job_unit_pricing",
+      `job-${job.id}`,
+    );
+  }
+
+  const summary = calculateJobCommercials({
+    lines: commercialLines,
+    loads: [load],
+  });
+
+  if (!summary.hasRevenue) {
+    commercialRedirect("error", "job_missing_customer_price", `job-${job.id}`);
+  }
+
+  if (summary.missingQuantity) {
+    commercialRedirect("error", "job_missing_invoice_quantity", `job-${job.id}`);
+  }
+
+  const [organisation, customer, settings] = await Promise.all([
+    database.query.organisations.findFirst({
+      where: eq(organisations.id, access.organisationId),
+    }),
+    database.query.counterparties.findFirst({
+      where: and(
+        eq(counterparties.id, job.clientCounterpartyId),
+        eq(counterparties.organisationId, access.organisationId),
+      ),
+    }),
+    database.query.commercialSettings.findFirst({
+      where: eq(commercialSettings.organisationId, access.organisationId),
+    }),
+  ]);
+
+  if (!organisation || !customer) {
+    commercialRedirect("error", "invoice_party_missing", `job-${job.id}`);
+  }
+
+  const subtotal = roundMoney(
+    summary.revenueLines.reduce((sum, line) => sum + line.netAmount, 0),
+  );
+  const vatTotal = roundMoney(
+    summary.revenueLines.reduce((sum, line) => sum + line.vatAmount, 0),
+  );
+
+  const invoiceId = crypto.randomUUID();
+  const now = new Date();
+  const supplyDate =
+    load.completedAt ??
+    load.movementAt ??
+    job.completedAt ??
+    job.jobDate ??
+    now;
+
+  const invoiceLineValues: Array<typeof customerInvoiceLines.$inferInsert> =
+    summary.revenueLines.map((line, index) => ({
+      id: crypto.randomUUID(),
+      organisationId: access.organisationId,
+      invoiceId,
+      jobId: job.id,
+      jobLoadId: load.id,
+      loadNumberSnapshot: load.loadNumber,
+      jobCommercialLineId: line.id,
+      description: `${line.description} · Load ${load.loadNumber}`,
+      jobNumberSnapshot: job.jobNumber,
+      quantity: line.quantity.toFixed(3),
+      unit: line.unit,
+      unitPrice: line.unitPrice.toFixed(2),
+      vatRate: line.vatRate.toFixed(2),
+      netAmount: line.netAmount.toFixed(2),
+      vatAmount: line.vatAmount.toFixed(2),
+      grossAmount: line.grossAmount.toFixed(2),
+      sortOrder: (index + 1) * 10,
+      createdAt: now,
+    }));
+
+  try {
+    await database.transaction(async (tx) => {
+      await tx.insert(customerInvoices).values({
+        id: invoiceId,
+        organisationId: access.organisationId,
+        customerId: job.clientCounterpartyId!,
+        invoiceNumber: null,
+        status: "draft",
+        currency: "GBP",
+        issueDate: null,
+        supplyDate,
+        dueDate: null,
+        paymentTermsDays,
+        supplierNameSnapshot: settings?.legalName ?? organisation.teamName,
+        supplierAddressSnapshot:
+          settings?.registeredAddress ?? organisationAddress(organisation),
+        supplierCompanyNumber: settings?.companyNumber ?? null,
+        supplierVatNumber: settings?.vatNumber ?? null,
+        paymentInstructionsSnapshot: settings?.paymentInstructions ?? null,
+        customerNameSnapshot: customer.name,
+        customerAddressSnapshot: customerAddress(customer) || null,
+        customerEmailSnapshot: customer.email,
+        subtotal: subtotal.toFixed(2),
+        vatTotal: vatTotal.toFixed(2),
+        total: roundMoney(subtotal + vatTotal).toFixed(2),
+        notes:
+          optionalString(formData.get("notes")) ??
+          `${job.jobNumber} · Load ${load.loadNumber}`,
+        createdByUserId: access.userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await tx.insert(customerInvoiceJobs).values({
+        organisationId: access.organisationId,
+        invoiceId,
+        jobId: job.id,
+        createdAt: now,
+      });
+
+      await tx.insert(customerInvoiceLoads).values({
+        organisationId: access.organisationId,
+        invoiceId,
+        jobId: job.id,
+        jobLoadId: load.id,
+        createdAt: now,
+      });
+
+      await tx.insert(customerInvoiceLines).values(invoiceLineValues);
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? `${error.message} ${String((error as { cause?: unknown }).cause ?? "")}`
+        : String(error);
+
+    if (
+      message.includes("customer_invoice_load_unique") ||
+      message.includes("duplicate key")
+    ) {
+      commercialRedirect("error", "load_already_invoiced", `job-${job.id}`);
+    }
+
+    throw error;
+  }
+
+  revalidateCommercial([job.id]);
+  commercialRedirect("success", "load_invoice_draft_created", `invoice-${invoiceId}`);
+}
+
 export async function createDraftInvoiceAction(formData: FormData) {
   const access = await requireAdminValueAccess();
   const jobIds = Array.from(
@@ -831,12 +1116,71 @@ export async function issueInvoiceAction(formData: FormData) {
   const dueDate = new Date(now);
   dueDate.setDate(dueDate.getDate() + invoice.paymentTermsDays);
 
-  const linkedJobs = await database.query.customerInvoiceJobs.findMany({
-    where: and(
-      eq(customerInvoiceJobs.invoiceId, invoiceId),
-      eq(customerInvoiceJobs.organisationId, access.organisationId),
-    ),
-  });
+  const [linkedJobs, linkedLoads] = await Promise.all([
+    database.query.customerInvoiceJobs.findMany({
+      where: and(
+        eq(customerInvoiceJobs.invoiceId, invoiceId),
+        eq(customerInvoiceJobs.organisationId, access.organisationId),
+      ),
+    }),
+    database.query.customerInvoiceLoads.findMany({
+      where: and(
+        eq(customerInvoiceLoads.invoiceId, invoiceId),
+        eq(customerInvoiceLoads.organisationId, access.organisationId),
+      ),
+    }),
+  ]);
+
+  /*
+    The old Job-level billing marker is kept for backwards compatibility, but
+    a single Load invoice must not pretend the whole Job is invoiced. For a
+    load-scoped invoice we only set that legacy marker once every completed
+    Load on the Job is covered by a non-void invoice.
+  */
+  const jobIdsToMarkInvoiced: string[] = [];
+
+  if (linkedLoads.length === 0) {
+    jobIdsToMarkInvoiced.push(...linkedJobs.map((row) => row.jobId));
+  } else {
+    for (const linkedJob of linkedJobs) {
+      const completedLoads = await database
+        .select({ id: jobLoads.id })
+        .from(jobLoads)
+        .where(
+          and(
+            eq(jobLoads.organisationId, access.organisationId),
+            eq(jobLoads.jobId, linkedJob.jobId),
+            eq(jobLoads.status, "completed"),
+          ),
+        );
+
+      const activeLoadLinks = await database
+        .select({ jobLoadId: customerInvoiceLoads.jobLoadId })
+        .from(customerInvoiceLoads)
+        .innerJoin(
+          customerInvoices,
+          eq(customerInvoiceLoads.invoiceId, customerInvoices.id),
+        )
+        .where(
+          and(
+            eq(customerInvoiceLoads.organisationId, access.organisationId),
+            eq(customerInvoiceLoads.jobId, linkedJob.jobId),
+            ne(customerInvoices.status, "void"),
+          ),
+        );
+
+      const invoicedLoadIds = new Set(
+        activeLoadLinks.map((row) => row.jobLoadId),
+      );
+
+      if (
+        completedLoads.length > 0 &&
+        completedLoads.every((load) => invoicedLoadIds.has(load.id))
+      ) {
+        jobIdsToMarkInvoiced.push(linkedJob.jobId);
+      }
+    }
+  }
 
   try {
     await database.transaction(async (tx) => {
@@ -925,7 +1269,7 @@ export async function issueInvoiceAction(formData: FormData) {
         ),
       );
 
-    if (linkedJobs.length > 0) {
+    if (jobIdsToMarkInvoiced.length > 0) {
       await tx
         .update(jobs)
         .set({
@@ -936,7 +1280,7 @@ export async function issueInvoiceAction(formData: FormData) {
         .where(
           and(
             eq(jobs.organisationId, access.organisationId),
-            inArray(jobs.id, linkedJobs.map((row) => row.jobId)),
+            inArray(jobs.id, jobIdsToMarkInvoiced),
           ),
         );
     }
@@ -1009,19 +1353,34 @@ export async function voidDraftInvoiceAction(formData: FormData) {
     commercialRedirect("error", "only_draft_can_void", `invoice-${invoiceId}`);
   }
 
-  await database
-    .update(customerInvoices)
-    .set({
-      status: "void",
-      voidedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(customerInvoices.id, invoiceId),
-        eq(customerInvoices.organisationId, access.organisationId),
-      ),
-    );
+  await database.transaction(async (tx) => {
+    /*
+      Release the active per-Load uniqueness guard when a draft is voided.
+      Invoice line snapshots remain attached to the void invoice for audit.
+    */
+    await tx
+      .delete(customerInvoiceLoads)
+      .where(
+        and(
+          eq(customerInvoiceLoads.invoiceId, invoiceId),
+          eq(customerInvoiceLoads.organisationId, access.organisationId),
+        ),
+      );
+
+    await tx
+      .update(customerInvoices)
+      .set({
+        status: "void",
+        voidedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(customerInvoices.id, invoiceId),
+          eq(customerInvoices.organisationId, access.organisationId),
+        ),
+      );
+  });
 
   revalidateCommercial();
   commercialRedirect("success", "invoice_voided");

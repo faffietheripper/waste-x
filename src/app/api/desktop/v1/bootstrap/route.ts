@@ -25,9 +25,14 @@ import {
   drivers,
   ewcCodes,
   jobLoads,
+  jobLoadWasteItems,
   jobs,
   organisations,
   permitEwcCodes,
+  regulatoryAcceptanceAuthorities,
+  regulatoryAcceptanceRules,
+  siteRegulatoryAuthorities,
+  siteRegulatoryAuthorityRules,
   sitePermits,
   sites,
   users,
@@ -78,6 +83,7 @@ export async function GET(request: Request) {
       organisationCounterpartySiteEwcs,
       organisationPermits,
       organisationPermitEwcs,
+      organisationRegulatoryAcceptanceRules,
       activeEwcs,
       workingJobs,
       latestChange,
@@ -209,6 +215,90 @@ export async function GET(request: Request) {
           ),
         ),
       database
+        .select({
+          ruleId: regulatoryAcceptanceRules.id,
+          ruleKey: regulatoryAcceptanceRules.ruleKey,
+
+          activationId: siteRegulatoryAuthorities.id,
+          organisationId: siteRegulatoryAuthorities.organisationId,
+          siteId: siteRegulatoryAuthorities.siteId,
+          permitId: siteRegulatoryAuthorities.permitId,
+
+          authorityId: regulatoryAcceptanceAuthorities.id,
+          authorityCode: regulatoryAcceptanceAuthorities.code,
+          authorityType: regulatoryAcceptanceAuthorities.authorityType,
+          ruleType: regulatoryAcceptanceAuthorities.ruleType,
+          regulator: regulatoryAcceptanceAuthorities.regulator,
+          jurisdiction: regulatoryAcceptanceAuthorities.jurisdiction,
+
+          reference: siteRegulatoryAuthorities.reference,
+          activationValidFrom: siteRegulatoryAuthorities.validFrom,
+          activationValidUntil: siteRegulatoryAuthorities.validUntil,
+          conditionsConfirmedAt:
+            siteRegulatoryAuthorities.conditionsConfirmedAt,
+
+          authorityValidFrom: regulatoryAcceptanceAuthorities.validFrom,
+          authorityValidUntil: regulatoryAcceptanceAuthorities.validUntil,
+
+          actualEwcCodeId: regulatoryAcceptanceRules.actualEwcCodeId,
+          underlyingAuthorisationEwcCodeId:
+            regulatoryAcceptanceRules.underlyingAuthorisationEwcCodeId,
+
+          requiresUnderlyingPermitCode:
+            regulatoryAcceptanceRules.requiresUnderlyingPermitCode,
+          requiresManualConfirmation:
+            regulatoryAcceptanceRules.requiresManualConfirmation,
+
+          siteRuleSelectionId: siteRegulatoryAuthorityRules.id,
+          qualifyingAuthorisationRef:
+            siteRegulatoryAuthorityRules.qualifyingAuthorisationRef,
+          siteRuleConfirmedAt: siteRegulatoryAuthorityRules.confirmedAt,
+        })
+        .from(siteRegulatoryAuthorities)
+        .innerJoin(
+          regulatoryAcceptanceAuthorities,
+          eq(
+            regulatoryAcceptanceAuthorities.id,
+            siteRegulatoryAuthorities.authorityId,
+          ),
+        )
+        .innerJoin(
+          regulatoryAcceptanceRules,
+          eq(
+            regulatoryAcceptanceRules.authorityId,
+            regulatoryAcceptanceAuthorities.id,
+          ),
+        )
+        .innerJoin(
+          siteRegulatoryAuthorityRules,
+          and(
+            eq(
+              siteRegulatoryAuthorityRules.activationId,
+              siteRegulatoryAuthorities.id,
+            ),
+            eq(
+              siteRegulatoryAuthorityRules.ruleId,
+              regulatoryAcceptanceRules.id,
+            ),
+            eq(siteRegulatoryAuthorityRules.isActive, true),
+          ),
+        )
+        .where(
+          and(
+            eq(
+              siteRegulatoryAuthorities.organisationId,
+              context.organisationId,
+            ),
+            eq(siteRegulatoryAuthorities.isActive, true),
+            eq(regulatoryAcceptanceAuthorities.status, "active"),
+            eq(regulatoryAcceptanceRules.isActive, true),
+            eq(
+              siteRegulatoryAuthorityRules.organisationId,
+              context.organisationId,
+            ),
+          ),
+        ),
+      database
         .select()
         .from(ewcCodes)
         .where(eq(ewcCodes.isActive, true))
@@ -256,6 +346,42 @@ export async function GET(request: Request) {
           .orderBy(asc(jobLoads.jobId), asc(jobLoads.loadNumber))
       : [];
 
+    const workingLoadIds = workingLoads.map((load) => load.id);
+    const workingWasteItems = workingLoadIds.length
+      ? await database
+          .select()
+          .from(jobLoadWasteItems)
+          .where(
+            and(
+              eq(
+                jobLoadWasteItems.organisationId,
+                context.organisationId,
+              ),
+              inArray(jobLoadWasteItems.jobLoadId, workingLoadIds),
+            ),
+          )
+          .orderBy(
+            asc(jobLoadWasteItems.jobLoadId),
+            asc(jobLoadWasteItems.itemNumber),
+          )
+      : [];
+
+    const wasteItemsByLoadId = new Map<
+      string,
+      typeof workingWasteItems
+    >();
+
+    for (const item of workingWasteItems) {
+      const current = wasteItemsByLoadId.get(item.jobLoadId) ?? [];
+      current.push(item);
+      wasteItemsByLoadId.set(item.jobLoadId, current);
+    }
+
+    const workingLoadsWithWasteItems = workingLoads.map((load) => ({
+      ...load,
+      wasteItems: wasteItemsByLoadId.get(load.id) ?? [],
+    }));
+
     return clientApiJson({
       ok: true,
       schemaVersion: 1,
@@ -288,7 +414,7 @@ export async function GET(request: Request) {
       sites: organisationSites,
       users: organisationUsers,
       jobs: workingJobs,
-      jobLoads: workingLoads,
+      jobLoads: workingLoadsWithWasteItems,
       drivers: organisationDrivers,
       vehicles: organisationVehicles,
       counterparties: organisationCounterparties,
@@ -299,6 +425,7 @@ export async function GET(request: Request) {
       ewcCodes: activeEwcs,
       permits: organisationPermits,
       permitEwcCodes: organisationPermitEwcs,
+      regulatoryAcceptanceRules: organisationRegulatoryAcceptanceRules,
       // Step 6 will replace this with a signed rolling offline entitlement.
       offlineEntitlement: null,
     });
